@@ -346,7 +346,7 @@ openclaw plugins install -l ~/openclaw/extensions/memory-enhanced
       "compaction": {
         "memoryFlush": {
           "enabled": true,
-          "prompt": "Context window is almost full. Read recent events. OVERWRITE and update `memory/knowledge/*.md` files with new facts (do NOT just append, replace outdated info). Then call `memory_consolidate`. Reply NO_REPLY when done."
+          "prompt": "Context window is almost full. Execute Tier 3 Full Consolidation NOW: 1) Read ALL unconsolidated events from .memory/events/*.jsonl. 2) Classify each: KEEP (facts/preferences/decisions) or SKILL (reusable patterns) or FORGET. 3) For KEEP items: READ existing memory/knowledge/*.md file first, then OVERWRITE outdated info and merge new insights. 4) For SKILL items: create/update memory/skills/drafts/. 5) Call memory_consolidate with scope=full. Reply NO_REPLY when done."
         }
       }
     }
@@ -409,6 +409,24 @@ mkdir -p .memory/archive
 ## Project Context
 → See memory/knowledge/project-context.md
 ```
+
+### 第五步半（可选）：配置每日定时整理
+
+对于 24 小时运行的 Agent，可以配置 cron 任务在凌晨自动运行 Tier 3 全量整理：
+
+```jsonc
+{
+  "cron": [
+    {
+      "schedule": "0 3 * * *",   // 3:00 AM daily
+      "prompt": "Run Tier 3 Full Consolidation: 1) Read ALL unconsolidated events. 2) Classify: KEEP/SKILL/FORGET. 3) For KEEP: read existing knowledge file, overwrite outdated info, merge new insights. 4) For SKILL: update memory/skills/drafts/. 5) Call memory_consolidate scope=full. Reply NO_REPLY when done.",
+      "agentId": "default"
+    }
+  ]
+}
+```
+
+这确保即使 Agent 不重启，旧事件也会定期被衰减和归档。
 
 ### 第五步：修改默认配置文件（AGENTS.md & USER.md）
 
