@@ -34,9 +34,14 @@ memory/YYYY-MM-DD.md         — daily logs with event summaries (searchable)
 MEMORY.md                    — auto-generated summary (do not edit directly)
 ```
 
-## Consolidation Workflow
+## Consolidation & Distillation Workflow
 
-1. Read unconsolidated events: `.memory/events/*.jsonl` (filter `consolidated: false`)
-2. Distill durable knowledge → write to `memory/knowledge/*.md`
-3. Mark events as consolidated
-4. Call `memory_consolidate` → handles decay + MEMORY.md regeneration
+When triggered to consolidate (e.g., at session end or context compaction):
+
+1. **Read Unconsolidated Events**: Check `.memory/events/*.jsonl` for events with `"consolidated": false`.
+2. **Distill Durable Knowledge**:
+   - For each important event, determine which `memory/knowledge/*.md` file it belongs to.
+   - **CRITICAL**: Do NOT just append text. First, `read` the existing knowledge file.
+   - **CRITICAL**: UPDATE or REPLACE outdated information. Merge the new insight naturally.
+   - Write the updated content back to the knowledge file.
+3. **Trigger Cleanup**: Call `memory_consolidate` with `scope="day"` or `"full"`. (This handles decay, archiving, event marking, and MEMORY.md regeneration automatically).

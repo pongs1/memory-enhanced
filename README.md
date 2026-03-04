@@ -346,7 +346,7 @@ openclaw plugins install -l ~/openclaw/extensions/memory-enhanced
       "compaction": {
         "memoryFlush": {
           "enabled": true,
-          "prompt": "上下文即将压缩。请立即执行 memory_distill 技能。提取未巩固事件，覆写更新过时的 knowledge 知识，最后运行 memory_consolidate 工具。完成后回复 NO_REPLY。"
+          "prompt": "上下文即将压缩。请阅读未整理的事件。如果学到了新知识，请**覆写更新**相关的 `memory/knowledge/*.md` 文件（不要只是追加，要替换掉过时的信息）。最后调用 `memory_consolidate` 完成归档。完成后回复 NO_REPLY。"
         }
       }
     }
@@ -368,9 +368,6 @@ mkdir -p memory/skills/drafts
 mkdir -p .memory/active
 mkdir -p .memory/events
 mkdir -p .memory/archive
-
-# 知识提炼独立技能目录
-mkdir -p skills/memory_distill
 ```
 
 ### 第四步：创建初始文件
@@ -411,19 +408,6 @@ mkdir -p skills/memory_distill
 
 ## 项目背景
 → 详见 memory/knowledge/project-context.md
-```
-
-**`skills/memory_distill/SKILL.md`** (专用的提炼兜底 Prompt)：
-```markdown
-# 记忆提炼规程 (Memory Distillation Protocol)
-
-**触发时机**：收到上下文压缩告警，或用户要求"整理记忆"时。
-
-**执行准则**：
-1. 这是一个高度专注的底层清理任务。不要在此期间回答用户的聊天问题。
-2. 收集未巩固的事件（利用 `memory_status` 或检查 `.memory/events/`）。
-3. 提炼核心知识，并**覆写、修改或补充**到 `memory/knowledge/` 对应的文件里。如果旧知识已经过时（如用户改变了代码风格偏好），必须删改旧文本，保持知识库最新。
-4. 必须在最后一步调用 `memory_consolidate` 工具来执行真正的归档和目录刷新。
 ```
 
 ### 第五步：修改默认配置文件（AGENTS.md & USER.md）
