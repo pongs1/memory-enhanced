@@ -31,6 +31,7 @@ memory/knowledge/*.md        — distilled knowledge (searchable)
 memory/YYYY-MM-DD.md         — daily logs with event summaries (searchable)
 .memory/events/*.jsonl       — structured event data (use read tool)
 .memory/active/scratchpad.md — session working notes (use read tool)
+.memory/active/focus_stack.json — goal tree with progress tracking
 MEMORY.md                    — auto-generated summary (do not edit directly)
 ```
 
@@ -91,3 +92,104 @@ Execute ALL of the following steps IN ORDER:
 | Context compaction imminent | Tier 3: full consolidation SOP |
 | User says "clean up memory" | Tier 3: full consolidation SOP |
 | Daily cron fires | Tier 3: `memory_consolidate scope="full"` |
+
+---
+
+## Checkpoint Protocol — Self-Directed Memory Saves
+
+When working on complex, multi-step goals, you MUST periodically save your
+progress. Do NOT rely on the end-of-session flush — by then you may have
+forgotten critical intermediate results.
+
+### Goal Decomposition & Tracking
+
+When the user gives you a large goal:
+1. Decompose it into sub-goals (and sub-sub-goals if needed).
+2. **IMMEDIATELY** write the goal tree to `.memory/active/focus_stack.json`.
+   Do NOT proceed to execution before saving the decomposition.
+3. Mark the first leaf-level sub-goal as `"focus": true`.
+
+`focus_stack.json` format:
+```json
+{
+  "root_goal": "Build a full-stack e-commerce platform",
+  "decomposed_at": "2026-03-05T03:30:00Z",
+  "children": [
+    {
+      "id": "g1", "goal": "Design database schema",
+      "status": "done",
+      "result_summary": "PostgreSQL, 12 tables, see memory/knowledge/db-schema.md"
+    },
+    {
+      "id": "g2", "goal": "Implement REST API",
+      "status": "in_progress",
+      "children": [
+        { "id": "g2.1", "goal": "Auth endpoints", "status": "done",
+          "result_summary": "JWT + refresh tokens" },
+        { "id": "g2.2", "goal": "Product CRUD", "status": "in_progress", "focus": true },
+        { "id": "g2.3", "goal": "Order processing", "status": "pending" }
+      ]
+    }
+  ],
+  "last_updated": "2026-03-05T03:36:00Z"
+}
+```
+
+### When to Checkpoint (MANDATORY triggers)
+
+1. **Goal Decomposition Complete**: After breaking a big goal into sub-goals,
+   IMMEDIATELY write the goal tree to `focus_stack.json`.
+
+2. **Sub-goal Complete**: After finishing any sub-goal, BEFORE moving to the next:
+   - Update `focus_stack.json`: set `"status": "done"`, add `result_summary`.
+   - If the result produced durable knowledge → `memory_record` (type: insight).
+   - If the result changed a prior assumption → update the relevant
+     `memory/knowledge/*.md` file NOW, don't wait for Tier 3.
+
+3. **Deep Recursion Threshold**: If your goal tree reaches depth ≥ 4
+   (sub-sub-sub-sub-goal), STOP and checkpoint:
+   - Write current reasoning state to `scratchpad.md`.
+   - Save `focus_stack.json`.
+   - Call `memory_record` to capture where you are and what you've concluded so far.
+   - Then continue execution.
+
+4. **Discovery During Execution**: If while executing a sub-goal you discover
+   something that:
+   - **Contradicts existing knowledge** → UPDATE the knowledge file immediately.
+   - **Affects a sibling or parent goal** → UPDATE `focus_stack.json` with a note.
+   - **Is a reusable pattern** → `memory_record` (type: insight) or create a skill draft.
+
+5. **Search Results That Change Plans**: If `memory_search` or `memory_explore`
+   returns information that makes your current approach obsolete:
+   - `memory_record` (type: correction).
+   - Update `focus_stack.json` to reflect revised plan.
+   - Update affected knowledge files.
+
+### Self-Discovery Recording
+
+Your memory system is NOT just for recording what the user tells you.
+You MUST also record your OWN discoveries:
+
+- **Execution results**: Command output reveals something unexpected →
+  `memory_record` (type: observation).
+- **Search insights**: `memory_search` surfaces an unexpected connection →
+  `memory_record` (type: insight) + `memory_explore` for further context.
+- **Failed approaches**: You try something and it fails →
+  `memory_record` (type: error, importance: 0.7+).
+- **Plan changes**: You realize a sub-goal needs restructuring →
+  update `focus_stack.json` AND `memory_record` (type: correction).
+
+The human doesn't need to tell you "remember this." If YOU learned
+something from your own work, write it down.
+
+### LLM Attention & the "Lost in the Middle" Effect
+
+Research shows that LLM attention follows a **U-shaped curve**: strong recall
+for information at the START and END of context, but significant degradation
+for content in the MIDDLE (the "Lost in the Middle" effect). The effective
+context window is often much smaller than the advertised maximum.
+
+This is why the checkpoint protocol exists: by periodically writing intermediate
+results to files, you move critical information from the vulnerable middle of
+your context to durable storage where it can be re-loaded at the top of a
+fresh context when needed.
