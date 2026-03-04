@@ -330,9 +330,9 @@ openclaw plugins install -l ~/openclaw/extensions/memory-enhanced
       "memory-enhanced": {
         "enabled": true,
         "config": {
-          "halfLifeDays": 30,       // 记忆衰减半衰期（天）
-          "archiveThreshold": 0.2,  // 低于此分数的事件被归档
-          "memoryMdMaxChars": 5000  // MEMORY.md 目标大小（字符）
+          "halfLifeDays": 30,         // Decay half-life (days)
+          "archiveThreshold": 0.2,    // Archive events below this score
+          "memoryMdMaxChars": 5000    // Target MEMORY.md size (chars)
         }
       }
     }
@@ -346,7 +346,7 @@ openclaw plugins install -l ~/openclaw/extensions/memory-enhanced
       "compaction": {
         "memoryFlush": {
           "enabled": true,
-          "prompt": "上下文即将压缩。请阅读未整理的事件。如果学到了新知识，请**覆写更新**相关的 `memory/knowledge/*.md` 文件（不要只是追加，要替换掉过时的信息）。最后调用 `memory_consolidate` 完成归档。完成后回复 NO_REPLY。"
+          "prompt": "Context window is almost full. Read recent events. OVERWRITE and update `memory/knowledge/*.md` files with new facts (do NOT just append, replace outdated info). Then call `memory_consolidate`. Reply NO_REPLY when done."
         }
       }
     }
@@ -374,13 +374,13 @@ mkdir -p .memory/archive
 
 **`.memory/active/scratchpad.md`**：
 ```markdown
-# 草稿本
-## 当前焦点
-（会话开始时自动更新）
-## 推理笔记
-（中间步骤）
-## 待验证
-（假设和待确认事项）
+# Scratchpad
+## Current Focus
+(auto-filled on session start)
+## Reasoning Notes
+(intermediate steps)
+## Pending Verification
+(hypotheses needing confirmation)
 ```
 
 **`.memory/active/focus_stack.json`**：
@@ -390,8 +390,8 @@ mkdir -p .memory/archive
 
 **`memory/knowledge/user-prefs.md`**：
 ```markdown
-# 用户偏好
-> 通过 memory_record + 知识提炼自动维护。
+# User Preferences
+> Auto-maintained via memory_record + knowledge distillation.
 ```
 
 **`memory/skills/_registry.json`**：
@@ -401,13 +401,13 @@ mkdir -p .memory/archive
 
 **`MEMORY.md`**：
 ```markdown
-# 长期记忆
+# Long-Term Memory
 
-## 用户偏好
-→ 详见 memory/knowledge/user-prefs.md
+## User Preferences
+→ See memory/knowledge/user-prefs.md
 
-## 项目背景
-→ 详见 memory/knowledge/project-context.md
+## Project Context
+→ See memory/knowledge/project-context.md
 ```
 
 ### 第五步：修改默认配置文件（AGENTS.md & USER.md）
