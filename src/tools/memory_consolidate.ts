@@ -8,6 +8,7 @@ import {
     readEvents,
     writeEvents,
     readFileOr,
+    readJson,
     ensureDir,
     type MemoryEvent,
 } from "../utils.js";
@@ -79,6 +80,15 @@ export async function executeMemoryConsolidate(
     const todayStr = today();
     const now = new Date();
 
+    // Read the last active time from focus_stack to calculate active days
+    const focusStackInfo = readJson<{ last_updated?: string }>(p.focusStack, {});
+    const lastActiveStr = focusStackInfo.last_updated;
+    // We only calculate decay up to the last known active session time
+    // If the agent was offline for 3 months, ageInDays will only reflect time up to last active,
+    // thereby solving the "forget everything if offline" issue. Let's use `now` if `last_updated`
+    // is missing, but otherwise use the `last_updated` date as the reference point for decay.
+    const referenceDate = lastActiveStr ? new Date(lastActiveStr) : now;
+
     const report: ConsolidationReport = {
         eventsScanned: 0,
         unconsolidated: 0,
@@ -107,8 +117,8 @@ export async function executeMemoryConsolidate(
                 continue;
             }
 
-            // Apply decay to consolidated events
-            const age = ageInDays(evt.timestamp, now);
+            // Apply decay to consolidated events using referenceDate (active time)
+            const age = ageInDays(evt.timestamp, referenceDate);
             if (age > 0) {
                 const newScore = applyDecay(evt.decay_score, age, halfLife);
                 if (newScore < archiveThresh) {

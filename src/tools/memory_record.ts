@@ -8,6 +8,8 @@ import {
     nextEventSeq,
     appendLine,
     ensureDir,
+    readJson,
+    writeJson,
     type MemoryEvent,
 } from "../utils.js";
 
@@ -83,6 +85,14 @@ export async function executeMemoryRecord(
     // --- Write JSONL (structured data, .memory/events/) ---
     ensureDir(p.eventsDir);
     appendLine(jsonlPath, JSON.stringify(event));
+
+    // Update active time in focus_stack.json
+    const focusStack = readJson<{ stack?: any[]; last_updated?: string }>(
+        p.focusStack,
+        { stack: [], last_updated: "" }
+    );
+    focusStack.last_updated = nowISO();
+    writeJson(p.focusStack, focusStack);
 
     // --- Write MD (searchable summary, memory/YYYY-MM-DD.md) ---
     const assocStr =
