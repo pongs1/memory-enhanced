@@ -1,0 +1,28 @@
+{
+  "id": "memory-enhanced",
+  "name": "Memory Enhanced",
+  "description": "Brain-inspired four-layer memory system with structured events, knowledge distillation, association traversal, and automated consolidation",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "halfLifeDays": {
+        "type": "number",
+        "default": 30,
+        "description": "Half-life for exponential decay of event scores (days)"
+      },
+      "archiveThreshold": {
+        "type": "number",
+        "default": 0.2,
+        "description": "Events with decay_score below this are archived"
+      },
+      "memoryMdMaxChars": {
+        "type": "number",
+        "default": 5000,
+        "description": "Target maximum character count for auto-generated MEMORY.md"
+      }
+    }
+  },
+  "skills": ["skills"]
+}
