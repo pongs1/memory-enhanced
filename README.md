@@ -431,40 +431,6 @@ mkdir -p .memory/archive
 → See memory/knowledge/project-context.md
 ```
 
-## Step 5.5: 配置后台任务 (Heartbeat 与 Cron)
-
-OpenClaw 支持后台任务。**推荐使用心跳 (Heartbeat)** 来保持记忆新鲜，而 Cron 可作为深层清理的后备选项。
-
-### 1. 启用微蒸馏 (默认: Heartbeat)
-
-心跳会在 Agent 闲置时周期性触发（例如每 30 分钟）。创建或更新 `$WORKSPACE/HEARTBEAT.md`：
-
-```markdown
-# HEARTBEAT.md
-
-- **记忆体检**: 
-  1. 运行 `memory_status` 检查是否有未巩固的事件。
-  2. 如果有 > 3 个未巩固事件，立即进行蒸馏：读取事件，将知识提取到 `memory/knowledge/*.md`，然后运行 `memory_consolidate scope="session"` 结构化归档。
-```
-
-### 2. 启用全量巩固 (可选: Daily Cron)
-
-对于长期运行的 Agent，建议在 `~/.openclaw/openclaw.json` 中配置每日 Cron 任务，作为深度清理自动执行 Tier 3 巩固：
-
-```jsonc
-{
-  "cron": [
-    {
-      "schedule": "0 3 * * *",   // 每天凌晨 3:00
-      "prompt": "Run Tier 3 Full Consolidation: 1) Read ALL unconsolidated events. 2) Classify: KEEP/SKILL/FORGET. 3) For KEEP: read existing knowledge file, overwrite outdated info, merge new insights. 4) For SKILL: update memory/skills/drafts/. 5) Call memory_consolidate scope=full. Reply NO_REPLY when done.",
-      "agentId": "default"
-    }
-  ]
-}
-```
-
-这确保即使 Agent 不重启，旧事件也会定期被衰减和归档。
-
 ### 第五步：修改默认配置文件（AGENTS.md & USER.md）
 
 OpenClaw 默认的配置会指导 Agent 手动去编辑 `MEMORY.md`。为避免冲突，你需要**替换**工作区下面这两个文件的相关段落。
@@ -509,6 +475,40 @@ You wake up fresh each session, but you have a powerful 4-layer memory system.
 > 
 > This keeps `USER.md` clean and allows the memory plugin's decay and search algorithms to manage context dynamically.
 ```
+
+## Step 5.5: 配置后台任务 (Heartbeat 与 Cron)
+
+OpenClaw 支持后台任务。**推荐使用心跳 (Heartbeat)** 来保持记忆新鲜，而 Cron 可作为深层清理的后备选项。
+
+### 1. 启用微蒸馏 (默认: Heartbeat)
+
+心跳会在 Agent 闲置时周期性触发（例如每 30 分钟）。创建或更新 `$WORKSPACE/HEARTBEAT.md`：
+
+```markdown
+# HEARTBEAT.md
+
+- **记忆体检**: 
+  1. 运行 `memory_status` 检查是否有未巩固的事件。
+  2. 如果有 > 3 个未巩固事件，立即进行蒸馏：读取事件，将知识提取到 `memory/knowledge/*.md`，然后运行 `memory_consolidate scope="session"` 结构化归档。
+```
+
+### 2. 启用全量巩固 (可选: Daily Cron)
+
+对于长期运行的 Agent，建议在 `~/.openclaw/openclaw.json` 中配置每日 Cron 任务，作为深度清理自动执行 Tier 3 巩固：
+
+```jsonc
+{
+  "cron": [
+    {
+      "schedule": "0 3 * * *",   // 每天凌晨 3:00
+      "prompt": "Run Tier 3 Full Consolidation: 1) Read ALL unconsolidated events. 2) Classify: KEEP/SKILL/FORGET. 3) For KEEP: read existing knowledge file, overwrite outdated info, merge new insights. 4) For SKILL: update memory/skills/drafts/. 5) Call memory_consolidate scope=full. Reply NO_REPLY when done.",
+      "agentId": "default"
+    }
+  ]
+}
+```
+
+这确保即使 Agent 不重启，旧事件也会定期被衰减和归档。
 
 ### 第六步：重启并验证
 

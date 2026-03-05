@@ -270,7 +270,16 @@ Replace the `## Context` section with this to prevent the agent from endlessly a
 ```markdown
 ## Context & Preferences (Dynamic)
 
-> **IMPORTANT**: Do not manually list detailed## Step 5.5: Configure Background Tasks (Heartbeat vs Cron)
+> **IMPORTANT**: Do not manually list detailed user preferences, habits, or inside jokes in this file.
+> 
+> Instead, use the `memory_record` tool to log their preferences (type: preference) during conversations. Over time, distill these into `memory/knowledge/user-prefs.md` and run `memory_consolidate`. 
+> 
+> This keeps `USER.md` clean and allows the memory plugin's decay and search algorithms to manage context dynamically.
+```
+
+---
+
+## Step 5.5: Configure Background Tasks (Heartbeat vs Cron)
 
 OpenClaw supports background tasks. **Heartbeats are the recommended default** for keeping memory fresh, with Cron serving as an optional deep-clean fallback.
 
