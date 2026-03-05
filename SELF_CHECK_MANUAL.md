@@ -27,7 +27,7 @@ Verify that the following directories exist in your `$WORKSPACE`:
 
 Check initial file state:
 ```bash
-cat .memory/active/focus_stack.json    # Should be a flat ADaPT object
+cat .memory/active/focus_stack.json    # Must have project_goal, current_path, etc.
 cat .memory/active/scratchpad.md       # Should exist
 ```
 

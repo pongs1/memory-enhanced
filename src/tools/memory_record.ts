@@ -87,10 +87,19 @@ export async function executeMemoryRecord(
     appendLine(jsonlPath, JSON.stringify(event));
 
     // Update active time in focus_stack.json
-    const focusStack = readJson<{ stack?: any[]; last_updated?: string }>(
-        p.focusStack,
-        { stack: [], last_updated: "" }
-    );
+    const focusStack = readJson<{
+        project_goal?: string;
+        current_path?: string[];
+        current_focus?: string;
+        pending_siblings?: string[];
+        last_updated?: string;
+    }>(p.focusStack, {
+        project_goal: "Checking system...",
+        current_path: [],
+        current_focus: "Initializing",
+        pending_siblings: [],
+        last_updated: "",
+    });
     focusStack.last_updated = nowISO();
     writeJson(p.focusStack, focusStack);
 
