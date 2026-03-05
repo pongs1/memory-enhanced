@@ -101,57 +101,47 @@ When working on complex, multi-step goals, you MUST periodically save your
 progress. Do NOT rely on the end-of-session flush — by then you may have
 forgotten critical intermediate results.
 
-### Goal Decomposition & Tracking
+### Goal Tracking (ADaPT Flat List)
+
+LLMs struggle with deeply nested trees. To respect your working memory limit (~7 chunks), your `focus_stack.json` is a strictly FLAT list consisting of breadcrumbs (`current_path`) and an immediate queue (`pending_siblings`). 
 
 When the user gives you a large goal:
-1. Decompose it into sub-goals (and sub-sub-goals if needed).
-2. **IMMEDIATELY** write the goal tree to `.memory/active/focus_stack.json`.
-   Do NOT proceed to execution before saving the decomposition.
-3. Mark the first leaf-level sub-goal as `"focus": true`.
+1. Do NOT decompose the entire project tree upfront. Use As-Needed Decomposition (ADaPT).
+2. Determine only your immediate next steps.
+3. **IMMEDIATELY** write this flat structure to `.memory/active/focus_stack.json` before executing any tools.
 
 `focus_stack.json` format:
 ```json
 {
-  "root_goal": "Build a full-stack e-commerce platform",
-  "decomposed_at": "2026-03-05T03:30:00Z",
-  "children": [
-    {
-      "id": "g1", "goal": "Design database schema",
-      "status": "done",
-      "result_summary": "PostgreSQL, 12 tables, see memory/knowledge/db-schema.md"
-    },
-    {
-      "id": "g2", "goal": "Implement REST API",
-      "status": "in_progress",
-      "children": [
-        { "id": "g2.1", "goal": "Auth endpoints", "status": "done",
-          "result_summary": "JWT + refresh tokens" },
-        { "id": "g2.2", "goal": "Product CRUD", "status": "in_progress", "focus": true },
-        { "id": "g2.3", "goal": "Order processing", "status": "pending" }
-      ]
-    }
+  "project_goal": "Build a full-stack e-commerce platform",
+  "current_path": [
+    "Backend Architecture",
+    "REST API Implementation"
   ],
-  "last_updated": "2026-03-05T03:36:00Z"
+  "current_focus": "Implement POST /products with validation",
+  "pending_siblings": [
+    "Implement GET /products with pagination",
+    "Implement PUT /products"
+  ],
+  "last_updated": "2026-03-05T15:30:00Z"
 }
 ```
 
 ### When to Checkpoint (MANDATORY triggers)
 
-1. **Goal Decomposition Complete**: After breaking a big goal into sub-goals,
-   IMMEDIATELY write the goal tree to `focus_stack.json`.
+1. **Step Initiation / Decomposition**: Before starting a new major step,
+   write your immediate plan to `focus_stack.json`. Do NOT keep it just in context.
 
-2. **Sub-goal Complete**: After finishing any sub-goal, BEFORE moving to the next:
-   - Update `focus_stack.json`: set `"status": "done"`, add `result_summary`.
+2. **Focus Shift / Completion**: After finishing `current_focus`:
    - If the result produced durable knowledge → `memory_record` (type: insight).
-   - If the result changed a prior assumption → update the relevant
-     `memory/knowledge/*.md` file NOW, don't wait for Tier 3.
+   - If it changed a prior assumption → update `memory/knowledge/*.md` NOW.
+   - Pop the next task from `pending_siblings` into `current_focus` and save `focus_stack.json`.
 
-3. **Deep Recursion Threshold**: If your goal tree reaches depth ≥ 4
-   (sub-sub-sub-sub-goal), STOP and checkpoint:
-   - Write current reasoning state to `scratchpad.md`.
-   - Save `focus_stack.json`.
-   - Call `memory_record` to capture where you are and what you've concluded so far.
-   - Then continue execution.
+3. **Working Memory Guard**: If your `current_path` + `pending_siblings` exceeds 7 items,
+   STOP. You are tracking too many things at once. 
+   - Consolidate siblings into a broader goal.
+   - Write your current reasoning state to `scratchpad.md`.
+   - Call `memory_record` to capture where you are.
 
 4. **Discovery During Execution**: If while executing a sub-goal you discover
    something that:
