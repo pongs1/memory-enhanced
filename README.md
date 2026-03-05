@@ -105,10 +105,17 @@ OpenClaw 本身有基础的记忆功能：
 **存储位置**：`.memory/active/`
 
 **文件**：
-- `scratchpad.md`：当前会话的工作草稿纸，可以记录中间思考步骤、待验证的假设
-- `focus_stack.json`：当前专注的任务栈，像浏览器的"标签页"
+- `scratchpad.md`：当前会话的工作草稿纸，记录推理过程和待验证假设。
+- `focus_stack.json`：**目标树与进度追踪**（记录大目标拆解的小目标及完成状态）。
 
-**类比**：就像你桌上摊开的草稿纸。会话结束后贴到笔记本里（L2），不需要永久保存。
+**核心机制 (Checkpoint Protocol)**：
+为了对抗 LLM 在极长对话中注意力衰减的 "Lost in the Middle" 效应，Agent 会执行自我存档：
+1. **拆解即存档**：把大任务拆解后，立刻写入 `focus_stack.json` 目标树。
+2. **步步追踪**：每完成一个子目标，更新状态并记录中间成果。
+3. **防过深递归**：如果任务潜入过深（≥4层），Agent 会强制暂停，把当前思路写入 `scratchpad.md` 保存。
+4. **自我发现**：在执行中自己摸索出的经验/报错教训，会当场主动写入记忆，无需等用户下令。
+
+**类比**：就像你桌上摊开的草稿纸和待办清单。当你脑容量不够用时，先把中间结果写在纸上，清理大脑缓存再继续。
 
 ---
 
@@ -385,7 +392,13 @@ mkdir -p .memory/archive
 
 **`.memory/active/focus_stack.json`**：
 ```json
-{ "stack": [], "last_updated": "" }
+{
+  "root_goal": "Goal name",
+  "decomposed_at": "ISO-8601 string",
+  "children": [],
+  "last_updated": "",
+  "checkpoint_count": 0
+}
 ```
 
 **`memory/knowledge/user-prefs.md`**：
