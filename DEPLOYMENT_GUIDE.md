@@ -193,9 +193,9 @@ mkdir -p .memory/archive
 
 ---
 
-### 第二步：修改 `$WORKSPACE/AGENTS.md`
+## Step 5: Update AGENTS.md
 
-找到里面的 `## Memory` 部分，**全部替换成以下内容**，这赋予了 Agent 管理多层记忆和进行自我存档（Checkpoint）的核心指令：
+Locate the `## Memory` sections in your `$WORKSPACE/AGENTS.md` and **completely replace them** with the following instructions to equip the agent with the internal Checkpoint Protocol logic:
 
 ```markdown
 ## Memory (Powered by `memory-enhanced` Plugin)
