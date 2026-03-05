@@ -46,28 +46,42 @@ Enable it in `~/.openclaw/openclaw.json`:
 
 ---
 
-## Step 2: Configure Memory Search & Compaction
+## Step 2: Configure OpenClaw Core (openclaw.json)
 
-Merge into `~/.openclaw/openclaw.json` (alongside the plugin config):
+You must merge the following into your `~/.openclaw/openclaw.json`. OpenClaw uses strict Zod validation; ensure the nesting is exactly as shown.
+
+### 1. Configure Embedding Provider & Model
+
+Add the SiliconFlow (or any OpenAI-compatible) provider to the global `models` section:
+
+```jsonc
+{
+  "models": {
+    "providers": {
+      "openai": {
+        "apiKey": "YOUR_SILICONFLOW_KEY",
+        "baseUrl": "https://api.siliconflow.cn/v1"
+      }
+    }
+  }
+}
+```
+
+### 2. Configure Memory Search & Compaction
+
+Nest these directly under `agents.defaults`. This enables semantic search and the "Tier 3" memory flush.
 
 ```jsonc
 {
   "agents": {
     "defaults": {
       "memorySearch": {
-        "extraPaths": ["memory/skills/verified"],
-        "experimental": { "sessionMemory": true },
+        "enabled": true,
+        "provider": "openai",        // Link to the provider above
+        "model": "BAAI/bge-m3",       // Specific embedding model
         "sources": ["memory", "sessions"],
-        "query": {
-          "hybrid": {
-            "enabled": true,
-            "vectorWeight": 0.7,
-            "textWeight": 0.3,
-            "temporalDecay": { "enabled": true, "halfLifeDays": 30 },
-            "mmr": { "enabled": true, "lambda": 0.7 }
-          }
-        },
-        "cache": { "enabled": true, "maxEntries": 50000 }
+        "extraPaths": ["memory/skills/verified"],
+        "experimental": { "sessionMemory": true }
       },
       "compaction": {
         "reserveTokensFloor": 20000,
@@ -78,31 +92,6 @@ Merge into `~/.openclaw/openclaw.json` (alongside the plugin config):
           "prompt": "Context window is almost full. Execute Tier 3 Full Consolidation NOW: 1) Read ALL unconsolidated events from .memory/events/*.jsonl. 2) Classify each: KEEP (facts/preferences/decisions) or SKILL (reusable patterns) or FORGET. 3) For KEEP items: READ existing memory/knowledge/*.md file first, then OVERWRITE outdated info and merge new insights. 4) For SKILL items: create/update memory/skills/drafts/. 5) Call memory_consolidate with scope=full. Reply NO_REPLY when done."
         }
       }
-    }
-  }
-}
-```
-
-### Recommended Embedding Model (SiliconFlow)
-
-The default embedding might be sub-optimal or expensive. We recommend using [SiliconFlow](https://siliconflow.cn/)'s free and cost-effective models, such as `BAAI/bge-m3`.
-
-Add the `models` field to your config (at the same level as `plugins`):
-
-```jsonc
-{
-  "models": {
-    "providers": {
-      "openai": { // SiliconFlow is compatible with the OpenAI API
-        "apiKey": "YOUR_SILICONFLOW_KEY",
-        "baseUrl": "https://api.siliconflow.cn/v1"
-      }
-    },
-    // Set the default provider to openai (which is now SiliconFlow)
-    "defaultProvider": "openai",
-    // Force memorySearch to use a specific model
-    "embeddings": {
-      "openai": { "model": "BAAI/bge-m3" }
     }
   }
 }

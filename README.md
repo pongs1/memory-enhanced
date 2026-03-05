@@ -329,29 +329,24 @@ openclaw plugins install -l ~/openclaw/extensions/memory-enhanced
 
 ### 第二步：配置 openclaw.json
 
-在 `~/.openclaw/openclaw.json` 里合并以下配置：
+在 `~/.openclaw/openclaw.json` 里合并以下配置。由于 OpenClaw 使用严格的 Zod 校验，请确保层级结构完全一致：
 
 ```jsonc
 {
-  "plugins": {
-    "load": {
-      "paths": ["~/openclaw/extensions/memory-enhanced"]
-    },
-    "entries": {
-      "memory-enhanced": {
-        "enabled": true,
-        "config": {
-          "halfLifeDays": 30,         // Decay half-life (days)
-          "archiveThreshold": 0.2,    // Archive events below this score
-          "memoryMdMaxChars": 5000    // Target MEMORY.md size (chars)
-        }
+  "models": {
+    "providers": {
+      "openai": {
+        "apiKey": "YOUR_SILICONFLOW_KEY",
+        "baseUrl": "https://api.siliconflow.cn/v1"
       }
     }
   },
   "agents": {
     "defaults": {
       "memorySearch": {
-        "experimental": { "sessionMemory": true },
+        "enabled": true,
+        "provider": "openai",
+        "model": "BAAI/bge-m3",
         "sources": ["memory", "sessions"]
       },
       "compaction": {
