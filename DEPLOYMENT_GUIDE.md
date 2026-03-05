@@ -46,7 +46,7 @@ Enable it in `~/.openclaw/openclaw.json`:
 
 ---
 
-## Step 2: Configure Memory Search
+## Step 2: Configure Memory Search & Compaction
 
 Merge into `~/.openclaw/openclaw.json` (alongside the plugin config):
 
@@ -75,9 +75,34 @@ Merge into `~/.openclaw/openclaw.json` (alongside the plugin config):
           "enabled": true,
           "softThresholdTokens": 4000,
           "systemPrompt": "Session nearing compaction. Use memory_record for important events. Use memory_consolidate to finalize. Reply NO_REPLY when done.",
-          "prompt": "Compaction imminent. Record unsaved events, distill knowledge, run memory_consolidate. Reply NO_REPLY."
+          "prompt": "Context window is almost full. Execute Tier 3 Full Consolidation NOW: 1) Read ALL unconsolidated events from .memory/events/*.jsonl. 2) Classify each: KEEP (facts/preferences/decisions) or SKILL (reusable patterns) or FORGET. 3) For KEEP items: READ existing memory/knowledge/*.md file first, then OVERWRITE outdated info and merge new insights. 4) For SKILL items: create/update memory/skills/drafts/. 5) Call memory_consolidate with scope=full. Reply NO_REPLY when done."
         }
       }
+    }
+  }
+}
+```
+
+### Recommended Embedding Model (SiliconFlow)
+
+The default embedding might be sub-optimal or expensive. We recommend using [SiliconFlow](https://siliconflow.cn/)'s free and cost-effective models, such as `BAAI/bge-m3`.
+
+Add the `models` field to your config (at the same level as `plugins`):
+
+```jsonc
+{
+  "models": {
+    "providers": {
+      "openai": { // SiliconFlow is compatible with the OpenAI API
+        "apiKey": "YOUR_SILICONFLOW_KEY",
+        "baseUrl": "https://api.siliconflow.cn/v1"
+      }
+    },
+    // Set the default provider to openai (which is now SiliconFlow)
+    "defaultProvider": "openai",
+    // Force memorySearch to use a specific model
+    "embeddings": {
+      "openai": { "model": "BAAI/bge-m3" }
     }
   }
 }
@@ -145,57 +170,13 @@ mkdir -p .memory/archive
 }
 ```
 
-### `$WORKSPACE/memory/knowledge/user-prefs.md`
-```markdown
-# User Preferences
-> Auto-maintained via memory_record + consolidation.
-```
-
-### `$WORKSPACE/memory/knowledge/project-context.md`
-```markdown
-# Project Context
-> Persistent project knowledge distilled from events.
-```
-
-### `$WORKSPACE/memory/knowledge/decisions.md`
-```markdown
-# Key Decisions
-> Important decisions and their rationale.
-```
-
-### `$WORKSPACE/memory/knowledge/debug-insights.md`
-```markdown
-# Debug Insights
-> Lessons learned from debugging sessions.
-```
-
-### `$WORKSPACE/memory/skills/_registry.json`
-```json
-{ "version": "1.0", "skills": [], "last_updated": null }
-```
-
-### `$WORKSPACE/MEMORY.md`
-```markdown
-# Long-Term Memory
-
-## User Preferences
-→ See memory/knowledge/user-prefs.md
-
-## Project Context
-→ See memory/knowledge/project-context.md
-
-## Key Decisions
-→ See memory/knowledge/decisions.md
-
-## Debug Insights
-→ See memory/knowledge/debug-insights.md
-```
-
 ---
 
-## Step 5: Update AGENTS.md
+## Step 5: Update Default Agent Configs (AGENTS.md & USER.md)
 
-Locate the `## Memory` sections in your `$WORKSPACE/AGENTS.md` and **completely replace them** with the following instructions to equip the agent with the internal Checkpoint Protocol logic:
+### 1. Update `$WORKSPACE/AGENTS.md`
+
+Replace the entire `## Memory` and `### 🔄 Memory Maintenance` sections with this:
 
 ```markdown
 ## Memory (Powered by `memory-enhanced` Plugin)
@@ -232,6 +213,40 @@ To respect your ~7 chunk working memory limit, DO NOT try to build deep task tre
 
 **Why this matters**: LLM attention follows a U-shaped curve — strong at the start and end of context, weak in the middle (“Lost in the Middle” effect). By checkpointing flat intermediate results to files, you move critical information from the vulnerable middle of your context to durable storage without getting lost in deep JSON trees.
 ```
+
+### 2. Update `$WORKSPACE/USER.md`
+
+Replace the `## Context` section with this to prevent the agent from endlessly accumulating raw text in `USER.md`:
+
+```markdown
+## Context & Preferences (Dynamic)
+
+> **IMPORTANT**: Do not manually list detailed user preferences, habits, or inside jokes in this file.
+> 
+> Instead, use the `memory_record` tool to log their preferences (type: preference) during conversations. Over time, distill these into `memory/knowledge/user-prefs.md` and run `memory_consolidate`. 
+> 
+> This keeps `USER.md` clean and allows the memory plugin's decay and search algorithms to manage context dynamically.
+```
+
+---
+
+## Step 5.5 (Optional): Daily Cron for Full Consolidation
+
+For long-running agents, set up a daily cron job to run Tier 3 consolidation automatically:
+
+```jsonc
+{
+  "cron": [
+    {
+      "schedule": "0 3 * * *",   // 3:00 AM daily
+      "prompt": "Run Tier 3 Full Consolidation: 1) Read ALL unconsolidated events. 2) Classify: KEEP/SKILL/FORGET. 3) For KEEP: read existing knowledge file, overwrite outdated info, merge new insights. 4) For SKILL: update memory/skills/drafts/. 5) Call memory_consolidate scope=full. Reply NO_REPLY when done.",
+      "agentId": "default"
+    }
+  ]
+}
+```
+
+This ensures that even if the agent runs 24/7 without session restarts, old events still get decayed and archived regularly.
 
 ---
 

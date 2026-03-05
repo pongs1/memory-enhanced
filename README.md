@@ -323,6 +323,10 @@ pnpm install
 openclaw plugins install -l ~/openclaw/extensions/memory-enhanced
 ```
 
+> [!TIP]
+> 推荐配合 SiliconFlow 的 `BAAI/bge-m3` 模型使用以获得最佳搜索效果，详见 [部署手册](DEPLOYMENT_GUIDE.md)。
+
+
 ### 第二步：配置 openclaw.json
 
 在 `~/.openclaw/openclaw.json` 里合并以下配置：
@@ -393,11 +397,11 @@ mkdir -p .memory/archive
 **`.memory/active/focus_stack.json`**：
 ```json
 {
-  "root_goal": "Goal name",
-  "decomposed_at": "ISO-8601 string",
-  "children": [],
-  "last_updated": "",
-  "checkpoint_count": 0
+  "project_goal": "Goal name",
+  "current_path": [],
+  "current_focus": "",
+  "pending_siblings": [],
+  "last_updated": ""
 }
 ```
 

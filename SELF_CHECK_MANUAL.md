@@ -1,69 +1,86 @@
-# 🛡️ Self-Check Manual (v4 — Plugin)
+# ✅ Memory System Self-Check Manual (v4)
 
-> Run after `openclaw update`, weekly, or when memory behaves unexpectedly.
+Follow this manual to verify that your memory-enhanced plugin is correctly installed, configured, and operating within the ADaPT cognitive limits.
 
 ---
 
-## Quick Check
+## 1. System Integrity Check
+
+Run the following in your terminal:
 
 ```bash
-# Plugin loaded?
-openclaw plugins list | grep memory-enhanced
-
-# Or ask the agent:
-# → memory_status
+openclaw plugins list              # Confirm 'memory-enhanced' is ENABLED
+openclaw plugins info memory-enhanced  # Check version and config
+openclaw doctor                     # Ensure no path or dependency errors
 ```
 
 ---
 
-## `openclaw update` Impact
+## 2. Infrastructure & Directories
 
-| Action | Impact | Risk |
-|---|---|---|
-| Code update | No workspace/plugin files touched | 🟢 |
-| `openclaw doctor` | May migrate config keys | 🟡 Check plugin config |
-| Gateway restart | Reloads plugins | 🟢 |
-| `openclaw setup` re-run | May reset AGENTS.md | 🔴 Re-append Step 5 |
-| Manual config overwrite | Loses plugin + memory config | 🔴 Re-apply Steps 1-2 |
+Verify that the following directories exist in your `$WORKSPACE`:
 
----
+- [ ] `memory/knowledge/` (Semantic memory)
+- [ ] `memory/skills/verified/` (Procedural memory)
+- [ ] `.memory/active/` (Working memory - hidden)
+- [ ] `.memory/events/` (Episodic memory - hidden)
 
-## Fix Guide
-
-| Issue | Cause | Fix |
-|---|---|---|
-| Tools not available | Plugin not loaded | `openclaw plugins list`, re-install |
-| `memory_record` fails | Workspace path unresolved | Check working directory |
-| `memory_search` misses knowledge | Files under `.memory/` not `memory/` | Move to `memory/knowledge/` |
-| `memory_get` rejects path | Path outside `memory/` | Use `read` tool for `.memory/` |
-| MEMORY.md too large | Not running consolidation | `memory_consolidate scope=full` |
-| AGENTS.md reset | `openclaw setup` re-run | Re-append Step 5 content |
-
----
-
-## Backup
-
+Check initial file state:
 ```bash
-# Before update
-cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.bak
-cd $WORKSPACE && git add -A && git commit -m "pre-update $(date +%Y-%m-%d)"
-
-# After update
-openclaw plugins list | grep memory-enhanced
-# If missing: openclaw plugins install -l ~/.openclaw/extensions/memory-enhanced
+cat .memory/active/focus_stack.json    # Should be a flat ADaPT object
+cat .memory/active/scratchpad.md       # Should exist
 ```
 
 ---
 
-## Token Budget
+## 3. Tool Functionality Test
 
-| Operation | Method | Token cost |
-|---|---|---|
-| Record events | `memory_record` tool | 0 |
-| Explore associations | `memory_explore` tool | 0 |
-| Decay + archive + MEMORY.md regen | `memory_consolidate` tool | 0 |
-| Health check | `memory_status` tool | 0 |
-| Session recall | `memory_search` (built-in) | 0 |
-| SKILL.md context | Minimal reference doc | ~200/turn |
-| **Knowledge distillation** | **LLM semantic work** | **~200-500/cycle** |
-| **Creating/promoting skills** | **LLM pattern recognition** | **~100-200/skill** |
+Ask the Agent the following or verify via tool calls:
+
+### A. Recording & episodic memory
+> "Record this: I prefer using 'pnpm' for all my Node.js projects. Use importance 0.8 and tag 'preference'."
+
+- **Check**: Does `.memory/events/YYYY-MM-DD.jsonl` contain the new entry?
+- **Check**: Does `memory/YYYY-MM-DD.md` contain the human-readable summary?
+
+### B. Association & exploration
+> "Explore the memory related to my Node.js preferences."
+
+- **Check**: Does `memory_explore` return the correct event? Does it show the association chain?
+
+### C. Active Focus (ADaPT)
+Ask the agent: "Show me your current focus stack."
+- **Check**: It should read `.memory/active/focus_stack.json` and report a flat list of breadcrumbs and siblings, NOT a deep tree.
+
+---
+
+## 4. Maintenance & Compaction
+
+### A. Manual Consolidation
+> "Run memory_consolidate with scope='session'."
+
+- **Check**: Does it report events processed?
+- **Check**: Is `MEMORY.md` updated/regenerated?
+
+### B. Compaction Trigger (Simulation)
+If you reach the context limit, ensure the agent:
+1. Performs Tier 3 Full Consolidation.
+2. Reads `.memory/events/*.jsonl`.
+3. Distills insights into `memory/knowledge/*.md`.
+4. Calls `memory_consolidate scope=full`.
+
+---
+
+## 5. Cognitive Guardrails
+
+- [ ] **Working Memory Limit**: If `current_path` + `pending_siblings` in `focus_stack.json` exceeds 7 items, the agent must STOP and consolidate.
+- [ ] **No Manual Edits**: The agent must NOT manually edit `MEMORY.md`.
+- [ ] **Zero Token Logic**: Ensure no `SKILL.md` is injecting huge instruction blocks (check system prompt if possible).
+
+---
+
+## Troubleshooting
+
+- **"Tools not found"**: Restart the gateway (`openclaw gateway restart`).
+- **"Search returns nothing"**: Check your `SiliconFlow` API key and embedding model config in `openclaw.json`.
+- **"Memory.md not updating"**: Ensure you have files in `memory/knowledge/` to aggregate from.
