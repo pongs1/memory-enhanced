@@ -347,7 +347,16 @@ openclaw plugins install -l ~/openclaw/extensions/memory-enhanced
         "enabled": true,
         "provider": "openai",
         "model": "BAAI/bge-m3",
-        "sources": ["memory", "sessions"]
+        "sources": ["memory"],
+        "query": {
+          "hybrid": {
+            "enabled": true,
+            "vectorWeight": 0.4,
+            "textWeight": 0.6,
+            "temporalDecay": { "enabled": true, "halfLifeDays": 30 },
+            "mmr": { "enabled": true, "lambda": 0.7 }
+          }
+        }
       },
       "compaction": {
         "memoryFlush": {

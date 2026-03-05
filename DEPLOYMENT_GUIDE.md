@@ -79,9 +79,18 @@ Nest these directly under `agents.defaults`. This enables semantic search and th
         "enabled": true,
         "provider": "openai",        // Link to the provider above
         "model": "BAAI/bge-m3",       // Specific embedding model
-        "sources": ["memory", "sessions"],
+        "sources": ["memory"],        // 限定仅检索固定记忆，让Agent自行决定是否查阅会话
         "extraPaths": ["memory/skills/verified"],
-        "experimental": { "sessionMemory": true }
+        "experimental": { "sessionMemory": true },
+        "query": {
+          "hybrid": {
+            "enabled": true,
+            "vectorWeight": 0.4,      // 对应设计文档中的 α 权重
+            "textWeight": 0.6,        // 配合精确匹配
+            "temporalDecay": { "enabled": true, "halfLifeDays": 30 }, // 对应设计文档中的 β 权重
+            "mmr": { "enabled": true, "lambda": 0.7 }
+          }
+        }
       },
       "compaction": {
         "reserveTokensFloor": 20000,
