@@ -79,6 +79,7 @@ export function paths(workspace: string) {
         activeDir: path.join(workspace, ".memory", "active"),
         scratchpad: path.join(workspace, ".memory", "active", "scratchpad.md"),
         focusStack: path.join(workspace, ".memory", "active", "focus_stack.json"),
+        focusStackMd: path.join(workspace, ".memory", "active", "focus_stack.md"),
         eventsDir: path.join(workspace, ".memory", "events"),
         eventsSchema: path.join(workspace, ".memory", "events", "_schema.json"),
         scriptsDir: path.join(workspace, ".memory", "scripts"),

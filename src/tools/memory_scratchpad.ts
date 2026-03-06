@@ -26,9 +26,10 @@ export type MemoryScratchpadInput = Static<typeof MemoryScratchpadParams>;
 
 export async function executeMemoryScratchpad(
     _toolCallId: string,
-    params: MemoryScratchpadInput
+    params: MemoryScratchpadInput,
+    ctx?: { workspaceDir?: string }
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-    const workspace = resolveWorkspace();
+    const workspace = resolveWorkspace(ctx?.workspaceDir);
     const p = paths(workspace);
 
     switch (params.action) {

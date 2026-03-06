@@ -32,20 +32,12 @@ import {
     executeMemoryScratchpad,
 } from "./tools/memory_scratchpad.js";
 
-interface PluginApi {
-    registerTool(
-        toolDef: {
-            name: string;
-            description: string;
-            parameters: unknown;
-            execute: (id: string, params: any) => Promise<any>;
-        },
-        opts?: { optional?: boolean }
-    ): void;
-    config?: Record<string, unknown>;
-}
+import { paths, readJson, readFileOr } from "./utils.js";
 
-export default function register(api: PluginApi) {
+// @ts-ignore
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+
+export default function register(api: OpenClawPluginApi) {
     const pluginConfig = api.config as
         | {
             halfLifeDays?: number;
@@ -90,8 +82,8 @@ export default function register(api: PluginApi) {
             "(extracting knowledge from events) still requires you to read the events " +
             "and write to memory/knowledge/*.md before calling this tool.",
         parameters: MemoryConsolidateParams,
-        execute: (id, params) =>
-            executeMemoryConsolidate(id, params, pluginConfig),
+        execute: (id: string, params: any, ctx: any) =>
+            executeMemoryConsolidate(id, params, { ...ctx, config: pluginConfig }),
     });
 
     // --- memory_status ---
@@ -128,5 +120,74 @@ export default function register(api: PluginApi) {
             "Use 'refill' to bring overflow tasks from scratchpad back into the focus stack JSON.",
         parameters: MemoryScratchpadParams,
         execute: executeMemoryScratchpad,
+    });
+
+    // --- HOOKS ---
+    api.on("before_agent_start", async (event: any, ctx: { workspaceDir: string }) => {
+        const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
+        const p = paths(workspace);
+        const sections: string[] = [];
+
+        // L1: Active Focus (MD Frontend)
+        const focusMd = readFileOr(p.focusStackMd, "").trim();
+        if (focusMd) {
+            sections.push(`## 🎯 Active Focus\n${focusMd}`);
+        }
+
+        if (sections.length > 0) {
+            return {
+                prependSystemContext: `<!-- Memory Context (auto-injected) -->\n${sections.join("\n\n")}\n<!-- End Memory Context -->`
+            };
+        }
+        return {};
+    });
+
+    api.on("agent_end", async (event: any, ctx: { workspaceDir: string }) => {
+        // L2: Auto-record user intent & assistant reply
+        const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
+        const msgs = event?.messages || [];
+
+        // Find last user message
+        const lastUser = [...msgs].reverse().find((m: any) => m.role === "user");
+        const lastAssistant = [...msgs].reverse().find((m: any) => m.role === "assistant");
+
+        if (!lastUser && !lastAssistant) return;
+
+        const extractText = (msg: any) => {
+            if (!msg) return "";
+            if (typeof msg.content === "string") return msg.content;
+            if (Array.isArray(msg.content)) {
+                return msg.content.map((c: any) => c.text || "").join("\n");
+            }
+            return "";
+        };
+
+        const userText = extractText(lastUser);
+        const asstText = extractText(lastAssistant);
+        const combined = `${userText}\n${asstText}`.toLowerCase();
+
+        // Heuristics for auto-recording
+        const triggerKeywords = [
+            "decided", "preference", "remember", "prefer",
+            "决定", "偏好", "记住", "以后都", "不要", "喜欢"
+        ];
+
+        const shouldRecord = triggerKeywords.some(kw => combined.includes(kw));
+
+        if (shouldRecord) {
+            const recordContent = `User: ${userText.substring(0, 500)}\nAsst: ${asstText.substring(0, 500)}`;
+            try {
+                // Pass a mocked toolCallId and input
+                await executeMemoryRecord("auto_hook", {
+                    content: recordContent,
+                    type: "insight",
+                    importance: 0.6,
+                    tags: ["auto-recorded"],
+                    associations: []
+                }, ctx);
+            } catch (e) {
+                // ignore errors in background hook
+            }
+        }
     });
 }

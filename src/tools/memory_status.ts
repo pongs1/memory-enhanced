@@ -12,9 +12,11 @@ import {
  * No parameters needed.
  */
 export async function executeMemoryStatus(
-    _toolCallId: string
+    _toolCallId: string,
+    params: any,
+    ctx?: { workspaceDir?: string }
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-    const workspace = resolveWorkspace();
+    const workspace = resolveWorkspace(ctx?.workspaceDir);
     const p = paths(workspace);
     const checks: string[] = [];
     let pass = 0;
@@ -118,9 +120,7 @@ export async function executeMemoryStatus(
 
         for (const file of mdFiles) {
             const content = readFileOr(path.join(p.knowledgeDir, file));
-            knowledgeEntries += (
-                content.match(/<!-- knowledge_entry/g) || []
-            ).length;
+            knowledgeEntries += content.split("\n").filter((l: string) => l.trim().startsWith("## ")).length;
         }
     }
 

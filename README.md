@@ -361,6 +361,11 @@ openclaw plugins install -l ~/openclaw/extensions/memory-enhanced
 
 ```jsonc
 {
+  "plugins": {
+    "load": {
+      "paths": ["/absolute/path/to/memory-enhanced"]
+    }
+  },
   "models": {
     "providers": {
       "openai": {

@@ -69,9 +69,10 @@ interface ConsolidationReport {
 export async function executeMemoryConsolidate(
     _toolCallId: string,
     params: MemoryConsolidateInput,
-    pluginConfig?: { halfLifeDays?: number; archiveThreshold?: number; memoryMdMaxChars?: number }
+    ctx?: { workspaceDir?: string }
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-    const workspace = resolveWorkspace();
+    const workspace = resolveWorkspace(ctx?.workspaceDir);
+    const pluginConfig = (ctx as any)?.config;
     const p = paths(workspace);
     const halfLife = pluginConfig?.halfLifeDays ?? 30;
     const archiveThresh = pluginConfig?.archiveThreshold ?? 0.2;
@@ -231,7 +232,12 @@ function getJsonlFiles(
 }
 
 function generateMemoryMd(knowledgeDir: string): string {
-    const lines = ["# Long-Term Memory", ""];
+    const lines = [
+        `# Long-Term Memory`,
+        `> **Core Project Context & User Knowledge**`,
+        `> Auto-injected into your context window. Do not manually read these files unless necessary.`,
+        ``
+    ];
 
     if (!fs.existsSync(knowledgeDir)) {
         lines.push("(No knowledge files yet. Consolidation will populate this.)");
@@ -245,19 +251,19 @@ function generateMemoryMd(knowledgeDir: string): string {
 
     for (const file of files) {
         const content = readFileOr(path.join(knowledgeDir, file));
-        const title =
-            content
-                .split("\n")
-                .find((l: string) => l.startsWith("# "))
-                ?.replace(/^# /, "") || file.replace(".md", "");
-        const entryCount =
-            (content.match(/<!-- knowledge_entry/g) || []).length;
+        const entryCount = content.split("\n").filter((l: string) => l.trim().startsWith("## ")).length;
 
-        lines.push(`## ${title}`);
-        lines.push(
-            `→ See memory/knowledge/${file} (${entryCount} entries)`
-        );
-        lines.push("");
+        // Strip the top level `# Title` if it exists, to avoid duplicate H1s
+        const contentLines = content.split("\n");
+        const bodyLines = contentLines.filter((l: string) => !l.startsWith("# "));
+        const titleLine = contentLines.find((l: string) => l.startsWith("# ")) || `# ${file.replace(".md", "")}`;
+
+        lines.push(`---`);
+        lines.push(`${titleLine} (${entryCount} entries)`);
+        lines.push(`Source: memory/knowledge/${file}`);
+        lines.push(``);
+        lines.push(bodyLines.join("\n").trim());
+        lines.push(``);
     }
 
     return lines.join("\n");

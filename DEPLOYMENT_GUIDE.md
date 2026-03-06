@@ -100,11 +100,17 @@ Nest these directly under `agents.defaults`. This enables semantic search and th
           "systemPrompt": "Session nearing compaction. Use memory_record for important events. Use memory_consolidate to finalize. Reply NO_REPLY when done.",
           "prompt": "Context window is almost full. Execute Tier 3 Full Consolidation NOW: 1) Read ALL unconsolidated events from .memory/events/*.jsonl. 2) Classify each: KEEP (facts/preferences/decisions) or SKILL (reusable patterns) or FORGET. 3) For KEEP items: READ existing memory/knowledge/*.md file first, then OVERWRITE outdated info and merge new insights. 4) For SKILL items: create/update memory/skills/drafts/. 5) Call memory_consolidate with scope=full. Reply NO_REPLY when done."
         }
-      }
+      },
+      "bootstrapExtraFiles": [
+        ".memory/active/scratchpad.md",
+        "memory/"
+      ]
     }
   }
 }
 ```
+
+> **Note**: Providing `memory/` or explicit relative paths to daily log markdown files in `bootstrapExtraFiles` ensures that the user's reasoning buffer (scratchpad) and the current day's events are natively provided by OpenClaw whenever a new session launches. The plugin handles L1 (focus stack) and L3 (knowledge) independently via native hooks.
 
 ---
 

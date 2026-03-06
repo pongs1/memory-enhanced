@@ -1,11 +1,12 @@
 import { Type, type Static } from "@sinclair/typebox";
+import * as fs from "node:fs";
 import {
     resolveWorkspace,
     paths,
     readJson,
     writeJson,
     nowISO,
-    appendScratchpad,
+    ensureDir,
     type FocusStack
 } from "../utils.js";
 import { executeMemoryRecord } from "./memory_record.js";
@@ -14,8 +15,7 @@ const FocusAction = Type.Union([
     Type.Literal("status"),
     Type.Literal("plan"),
     Type.Literal("push"),
-    Type.Literal("complete"),
-    Type.Literal("overflow")
+    Type.Literal("complete")
 ], { description: "Action to perform on the focus stack" });
 
 export const MemoryFocusParams = Type.Object({
@@ -32,9 +32,10 @@ export type MemoryFocusInput = Static<typeof MemoryFocusParams>;
 
 export async function executeMemoryFocus(
     toolCallId: string,
-    params: MemoryFocusInput
+    params: MemoryFocusInput,
+    ctx?: { workspaceDir?: string }
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-    const workspace = resolveWorkspace();
+    const workspace = resolveWorkspace(ctx?.workspaceDir);
     const p = paths(workspace);
 
     const fallback: FocusStack = {
@@ -49,7 +50,7 @@ export async function executeMemoryFocus(
 
     switch (params.action) {
         case "status":
-            return renderStatus(stack);
+            return { content: [{ type: "text" as const, text: renderStatus(stack) }] };
 
         case "plan":
             if (!params.goal || !params.focus) {
@@ -79,7 +80,7 @@ export async function executeMemoryFocus(
                     content: params.insight,
                     type: "insight",
                     importance: 0.6
-                });
+                }, ctx);
             }
 
             // Pop sibling or use next_focus
@@ -95,29 +96,12 @@ export async function executeMemoryFocus(
             stack.last_updated = nowISO();
             return validateAndSave(workspace, stack, `Completed: ${completed}`);
 
-        case "overflow":
-            const total = stack.current_path.length + stack.pending_siblings.length;
-            if (total <= 7) {
-                return { content: [{ type: "text" as const, text: "Queue is within limits (7 chunks). No overflow needed." }] };
-            }
-            const keep = 7 - stack.current_path.length - 1; // leave room for focus
-            const moved = stack.pending_siblings.splice(Math.max(0, keep));
-
-            if (moved.length > 0) {
-                appendScratchpad(workspace, "Pending Items (Overflow)", moved.join("\n"));
-            }
-
-            stack.last_updated = nowISO();
-            writeJson(p.focusStack, stack);
-            return { content: [{ type: "text" as const, text: `Moved ${moved.length} items to scratchpad.md overflow section.` }] };
-
         default:
             return { content: [{ type: "text" as const, text: `Error: Unknown action: ${params.action}` }] };
     }
 }
 
-function renderStatus(stack: FocusStack): { content: Array<{ type: "text"; text: string }> } {
-    const totalCount = stack.current_path.length + (stack.current_focus ? 1 : 0) + stack.pending_siblings.length;
+function renderStatus(stack: FocusStack): string {
     const lines = [
         "## Current Focus Stack",
         "",
@@ -131,30 +115,69 @@ function renderStatus(stack: FocusStack): { content: Array<{ type: "text"; text:
         "",
         "**Upcoming:**",
         ...stack.pending_siblings.map(s => `  - ${s}`),
-        "",
-        `*Working Memory usage: ${totalCount}/7 chunks*`
     ];
 
-    if (totalCount >= 7) {
-        lines.push("", "⚠️ **WARNING: Working memory limit reached.** Consider calling `memory_focus action=\"overflow\"` to move items to scratchpad.md.");
+    const totalCount = stack.current_path.length + 1 + stack.pending_siblings.length;
+    lines.push("", `*Backend Queue: ${totalCount} items (Auto-truncating to 7 for MD frontend)*`);
+
+    return lines.join("\n");
+}
+
+function generateMdFrontend(stack: FocusStack): string {
+    const lines = [
+        `**Project Goal:** ${stack.project_goal}`,
+        `**Last Updated:** ${stack.last_updated}`,
+        "",
+        "**Path:**"
+    ];
+
+    // Build the 7-item view. Math: Path + 1 (Focus) + Siblings <= 7
+    let pathLimit = Math.min(3, stack.current_path.length); // Max 3 path items to save space for future
+    let remaining = 7 - 1 - pathLimit;
+    let siblingsLimit = Math.min(remaining, stack.pending_siblings.length);
+
+    // If we have fewer siblings than allowed, we can show more path
+    if (siblingsLimit < remaining) {
+        pathLimit = Math.min(stack.current_path.length, pathLimit + (remaining - siblingsLimit));
     }
 
-    return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    const displayPath = stack.current_path.slice(-pathLimit);
+    if (pathLimit < stack.current_path.length) {
+        lines.push(`  └─ ... (${stack.current_path.length - pathLimit} earlier steps hidden)`);
+    }
+    displayPath.forEach(p => lines.push(`  └─ ${p}`));
+
+    lines.push("");
+    lines.push(`**🚀 FOCUS:** ${stack.current_focus}`);
+    lines.push("");
+
+    lines.push("**Upcoming:**");
+    const displaySiblings = stack.pending_siblings.slice(0, siblingsLimit);
+    displaySiblings.forEach(s => lines.push(`  - ${s}`));
+
+    if (siblingsLimit < stack.pending_siblings.length) {
+        lines.push(`  - ... (${stack.pending_siblings.length - siblingsLimit} later steps pending in backend queue)`);
+    }
+
+    return lines.join("\n");
 }
 
 function validateAndSave(workspace: string, stack: FocusStack, prefix = "Focus updated."): { content: Array<{ type: "text"; text: string }> } {
-    const totalCount = stack.current_path.length + 1 + stack.pending_siblings.length;
     const p = paths(workspace);
+    ensureDir(p.activeDir);
+
+    // 1. Save unbounded backend
     writeJson(p.focusStack, stack);
 
-    if (totalCount > 7) {
-        return {
-            content: [{
-                type: "text" as const,
-                text: `${prefix}\n\n[Working Memory Limit Exceeded] You are tracking ${totalCount} chunks (limit 7). \nPROMPT: You MUST call \`memory_focus action=\"overflow\"\` immediately to move excess pending tasks to scratchpad.md, or you risk context dilution.`
-            }]
-        };
-    }
+    // 2. Generate and save truncated MD frontend
+    const mdContent = generateMdFrontend(stack);
+    fs.writeFileSync(p.focusStackMd, mdContent, "utf-8");
 
-    return renderStatus(stack);
+    // 3. Return full status to the LLM so it knows everything in the queue
+    return {
+        content: [{
+            type: "text" as const,
+            text: `${prefix}\n\n${renderStatus(stack)}`
+        }]
+    };
 }

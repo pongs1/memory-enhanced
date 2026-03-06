@@ -60,9 +60,10 @@ interface ExploreNode {
  */
 export async function executeMemoryExplore(
     _toolCallId: string,
-    params: MemoryExploreInput
+    params: MemoryExploreInput,
+    ctx?: { workspaceDir?: string }
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-    const workspace = resolveWorkspace();
+    const workspace = resolveWorkspace(ctx?.workspaceDir);
     const p = paths(workspace);
     const maxDepth = params.depth ?? 2;
 

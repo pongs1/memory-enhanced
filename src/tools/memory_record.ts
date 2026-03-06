@@ -57,9 +57,10 @@ export type MemoryRecordInput = Static<typeof MemoryRecordParams>;
  */
 export async function executeMemoryRecord(
     _toolCallId: string,
-    params: MemoryRecordInput
+    params: MemoryRecordInput,
+    ctx?: { workspaceDir?: string }
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-    const workspace = resolveWorkspace();
+    const workspace = resolveWorkspace(ctx?.workspaceDir);
     const p = paths(workspace);
     const dateStr = today();
     const timeStr = nowTime();
