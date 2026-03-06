@@ -547,9 +547,11 @@ openclaw doctor          # 健康检查
 ```
 
 验证：对 agent 说以下内容：
-1. `"请调用 memory_status 检查记忆系统"` → 应显示健康报告
-2. `"请记录一条测试事件：我喜欢简洁的代码"` → 应调用 `memory_record`，返回事件ID
-3. `"请检查 memory/YYYY-MM-DD.md 里有没有刚才的事件"` → 应能看到记录
+1. `"请调用 memory_focus action='status' 开启自检"` → 应显示当前任务状态
+2. `"请调用 memory_status 检查系统健康度"` → 应显示核心目录/文件健康报告
+3. `"请用 memory_focus plan 一个测试目标"` → 应成功更新 focus_stack.json
+4. `"请用 memory_focus complete 结束测试并记录一条洞察"` → 应自动触发 `memory_record`
+5. `"检查 memory/YYYY-MM-DD.md"` → 应能看到系统自动帮你录入的整理笔记
 
 ---
 

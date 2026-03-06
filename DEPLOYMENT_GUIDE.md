@@ -325,11 +325,12 @@ openclaw doctor
 Activation message:
 
 ```
-Memory plugin deployed. Verify:
-1. Call memory_status to check system health
-2. Call memory_record with content="Deployment test", type="observation", importance=0.5
-3. Confirm memory/YYYY-MM-DD.md has the event summary
-4. Call memory_consolidate with scope="session"
+Memory plugin deployed with ADaPT lifecycle tools. Verify:
+1. Call memory_focus action="status" to initialize state.
+2. Call memory_status to check system health.
+3. Call memory_focus action="plan" with goal="Test" and focus="Verify tools".
+4. Call memory_focus action="complete" with insight="Tools are working".
+5. Verify memory/YYYY-MM-DD.md has the auto-recorded insight.
 ```
 
 ---
