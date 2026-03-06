@@ -127,8 +127,7 @@ function generateMdFrontend(stack: FocusStack): string {
     const lines = [
         `**Project Goal:** ${stack.project_goal}`,
         `**Last Updated:** ${stack.last_updated}`,
-        "",
-        "**Path:**"
+        ""
     ];
 
     // Build the 7-item view. Math: Path + 1 (Focus) + Siblings <= 7
@@ -138,25 +137,30 @@ function generateMdFrontend(stack: FocusStack): string {
 
     // If we have fewer siblings than allowed, we can show more path
     if (siblingsLimit < remaining) {
-        pathLimit = Math.min(stack.current_path.length, pathLimit + (remaining - siblingsLimit));
+        pathLimit = Math.min(stack.current_path.length, pathLimit + remaining - siblingsLimit);
     }
 
-    const displayPath = stack.current_path.slice(-pathLimit);
-    if (pathLimit < stack.current_path.length) {
-        lines.push(`  └─ ... (${stack.current_path.length - pathLimit} earlier steps hidden)`);
+    if (stack.current_path.length > 0) {
+        lines.push("**Path:**");
+        const displayPath = stack.current_path.slice(-pathLimit);
+        if (pathLimit < stack.current_path.length) {
+            lines.push(`  └─ ... (${stack.current_path.length - pathLimit} earlier steps hidden)`);
+        }
+        displayPath.forEach(p => lines.push(`  └─ ${p}`));
+        lines.push("");
     }
-    displayPath.forEach(p => lines.push(`  └─ ${p}`));
 
-    lines.push("");
     lines.push(`**🚀 FOCUS:** ${stack.current_focus}`);
-    lines.push("");
 
-    lines.push("**Upcoming:**");
-    const displaySiblings = stack.pending_siblings.slice(0, siblingsLimit);
-    displaySiblings.forEach(s => lines.push(`  - ${s}`));
+    if (stack.pending_siblings.length > 0) {
+        lines.push("");
+        lines.push("**Upcoming:**");
+        const displaySiblings = stack.pending_siblings.slice(0, siblingsLimit);
+        displaySiblings.forEach(s => lines.push(`  - ${s}`));
 
-    if (siblingsLimit < stack.pending_siblings.length) {
-        lines.push(`  - ... (${stack.pending_siblings.length - siblingsLimit} later steps pending in backend queue)`);
+        if (siblingsLimit < stack.pending_siblings.length) {
+            lines.push(`  - ... (${stack.pending_siblings.length - siblingsLimit} later steps pending in backend queue)`);
+        }
     }
 
     return lines.join("\n");
