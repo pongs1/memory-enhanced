@@ -170,3 +170,28 @@ export interface MemoryEvent {
     consolidated: boolean;
     decay_score: number;
 }
+
+/** Focus stack structure. */
+export interface FocusStack {
+    project_goal: string;
+    current_path: string[];
+    current_focus: string;
+    pending_siblings: string[];
+    last_updated: string;
+}
+
+/** Append a note to a specific section in scratchpad.md. */
+export function appendScratchpad(workspace: string, section: string, content: string): void {
+    const p = paths(workspace);
+    const existing = readFileOr(p.scratchpad, "# Scratchpad\n");
+    const sectionHeader = `## ${section}`;
+
+    let newContent = "";
+    if (existing.includes(sectionHeader)) {
+        newContent = existing.replace(sectionHeader, `${sectionHeader}\n- [${nowTime()}] ${content}`);
+    } else {
+        newContent = existing.trim() + `\n\n${sectionHeader}\n- [${nowTime()}] ${content}\n`;
+    }
+
+    fs.writeFileSync(p.scratchpad, newContent.trim() + "\n", "utf-8");
+}

@@ -70,7 +70,7 @@ OpenClaw 本身有基础的记忆功能：
               ↕
     ┌─────────────────────┐
     │   memory-enhanced   │  ← 本插件
-    │  插件（4个工具）     │
+    │  插件 (6个工具)      │
     └─────────────────────┘
               ↕
     ┌─────────────────────┐
@@ -105,15 +105,16 @@ OpenClaw 本身有基础的记忆功能：
 **存储位置**：`.memory/active/`
 
 **文件**：
-- `scratchpad.md`：当前会话的工作草稿纸，记录推理过程和待验证假设。
-- `focus_stack.json`：**目标执行流与待办队列**（基于 ADaPT 按需拆解算法）。
+- `scratchpad.md`：当前会话的工作草稿纸，记录推理过程和待验证假设。通过 `memory_scratchpad` 工具管理。
+- `focus_stack.json`：**目标执行流与待办队列**（基于 ADaPT 按需拆解算法）。通过 `memory_focus` 工具管理。
 
 **核心机制 (Checkpoint Protocol)**：
 为了对抗 LLM 在极长对话中注意力衰减的 "Lost in the Middle" 效应，Agent 会执行自我存档：
-1. **扁平行进**：不建立庞大的深层任务树，而是把当前大任务拆解为最近下一步，写入 `focus_stack.json` 的扁平队列中。
-2. **步步追踪**：每完成焦点任务，更新状态出队列，并记录中间成果。
-3. **工作记忆保护**：如果任务压栈过长（面包屑+队列 ≥ 7项），Agent 会强制暂停，把当前思路写入 `scratchpad.md` 保存、精简焦点。
-4. **自我发现**：在执行中自己摸索出的经验/报错教训，会当场主动写入记忆，无需等用户下令。
+1. **扁平行进**：不建立庞大的深层任务树，而是把当前大任务拆解为最近下一步，通过 `memory_focus action="plan"` 写入扁平队列。
+2. **步步追踪**：每完成焦点任务，通过 `memory_focus action="complete"` 更新状态出队列，并自动触发 `memory_record`。
+3. **工作记忆保护**：如果任务压栈过长（总计 ≥ 7项），工具会强制报错，要求 Agent 通过 `memory_focus action="overflow"` 把思路剥离到 `scratchpad.md`。
+4. **自我发现**：Agent 在执行中自己摸索出的经验，在调用 `complete` 动作时传入 `insight` 参数即可一键归档。
+5. **Session 回家协议**：Agent 在每次启动时，强制要求先调用 `memory_focus action="status"` 以找回失落的工作状态。
 
 **类比**：就像你桌上摊开的草稿纸和待办清单。当你脑容量不够用时，先把中间结果写在纸上，清理大脑缓存再继续。
 
@@ -196,7 +197,7 @@ memory/skills/
 
 ---
 
-## 四个工具的功能
+## 六个工具的功能
 
 ### 🔴 `memory_record` — 记录事件
 
@@ -298,6 +299,33 @@ memory/skills/
 
   ===========================
   ✅ 9 passed  ⚠️ 1 warnings  ❌ 1 failed
+
+---
+
+### 🟣 `memory_focus` — 任务焦点栈管理
+
+**什么时候用**：由于 Agent 存在“失忆”和“记账惰性”，这个工具提供原生、低开销的生命周期管理。
+
+```
+动作 (action):
+  - status: [强制要求在启动时调用] 恢复当前工作状态和队列
+  - plan: 重新设定大目标、路径、当前焦点和后续队列
+  - complete: 标记当前焦点完成。可带 insight 参数一键触发 memory_record
+  - push: 向队列末尾追加任务
+  - overflow: [自动风控] 当总任务 > 7 时，把多出的“尾巴”移到 scratchpad.md
+```
+
+---
+
+### 🟤 `memory_scratchpad` — 草稿纸管理
+
+**什么时候用**：记录冗长的推理过程，或者从溢出的草稿纸中找回任务。
+
+```
+动作 (action):
+  - append: 向 Reasoning/Verification 等标题下低摩擦地追加日志
+  - refill: 将 scratchpad.md 中的溢出任务捡回到 focus_stack.json (如果 7 槽位还有空余)
+```
 ```
 
 ---

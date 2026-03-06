@@ -23,6 +23,14 @@ import {
     executeMemoryConsolidate,
 } from "./tools/memory_consolidate.js";
 import { executeMemoryStatus } from "./tools/memory_status.js";
+import {
+    MemoryFocusParams,
+    executeMemoryFocus,
+} from "./tools/memory_focus.js";
+import {
+    MemoryScratchpadParams,
+    executeMemoryScratchpad,
+} from "./tools/memory_scratchpad.js";
 
 interface PluginApi {
     registerTool(
@@ -95,5 +103,30 @@ export default function register(api: PluginApi) {
             "No parameters needed.",
         parameters: { type: "object", properties: {}, required: [] },
         execute: executeMemoryStatus,
+    });
+
+    // --- memory_focus ---
+    api.registerTool({
+        name: "memory_focus",
+        description:
+            "Manage the ADaPT focus stack (working memory queue). " +
+            "Use 'status' at session start to recall state. " +
+            "Use 'plan' to set goal/path/focus/siblings. " +
+            "Use 'complete' to finish a task and auto-record insights. " +
+            "Use 'push' to add pending tasks. " +
+            "Automatically enforces a 7-chunk limit and prompts for 'overflow' to scratchpad.md.",
+        parameters: MemoryFocusParams,
+        execute: executeMemoryFocus,
+    });
+
+    // --- memory_scratchpad ---
+    api.registerTool({
+        name: "memory_scratchpad",
+        description:
+            "Manage Reasoning and Verification notes in scratchpad.md. " +
+            "Use 'append' to log notes without overwriting. " +
+            "Use 'refill' to bring overflow tasks from scratchpad back into the focus stack JSON.",
+        parameters: MemoryScratchpadParams,
+        execute: executeMemoryScratchpad,
     });
 }

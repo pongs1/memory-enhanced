@@ -1,7 +1,7 @@
 # 🚀 Memory System Deployment Guide (v4 — Plugin)
 
 > **Architecture**: Native OpenClaw tool plugin. Memory operations are real tools
-> (`memory_record`, `memory_explore`, `memory_consolidate`, `memory_status`)
+> (`memory_record`, `memory_explore`, `memory_consolidate`, `memory_status`, `memory_focus`, `memory_scratchpad`)
 > that run as TypeScript code — no SKILL.md logic injection, saving ~2000+ tokens/turn.
 
 ---
@@ -246,13 +246,13 @@ You wake up fresh each session, but you have a powerful 4-layer memory system.
 ### 🎯 Checkpoint Protocol (ADaPT) — Goal Tracking & Saves
 To respect your ~7 chunk working memory limit, DO NOT try to build deep task trees. Keep your focus flat:
 
-1. **Breadcrumbs & Queue**: Break the goal into immediate next steps only (As-Needed Decomposition). Write your path and pending sibling tasks to `.memory/active/focus_stack.json` BEFORE starting work.
-2. **Focus Shift / Completion**: After finishing `current_focus`, log any durable insights (`memory_record`), pop the next task from your queue, and SAVE `focus_stack.json`.
-3. **Working Memory Guard**: If your path + queue exceeds 7 items, STOP. You are tracking too much. Consolidate siblings, save your reasoning to `scratchpad.md`, and `memory_record` your progress.
-4. **Self-discovery**: If you discover something unexpected during execution, record it immediately via `memory_record`. Don’t wait for the user to tell you “remember this.”
-5. **Plan changes**: If new information invalidates your current approach, update `focus_stack.json` AND `memory_record`.
+1.  **Recall State (Mandatory)**: Call `memory_focus action="status"` at the start of every session.
+2.  **Breadcrumbs & Queue**: Use `memory_focus action="plan"` to set your project goal and immediate next steps.
+3.  **Focus Shift / Completion**: When `current_focus` is done, call `memory_focus action="complete"`. Provide the `insight` parameter to auto-record durable knowledge.
+4.  **Working Memory Guard**: If the queue exceeds 7 items, call `memory_focus action="overflow"` to move excess tasks to `scratchpad.md`. Use `memory_scratchpad action="append"` to log reasoning.
+5.  **Refill**: If your focus stack is empty but items remain in scratchpad, call `memory_scratchpad action="refill"`.
 
-**Why this matters**: LLM attention follows a U-shaped curve. By checkpointing flat intermediate results to files, you move critical information from the vulnerable middle of your context to durable storage without getting lost in deep JSON trees.
+**Why this matters**: LLM attention degrades in the middle of long contexts. By checkpointing results natively, you move critical information to durable storage, preserving focus.
 
 ### 🔄 Memory Maintenance (During Heartbeats or Session End)
 1. Look for unconsolidated events (run `memory_status` or check `.memory/events/`).
@@ -380,8 +380,35 @@ Returns: consolidation report
 ### `memory_status`
 ```
 Parameters: none
+Returns: health report (directories, files, sizes, event/knowledge/skill counts)
+```
 
-Returns: health report (directories, files, sizes, event/knowledge counts)
+### `memory_focus`
+```
+Parameters:
+  action: status|plan|push|complete|overflow
+  goal: string (for 'plan')
+  path: string[] (for 'plan')
+  focus: string (for 'plan' or 'complete')
+  siblings: string[] (for 'plan' or 'push')
+  insight: string (for 'complete' — triggers auto memory_record)
+  next_focus: string (for 'complete')
+
+Details:
+  - 'status' should be called at DOCTOR/SESSION START.
+  - 'overflow' handles siblings > 7 limits.
+```
+
+### `memory_scratchpad`
+```
+Parameters:
+  action: append|refill
+  section: string (e.g., "Reasoning", "Verification")
+  content: string (only for 'append')
+
+Details:
+  - 'append' allows non-destructive logging.
+  - 'refill' pulls overflow items back into JSON focus stack.
 ```
 
 ---
