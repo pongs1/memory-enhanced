@@ -123,20 +123,52 @@ export default function register(api: OpenClawPluginApi) {
     });
 
     // --- HOOKS ---
-    api.on("before_agent_start", async (event: any, ctx: { workspaceDir: string }) => {
+    // Cognitive Pulse Ticker to track continuous tool executions without memory updates
+    const sessionTickers = new Map<string, number>();
+
+    api.on("after_tool_call", async (event: any, ctx: any) => {
+        const toolName = event.toolName || "";
+        const sid = ctx?.sessionId || "default";
+
+        // If the agent uses a memory tool, it resets its cognitive pressure
+        if (toolName.startsWith("memory_")) {
+            sessionTickers.set(sid, 0);
+            return;
+        }
+
+        // Otherwise, cognitive pressure increases
+        const ticks = (sessionTickers.get(sid) || 0) + 1;
+        sessionTickers.set(sid, ticks);
+    });
+
+    api.on("before_prompt_build", async (event: any, ctx: any) => {
         const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
         const p = paths(workspace);
         const sections: string[] = [];
+        const sid = ctx?.sessionId || "default";
 
-        // L1: Active Focus (MD Frontend)
-        const focusMd = readFileOr(p.focusStackMd, "").trim();
-        if (focusMd) {
-            sections.push(`## 🎯 Active Focus\n${focusMd}`);
+        // L1: Active Focus (MD Frontend) always injected live!
+        try {
+            const fs = await import("node:fs");
+            if (fs.existsSync(p.focusStackMd)) {
+                const focusMd = fs.readFileSync(p.focusStackMd, "utf-8").trim();
+                if (focusMd) {
+                    sections.push(`## 🎯 Active Focus\n${focusMd}`);
+                }
+            }
+        } catch (e) { }
+
+        // Cognitive Pulse Injection
+        const ticks = sessionTickers.get(sid) || 0;
+        if (ticks >= 5) { // 5 consecutive tool calls without memory updates
+            sections.push(`> ⚠️ **COGNITIVE PRESSURE CRITICAL (${ticks} actions)**\n> You have executed multiple steps without updating memory.\n> **MANDATORY**: Before continuing your task, you MUST call \`memory_focus\` to update your ADaPT queue, or \`memory_record\` to save your reasoning. Do not proceed until memory is synced.`);
+            // Reset to avoid screaming on every single turn if it disobeys, but it should obey.
+            sessionTickers.set(sid, 0);
         }
 
         if (sections.length > 0) {
             return {
-                prependSystemContext: `<!-- Memory Context (auto-injected) -->\n${sections.join("\n\n")}\n<!-- End Memory Context -->`
+                prependSystemContext: `<!-- Memory Context (Live) -->\n${sections.join("\n\n")}\n<!-- End Memory Context -->`
             };
         }
         return {};
