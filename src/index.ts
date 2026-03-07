@@ -22,15 +22,10 @@ import {
     MemoryConsolidateParams,
     executeMemoryConsolidate,
 } from "./tools/memory_consolidate.js";
-import { executeMemoryStatus } from "./tools/memory_status.js";
 import {
-    MemoryFocusParams,
-    executeMemoryFocus,
-} from "./tools/memory_focus.js";
-import {
-    MemoryScratchpadParams,
-    executeMemoryScratchpad,
-} from "./tools/memory_scratchpad.js";
+    MemoryWorkingParams,
+    executeMemoryWorking,
+} from "./tools/memory_working.js";
 
 import { paths, readJson, readFileOr } from "./utils.js";
 
@@ -86,40 +81,19 @@ export default function register(api: OpenClawPluginApi) {
             executeMemoryConsolidate(id, params, { ...ctx, config: pluginConfig }),
     });
 
-    // --- memory_status ---
+    // --- memory_working ---
     api.registerTool({
-        name: "memory_status",
+        name: "memory_working",
         description:
-            "Show memory system health: directory structure, file counts, " +
-            "MEMORY.md size, event/knowledge/skill statistics, and warnings. " +
-            "No parameters needed.",
-        parameters: { type: "object", properties: {}, required: [] },
-        execute: executeMemoryStatus,
-    });
-
-    // --- memory_focus ---
-    api.registerTool({
-        name: "memory_focus",
-        description:
-            "Manage the ADaPT focus stack (working memory queue). " +
-            "Use 'status' at session start to recall state. " +
+            "Manage the ADaPT focus stack and scratchpad (working memory). " +
             "Use 'plan' to set goal/path/focus/siblings. " +
             "Use 'complete' to finish a task and auto-record insights. " +
             "Use 'push' to add pending tasks. " +
-            "Automatically enforces a 7-chunk limit and prompts for 'overflow' to scratchpad.md.",
-        parameters: MemoryFocusParams,
-        execute: executeMemoryFocus,
-    });
-
-    // --- memory_scratchpad ---
-    api.registerTool({
-        name: "memory_scratchpad",
-        description:
-            "Manage Reasoning and Verification notes in scratchpad.md. " +
-            "Use 'append' to log notes without overwriting. " +
-            "Use 'refill' to bring overflow tasks from scratchpad back into the focus stack JSON.",
-        parameters: MemoryScratchpadParams,
-        execute: executeMemoryScratchpad,
+            "Use 'status' to view the entire stack queue. " +
+            "Automatically enforces a 7-chunk limit. Use 'overflow' to move excess to scratchpad.md. " +
+            "Use 'scratchpad_append' to log notes. Use 'scratchpad_refill' to bring overflow back.",
+        parameters: MemoryWorkingParams,
+        execute: executeMemoryWorking,
     });
 
     // --- HOOKS ---
@@ -158,17 +132,58 @@ export default function register(api: OpenClawPluginApi) {
             }
         } catch (e) { }
 
-        // Cognitive Pulse Injection
-        const ticks = sessionTickers.get(sid) || 0;
-        if (ticks >= 5) { // 5 consecutive tool calls without memory updates
-            sections.push(`> ⚠️ **COGNITIVE PRESSURE CRITICAL (${ticks} actions)**\n> You have executed multiple steps without updating memory.\n> **MANDATORY**: Before continuing your task, you MUST call \`memory_focus\` to update your ADaPT queue, or \`memory_record\` to save your reasoning. Do not proceed until memory is synced.`);
-            // Reset to avoid screaming on every single turn if it disobeys, but it should obey.
-            sessionTickers.set(sid, 0);
+        // --- Telemetry Calculation (Zero LLM Token Cost) ---
+        let unconsolidatedCount = 0;
+        let stackUsed = 0;
+        try {
+            const fs = await import("node:fs");
+            const path = await import("node:path");
+
+            // Unconsolidated events
+            const eventsDir = path.join(workspace, ".memory", "events");
+            if (fs.existsSync(eventsDir)) {
+                const files = fs.readdirSync(eventsDir).filter((f: string) => f.endsWith(".jsonl"));
+                for (const f of files) {
+                    const content = fs.readFileSync(path.join(eventsDir, f), "utf-8").trim();
+                    if (content) {
+                        const lines = content.split("\n").filter((l: string) => l.trim());
+                        for (const line of lines) {
+                            try {
+                                const ev = JSON.parse(line);
+                                if (!ev.consolidated) unconsolidatedCount++;
+                            } catch (e) { }
+                        }
+                    }
+                }
+            }
+
+            // Stack usage
+            if (fs.existsSync(p.focusStack)) {
+                const stack = JSON.parse(fs.readFileSync(p.focusStack, "utf-8"));
+                stackUsed = (stack.current_path?.length || 0) + 1 + (stack.pending_siblings?.length || 0);
+            }
+        } catch (e) { }
+
+        const messages = event.messages || [];
+        const isNewSession = messages.filter((m: any) => m.role === "user").length <= 1 && messages.filter((m: any) => m.role === "assistant").length === 0;
+
+        const memoryIndexStr = `> 📁 **Available Memory Index (Partial):**\n> - \`memory/knowledge/user-prefs.md\` (User preferences & coding style)\n> - \`memory/knowledge/architecture.md\` (System design decisions)\n> - \`memory/YYYY-MM-DD.md\` (Recent historical events)`;
+        const telemetryStr = `> 📊 **System Health Telemetry:**\n> - Unconsolidated Events: ${unconsolidatedCount} (If > 3, consider calling \`memory_consolidate\`)\n> - Active Focus Stack: ${stackUsed}/7 slots filled`;
+
+        if (isNewSession) {
+            sections.push(`> [SYSTEM NOTIFICATION: COGNITIVE WAKE-UP]\n> You are waking up to a new session or beginning a complex task. Before proceeding, perform an explicit Context Check:\n> \n> 1. Are you aware of the user's specific definitions, rules, or long-term preferences?\n> 2. Do you have the historical architecture or constraints for the current project?\n>\n${telemetryStr}\n>\n${memoryIndexStr}\n>\n> ⚡ **MANDATORY DIRECTIVE**:\n> IF you lack the necessary context to fulfill the user's request flawlessly, you MUST use the \`read\` or \`memory_explore\` tool to fetch the exact file contents from the index above. IF you already have the context, proceed without reading.`);
+        } else {
+            // Cognitive Pulse Injection
+            const ticks = sessionTickers.get(sid) || 0;
+            if (ticks >= 5) {
+                sections.push(`> ⚠️ **[SYSTEM INTERRUPT: COGNITIVE OVERLOAD DETECTED]**\n> You have executed ${ticks} consecutive steps. Your operating context may be saturated, or you may be suffering from task tunnel vision.\n>\n${telemetryStr}\n>\n${memoryIndexStr}\n>\n> ⚡ **REQUIRED ACTION**: \n> 1. Does your current blocker match anything in the long-term index? If so, evaluate if you need to call \`read\` or \`memory_explore\`.\n> 2. You MUST update your \`memory_working\` stack to reflect your current stage.\n> 3. You MUST save your intermediate findings via \`memory_record\` before resuming the task.`);
+                sessionTickers.set(sid, 0);
+            }
         }
 
         if (sections.length > 0) {
             return {
-                prependSystemContext: `<!-- Memory Context (Live) -->\n${sections.join("\n\n")}\n<!-- End Memory Context -->`
+                prependContext: `<!-- Memory Context (Live) -->\n${sections.join("\n\n")}\n<!-- End Memory Context -->`
             };
         }
         return {};

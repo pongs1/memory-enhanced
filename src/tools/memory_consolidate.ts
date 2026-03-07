@@ -55,7 +55,7 @@ interface ConsolidationReport {
  * What this tool does (zero LLM tokens):
  *   1. Apply decay formula to consolidated events
  *   2. Archive events with decay_score < threshold
- *   3. Regenerate MEMORY.md from knowledge files
+ *   3. Regenerate MEMORY_INDEX.md from knowledge files
  *
  * What this tool does NOT do (requires LLM):
  *   - Extract knowledge from events (LLM reads events, writes knowledge/*.md)
@@ -95,8 +95,8 @@ export async function executeMemoryConsolidate(
         unconsolidated: 0,
         decayed: 0,
         archived: 0,
-        memoryMdChars: 0,
-        memoryMdRegenerated: false,
+        memoryIndexChars: 0,
+        memoryIndexRegenerated: false,
     };
 
     // --- 1. Collect event files based on scope ---
@@ -154,13 +154,13 @@ export async function executeMemoryConsolidate(
         }
     }
 
-    // --- 3. Regenerate MEMORY.md ---
-    const memoryMdContent = generateMemoryMd(p.knowledgeDir);
-    report.memoryMdChars = memoryMdContent.length;
+    // --- 3. Regenerate MEMORY_INDEX.md ---
+    const memoryIndexContent = generateMemoryIndex(p.knowledgeDir);
+    report.memoryIndexChars = memoryIndexContent.length;
 
     if (!dryRun) {
-        fs.writeFileSync(p.memoryMd, memoryMdContent, "utf-8");
-        report.memoryMdRegenerated = true;
+        fs.writeFileSync(p.memoryIndex, memoryIndexContent, "utf-8");
+        report.memoryIndexRegenerated = true;
     }
 
     // --- Format report ---
@@ -171,7 +171,7 @@ export async function executeMemoryConsolidate(
         `  Unconsolidated (need LLM distillation): ${report.unconsolidated}`,
         `  Decay applied: ${report.decayed}`,
         `  Archived (score < ${archiveThresh}): ${report.archived}`,
-        `  MEMORY.md: ${report.memoryMdChars} chars ${report.memoryMdRegenerated ? "(regenerated)" : "(preview)"}`,
+        `  MEMORY_INDEX.md: ${report.memoryIndexChars} chars ${report.memoryIndexRegenerated ? "(regenerated)" : "(preview)"}`,
     ];
 
     if (report.unconsolidated > 0) {
@@ -184,10 +184,10 @@ export async function executeMemoryConsolidate(
     }
 
     const maxChars = pluginConfig?.memoryMdMaxChars ?? 5000;
-    if (report.memoryMdChars > maxChars) {
+    if (report.memoryIndexChars > maxChars) {
         lines.push(
             "",
-            `⚠️ MEMORY.md is ${report.memoryMdChars} chars (target: <${maxChars}).`,
+            `⚠️ MEMORY_INDEX.md is ${report.memoryIndexChars} chars (target: <${maxChars}).`,
             `Consider consolidating knowledge files or archiving old entries.`
         );
     }
@@ -231,11 +231,11 @@ function getJsonlFiles(
     return allFiles;
 }
 
-function generateMemoryMd(knowledgeDir: string): string {
+function generateMemoryIndex(knowledgeDir: string): string {
     const lines = [
-        `# Long-Term Memory`,
+        `# Long-Term Memory Index`,
         `> **Core Project Context & User Knowledge**`,
-        `> Auto-injected into your context window. Do not manually read these files unless necessary.`,
+        `> This is a lightweight index. If a file looks relevant, use the \`read\` or \`memory_explore\` tool to fetch its full contents.`,
         ``
     ];
 
@@ -253,17 +253,21 @@ function generateMemoryMd(knowledgeDir: string): string {
         const content = readFileOr(path.join(knowledgeDir, file));
         const entryCount = content.split("\n").filter((l: string) => l.trim().startsWith("## ")).length;
 
-        // Strip the top level `# Title` if it exists, to avoid duplicate H1s
         const contentLines = content.split("\n");
-        const bodyLines = contentLines.filter((l: string) => !l.startsWith("# "));
         const titleLine = contentLines.find((l: string) => l.startsWith("# ")) || `# ${file.replace(".md", "")}`;
 
-        lines.push(`---`);
-        lines.push(`${titleLine} (${entryCount} entries)`);
-        lines.push(`Source: memory/knowledge/${file}`);
-        lines.push(``);
-        lines.push(bodyLines.join("\n").trim());
-        lines.push(``);
+        let description = "";
+        for (const line of contentLines) {
+            if (line.trim() === "" || line.startsWith("# ")) continue;
+            if (line.length > 5 && !line.startsWith("<!--")) {
+                description = line.replace(/^[>|│]\s*/, "").substring(0, 100);
+                if (description.length === 100) description += "...";
+                break;
+            }
+        }
+
+        const cleanTitle = titleLine.replace(/^#\s*/, "");
+        lines.push(`- \`memory/knowledge/${file}\` (${entryCount} entries) — **${cleanTitle}**: ${description}`);
     }
 
     return lines.join("\n");

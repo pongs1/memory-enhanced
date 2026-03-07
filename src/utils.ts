@@ -73,7 +73,7 @@ export function paths(workspace: string) {
         skillsVerified: path.join(workspace, "memory", "skills", "verified"),
         skillsDrafts: path.join(workspace, "memory", "skills", "drafts"),
         skillsRegistry: path.join(workspace, "memory", "skills", "_registry.json"),
-        memoryMd: path.join(workspace, "MEMORY.md"),
+        memoryIndex: path.join(workspace, "MEMORY_INDEX.md"),
         // Metadata (read tool only, not memory_get)
         dotMemory: path.join(workspace, ".memory"),
         activeDir: path.join(workspace, ".memory", "active"),

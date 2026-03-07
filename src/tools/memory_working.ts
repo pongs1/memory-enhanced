@@ -5,34 +5,41 @@ import {
     paths,
     readJson,
     writeJson,
+    readFileOr,
+    appendScratchpad,
     nowISO,
     ensureDir,
     type FocusStack
 } from "../utils.js";
 import { executeMemoryRecord } from "./memory_record.js";
 
-const FocusAction = Type.Union([
+const WorkingAction = Type.Union([
     Type.Literal("status"),
     Type.Literal("plan"),
     Type.Literal("push"),
-    Type.Literal("complete")
-], { description: "Action to perform on the focus stack" });
+    Type.Literal("complete"),
+    Type.Literal("overflow"),
+    Type.Literal("scratchpad_append"),
+    Type.Literal("scratchpad_refill")
+], { description: "Action to perform on the working memory" });
 
-export const MemoryFocusParams = Type.Object({
-    action: FocusAction,
+export const MemoryWorkingParams = Type.Object({
+    action: WorkingAction,
     goal: Type.Optional(Type.String({ description: "Primary project goal (for 'plan')" })),
     path: Type.Optional(Type.Array(Type.String(), { description: "Breadcrumbs/path (for 'plan')" })),
     focus: Type.Optional(Type.String({ description: "Current focus item (for 'plan' or 'complete')" })),
     siblings: Type.Optional(Type.Array(Type.String(), { description: "Pending tasks (for 'plan' or 'push')" })),
     insight: Type.Optional(Type.String({ description: "Optional insight to record to memory (for 'complete')" })),
-    next_focus: Type.Optional(Type.String({ description: "The next item to focus on (for 'complete')" }))
+    next_focus: Type.Optional(Type.String({ description: "The next item to focus on (for 'complete')" })),
+    section: Type.Optional(Type.String({ description: "Section header (e.g. 'Reasoning', 'Verification') for 'scratchpad_append' or 'overflow'" })),
+    content: Type.Optional(Type.String({ description: "Content to append for 'scratchpad_append'" }))
 });
 
-export type MemoryFocusInput = Static<typeof MemoryFocusParams>;
+export type MemoryWorkingInput = Static<typeof MemoryWorkingParams>;
 
-export async function executeMemoryFocus(
+export async function executeMemoryWorking(
     toolCallId: string,
-    params: MemoryFocusInput,
+    params: MemoryWorkingInput,
     ctx?: { workspaceDir?: string }
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
     const workspace = resolveWorkspace(ctx?.workspaceDir);
@@ -83,7 +90,6 @@ export async function executeMemoryFocus(
                 }, ctx);
             }
 
-            // Pop sibling or use next_focus
             const completed = stack.current_focus;
             if (params.next_focus) {
                 stack.current_focus = params.next_focus;
@@ -95,6 +101,28 @@ export async function executeMemoryFocus(
 
             stack.last_updated = nowISO();
             return validateAndSave(workspace, stack, `Completed: ${completed}`);
+
+        case "overflow":
+            const itemsToOverflow = stack.pending_siblings.splice(0);
+            if (itemsToOverflow.length === 0) {
+                return { content: [{ type: "text" as const, text: "No pending siblings to overflow." }] };
+            }
+            const sectionName = params.section || "Pending Items (Overflow)";
+            const overflowContent = itemsToOverflow.map(item => `- ${item}`).join("\n");
+            appendScratchpad(workspace, sectionName, `\n${overflowContent}`);
+            stack.last_updated = nowISO();
+            validateAndSave(workspace, stack, `Overflowed ${itemsToOverflow.length} items to scratchpad.md under [${sectionName}].`);
+            return { content: [{ type: "text" as const, text: `Overflowed ${itemsToOverflow.length} items to scratchpad.md under [${sectionName}].` }] };
+
+        case "scratchpad_append":
+            if (!params.section || !params.content) {
+                return { content: [{ type: "text" as const, text: "Error: Action 'scratchpad_append' requires 'section' and 'content'." }] };
+            }
+            appendScratchpad(workspace, params.section, params.content);
+            return { content: [{ type: "text" as const, text: `Appended note to scratchpad.md [${params.section}].` }] };
+
+        case "scratchpad_refill":
+            return handleRefill(workspace);
 
         default:
             return { content: [{ type: "text" as const, text: `Error: Unknown action: ${params.action}` }] };
@@ -130,12 +158,10 @@ function generateMdFrontend(stack: FocusStack): string {
         ""
     ];
 
-    // Build the 7-item view. Math: Path + 1 (Focus) + Siblings <= 7
-    let pathLimit = Math.min(3, stack.current_path.length); // Max 3 path items to save space for future
+    let pathLimit = Math.min(3, stack.current_path.length);
     let remaining = 7 - 1 - pathLimit;
     let siblingsLimit = Math.min(remaining, stack.pending_siblings.length);
 
-    // If we have fewer siblings than allowed, we can show more path
     if (siblingsLimit < remaining) {
         pathLimit = Math.min(stack.current_path.length, pathLimit + remaining - siblingsLimit);
     }
@@ -170,18 +196,69 @@ function validateAndSave(workspace: string, stack: FocusStack, prefix = "Focus u
     const p = paths(workspace);
     ensureDir(p.activeDir);
 
-    // 1. Save unbounded backend
     writeJson(p.focusStack, stack);
 
-    // 2. Generate and save truncated MD frontend
     const mdContent = generateMdFrontend(stack);
     fs.writeFileSync(p.focusStackMd, mdContent, "utf-8");
 
-    // 3. Return full status to the LLM so it knows everything in the queue
     return {
         content: [{
             type: "text" as const,
             text: `${prefix}\n\n${renderStatus(stack)}`
+        }]
+    };
+}
+
+async function handleRefill(workspace: string): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+    const p = paths(workspace);
+    const content = readFileOr(p.scratchpad);
+    const overflowHeader = "## Pending Items (Overflow)";
+
+    if (!content.includes(overflowHeader)) {
+        return { content: [{ type: "text" as const, text: "No overflow section found in scratchpad.md." }] };
+    }
+
+    const sections = content.split("## ");
+    const overflowIdx = sections.findIndex(s => s.startsWith("Pending Items (Overflow)"));
+    if (overflowIdx === -1) return { content: [{ type: "text" as const, text: "No overflow section found." }] };
+
+    const overflowText = sections[overflowIdx].replace("Pending Items (Overflow)", "").trim();
+    if (!overflowText) return { content: [{ type: "text" as const, text: "Overflow section is empty." }] };
+
+    const items = overflowText.split("\n").map(line => line.replace(/^[-*]\s*(\[\d{2}:\d{2}\])?\s*/, "").trim()).filter(Boolean);
+
+    const stack = readJson<FocusStack>(p.focusStack, {
+        project_goal: "Restored",
+        current_path: [],
+        current_focus: "Refilling...",
+        pending_siblings: [],
+        last_updated: nowISO()
+    });
+
+    const space = 7 - stack.current_path.length - 1;
+    const available = Math.max(0, space - stack.pending_siblings.length);
+
+    if (available <= 0) {
+        return { content: [{ type: "text" as const, text: "Focus stack is already at or near limit (7). Cannot refill yet." }] };
+    }
+
+    const toRefill = items.splice(0, available);
+    stack.pending_siblings.push(...toRefill);
+    stack.last_updated = nowISO();
+    writeJson(p.focusStack, stack);
+
+    if (items.length > 0) {
+        sections[overflowIdx] = `Pending Items (Overflow)\n${items.join("\n")}`;
+    } else {
+        sections.splice(overflowIdx, 1);
+    }
+
+    fs.writeFileSync(p.scratchpad, sections.join("## ").trim() + "\n", "utf-8");
+
+    return {
+        content: [{
+            type: "text" as const,
+            text: `Refilled ${toRefill.length} items from scratchpad to focus stack. ${items.length} items remain in overflow.`
         }]
     };
 }
