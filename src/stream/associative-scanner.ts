@@ -179,20 +179,28 @@ export class AssociativeScanner {
     private spreadActivation() {
         const spreadAmount: Record<string, number> = {};
 
+        // Calculate node degrees (how many edges connect to each node) to penalize super-hubs
+        const degree: Record<string, number> = {};
+        for (const edge of this.graph.edges) {
+            degree[edge.source] = (degree[edge.source] || 0) + 1;
+            degree[edge.target] = (degree[edge.target] || 0) + 1;
+        }
+
         // For each edge, spread energy bidirectionally
         for (const edge of this.graph.edges) {
             const sourceEnergy = this.activations[edge.source] || 0;
             const targetEnergy = this.activations[edge.target] || 0;
 
             if (sourceEnergy > 0.1) {
-                // Forward spread
-                const transfer = sourceEnergy * edge.weight * 0.3; // 0.3 dampening
+                // Forward spread with Hub Penalization (Activation Storm prevention)
+                const penalty = Math.sqrt(degree[edge.source] || 1);
+                const transfer = (sourceEnergy * edge.weight * 0.3) / penalty;
                 spreadAmount[edge.target] = (spreadAmount[edge.target] || 0) + transfer;
             }
             if (targetEnergy > 0.1) {
-                // Reverse spread (back-propagation of association)
-                // We use slightly lower dampening for reverse associations (e.g., thinking of B reminds you of A)
-                const reverseTransfer = targetEnergy * edge.weight * 0.15;
+                // Reverse spread (back-propagation) with Hub Penalization
+                const penalty = Math.sqrt(degree[edge.target] || 1);
+                const reverseTransfer = (targetEnergy * edge.weight * 0.15) / penalty;
                 spreadAmount[edge.source] = (spreadAmount[edge.source] || 0) + reverseTransfer;
             }
         }
@@ -200,6 +208,29 @@ export class AssociativeScanner {
         // Apply spread amounts
         for (const [target, energy] of Object.entries(spreadAmount)) {
             this.activate(target, energy);
+        }
+    }
+
+    /**
+     * RLHF Graph Adaptation: Punish or reinforce edges leading to a specific memory node.
+     * Called when the system detects the user ignoring or rejecting an injected memory.
+     */
+    public adaptWeights(targetNodeId: string, feedback: "positive" | "negative") {
+        let changed = false;
+        const adjustment = feedback === "positive" ? 1.2 : 0.5; // boost 20% or slash 50%
+
+        for (const edge of this.graph.edges) {
+            if (edge.target === targetNodeId || edge.source === targetNodeId) {
+                edge.weight = Math.min(Math.max(edge.weight * adjustment, 0.01), 1.0);
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            // Save the updated personalized graph (Dynamic LoRA effect)
+            const p = paths(this.workspace);
+            fs.writeFileSync(p.associativeGraph, JSON.stringify(this.graph, null, 2), "utf-8");
+            console.log(`[Memory V8] RLHF applied: ${feedback} feedback for ${targetNodeId}. Edge weights adapted.`);
         }
     }
 
