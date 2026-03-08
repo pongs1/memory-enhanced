@@ -1,112 +1,61 @@
-# 🚀 Memory System Deployment Guide (v7 SAR)
+# 🚀 V8 Neuro-Symbolic Memory Deployment Guide
 
-> **Architecture**: Native OpenClaw tool plugin with Lifecycle Hooks. Memory operations are real tools and event-listeners
-> (`memory_record`, `memory_explore`, `memory_consolidate`, `memory_status`, `memory_focus`, `memory_scratchpad`)
-> that run as TypeScript code — zero SKILL.md logic injection and zero "Session blindness", saving ~2000+ tokens/turn.
+This guide details how to deploy the **V8 Dual-Intelligence** memory system. This architecture requires a patched OpenClaw core to enable real-time generative stream interception.
 
 ---
 
-## Step 1: Install the Plugin
+## 1. Prerequisites
 
-Clone the plugin repo and install to OpenClaw extensions:
+- **OpenClaw Core**: Version ≥ 2026.1.26
+- **Node.js**: v18+ (Required for `@xenova/transformers` and standard `fetch`)
+- **API Key**: An OpenAI-compatible API key (SiliconFlow, DeepSeek, or Ollama) for **System 2 (Offline Annotation)**.
+
+---
+
+## 2. Installation
 
 ```bash
-# Clone from GitHub
 git clone https://github.com/pongs1/memory-enhanced.git ~/openclaw/extensions/memory-enhanced
-
-# Install dependencies
 cd ~/openclaw/extensions/memory-enhanced
 pnpm install
-
-# Apply V7 Core Patch
-# Follow the instructions in `openclaw-patch-guide.md` to expose the generative stream.
-
-# Or use openclaw's dev link for easier updates
-openclaw plugins install -l ~/openclaw/extensions/memory-enhanced
+# Note: Ensure you have enough disk space for the ONNX model download (~100MB)
 ```
 
-Enable it in `~/.openclaw/openclaw.json`:
+### OpenClaw Core Patch (Mandatory for SAR)
+V8 relies on the `wrap_stream_fn` hook. Follow [openclaw-patch-guide.md](./openclaw-patch-guide.md) to modify your `pi-embedded-runner` source code in WSL/Linux. Without this, real-time memory injection will not fire.
+
+---
+
+## 3. Configuration (`~/.openclaw/openclaw.json`)
+
+Merge the following into your global configuration file:
 
 ```jsonc
 {
   "plugins": {
     "load": {
-      "paths": ["~/openclaw/extensions/memory-enhanced"]
+      "paths": ["/absolute/path/to/memory-enhanced"]
     },
     "entries": {
       "memory-enhanced": {
         "enabled": true,
         "config": {
-          "halfLifeDays": 30,         // Decay half-life
-          "archiveThreshold": 0.2,    // Archive events below this score
-          "memoryMdMaxChars": 5000    // Target MEMORY.md size
+          "halfLifeDays": 30,
+          "archiveThreshold": 0.2
         }
       }
     }
-  }
-}
-```
-
----
-
-## Step 2: Configure OpenClaw Core (openclaw.json)
-
-You must merge the following into your `~/.openclaw/openclaw.json`. OpenClaw uses strict Zod validation; ensure the nesting is exactly as shown.
-
-### 1. Configure Embedding Provider & Model
-
-Add the SiliconFlow (or any OpenAI-compatible) provider to the global `models` section:
-
-```jsonc
-{
+  },
   "models": {
     "providers": {
       "openai": {
-        "apiKey": "YOUR_SILICONFLOW_KEY",
+        "apiKey": "YOUR_API_KEY",
         "baseUrl": "https://api.siliconflow.cn/v1"
       }
     }
-  }
-}
-```
-
-### 1.5. Subconscious Associative Recall (SAR) Patch
-V7 introduces true stream interception via Spreading Activation. Ensure you have followed `openclaw-patch-guide.md` to modify your WSL OpenClaw core to emit the `wrap_stream_fn` hook. The memory plugin listens to `llm_input` natively to pre-excite the network.
-
-### 2. Configure Memory Search & Compaction
-
-Nest these directly under `agents.defaults`. This enables semantic search and the "Tier 3" memory flush.
-
-```jsonc
-{
+  },
   "agents": {
     "defaults": {
-      "memorySearch": {
-        "enabled": true,
-        "provider": "openai",        // Link to the provider above
-        "model": "BAAI/bge-m3",       // Specific embedding model
-        "sources": ["memory"],        // 限定仅检索固定记忆，让Agent自行决定是否查阅会话
-        "extraPaths": ["memory/skills/verified"],
-        "experimental": { "sessionMemory": true },
-        "query": {
-          "hybrid": {
-            "enabled": true,
-            "vectorWeight": 0.4,      // 对应设计文档中的 α 权重
-            "textWeight": 0.6,        // 配合精确匹配
-            "temporalDecay": { "enabled": true, "halfLifeDays": 30 }, // 对应设计文档中的 β 权重
-            "mmr": { "enabled": true, "lambda": 0.7 }
-          }
-        }
-      },
-      "compaction": {
-        "reserveTokensFloor": 20000,
-        "memoryFlush": {
-          "enabled": true,
-          "softThresholdTokens": 4000,
-          "systemPrompt": "Session nearing compaction. Use memory_record for important events. Use memory_consolidate to finalize. Reply NO_REPLY when done.",
-          "prompt": "Context window is almost full. Execute Tier 3 Full Consolidation NOW: 1) Read ALL unconsolidated events from .memory/events/*.jsonl. 2) Classify each: KEEP (facts/preferences/decisions) or SKILL (reusable patterns) or FORGET. 3) For KEEP items: READ existing memory/knowledge/*.md file first, then OVERWRITE outdated info and merge new insights. 4) For SKILL items: create/update memory/skills/drafts/. 5) Call memory_consolidate with scope=full. Reply NO_REPLY when done."
-        }
-      },
       "bootstrapExtraFiles": [
         ".memory/active/scratchpad.md",
         "memory/"
@@ -116,299 +65,55 @@ Nest these directly under `agents.defaults`. This enables semantic search and th
 }
 ```
 
-> **Note**: Providing `memory/` or explicit relative paths to daily log markdown files in `bootstrapExtraFiles` ensures that the user's reasoning buffer (scratchpad) and the current day's events are natively provided by OpenClaw whenever a new session launches. The plugin handles L1 (focus stack) and L3 (knowledge) independently via native hooks.
+### Environment Variables
+For **System 2** offline annotation, the plugin reads from the environment:
+- `OPENAI_API_KEY`: Key for the annotation model.
+- `OPENAI_BASE_URL`: API endpoint.
+- `MEMORY_ANNOTATION_MODEL`: (Optional) The model to use for graph logic (default: `deepseek-v3` or `gpt-4o-mini`).
 
 ---
 
-## Step 3: Create Workspace Directories
+## 4. Workspace Preparation
+
+Run this inside your project workspace directory:
 
 ```bash
-cd $WORKSPACE
-
-# Searchable (memory_get + memory_search)
+# Data layers
 mkdir -p memory/knowledge
 mkdir -p memory/skills/verified
-mkdir -p memory/skills/drafts
 
-# Metadata (read tool only)
+# Metadata layers (System only)
 mkdir -p .memory/active
 mkdir -p .memory/events
 mkdir -p .memory/archive
 ```
 
----
-
-## Step 4: Create Initial Files
-
-### `$WORKSPACE/.memory/active/scratchpad.md`
-```markdown
-# Scratchpad
-
-## Reasoning Notes
-(intermediate steps)
-## Pending Verification
-(hypotheses needing confirmation)
-```
-
-### `$WORKSPACE/.memory/active/focus_stack.json`
+### Initial Node State
+Ensure `.memory/active/focus_stack.json` exists as a valid object:
 ```json
 {
-  "project_goal": "Goal name",
+  "project_goal": "Initialize V8",
   "current_path": [],
-  "current_focus": "",
-  "pending_siblings": [],
-  "last_updated": ""
-}
-```
-
-### `$WORKSPACE/.memory/events/_schema.json`
-```json
-{
-  "version": "1.0",
-  "event_format": {
-    "id": "evt_YYYYMMDD_NNN",
-    "timestamp": "ISO8601",
-    "type": "decision|observation|insight|error|preference|correction",
-    "content": "string",
-    "tags": ["string"],
-    "importance": "0.0-1.0",
-    "associations": ["evt_ID or ke_ID"],
-    "consolidated": "boolean",
-    "decay_score": "0.0-1.0"
-  }
-}
-```
-
-### `$WORKSPACE/memory/knowledge/user-prefs.md`
-```markdown
-# User Preferences
-> Auto-maintained via memory_record + consolidation.
-```
-
-### `$WORKSPACE/memory/knowledge/project-context.md`
-```markdown
-# Project Context
-> Persistent project knowledge distilled from events.
-```
-
-### `$WORKSPACE/memory/knowledge/decisions.md`
-```markdown
-# Key Decisions
-> Important decisions and their rationale.
-```
-
-### `$WORKSPACE/memory/knowledge/debug-insights.md`
-```markdown
-# Debug Insights
-> Lessons learned from debugging sessions.
-```
-
-### `$WORKSPACE/memory/skills/_registry.json`
-```json
-{ "version": "1.0", "skills": [], "last_updated": null }
-```
-
-### `$WORKSPACE/MEMORY.md`
-```markdown
-# Long-Term Memory
-
-## User Preferences
-→ See memory/knowledge/user-prefs.md
-
-## Project Context
-→ See memory/knowledge/project-context.md
-
-## Key Decisions
-→ See memory/knowledge/decisions.md
-
-## Debug Insights
-→ See memory/knowledge/debug-insights.md
-```
-
----
-
-## Step 5: Update Default Agent Configs (AGENTS.md & USER.md)
-
-OpenClaw's default `AGENTS.md` and `USER.md` files instruct the agent to manually edit `MEMORY.md` and `memory/YYYY-MM-DD.md`. To prevent conflicts with the plugin, you **must redefine these sections** in your workspace.
-
-### 1. Update `$WORKSPACE/AGENTS.md`
-
-Replace the entire `## Memory` and `### 🔄 Memory Maintenance` sections with this:
-
-```markdown
-## Memory (Powered by `memory-enhanced` Plugin v5)
-
-You wake up fresh each session, but you have a powerful 4-layer memory system.
-**DO NOT manually edit memory files.** Always use your memory tools.
-
-- **To navigate tasks:** The system automatically injects your top 7 focus items at boot. Use `memory_focus` (plan, push, complete) to update your queue. The system will auto-truncate the view to 7 items.
-- **To curate long-term knowledge:** Distill insights into `memory/knowledge/*.md` files.
-- **To trigger cleanup:** Use `memory_consolidate` at the end of a session to compile knowledge into the master `MEMORY.md`.
-
-## The Cognitive Suite (V7 SAR)
-
-To respect LLM token windows and maximize logical grouping, the memory suite provides highly optimized tools and background hooks:
-
-1.  **`memory_record`**: Your L2 episodic logger. Used for dual-format (JSONL + Markdown) recording of important decisions, user preferences, and project insights.
-2.  **`memory_explore`**: Your L3 knowledge graph navigator. Traverses semantic and chronological association chains up to a maximum depth. *(Mostly deprecated by V7 SAR, but available for deep dives).*
-3.  **`memory_working`**: Your L1 focus stack and scratchpad manager.
-4.  **`memory_consolidate`**: Your background chron-job. Executes the structural "Decay & Archive" routine on old events, and regenerates the `_associative_graph.json` semantic map. 
-5.  **Subconscious Associative Recall (Hook)**: A real-time Cognitive Spreading Activation scanner that hooks into your generative stream and `llm_input`. When a memory breaches the activation threshold, it is instantaneously injected into your active thought process via steering.
-
-### 🔄 Memory Maintenance (During Heartbeats or Session End)
-1. Look for unconsolidated events (run `memory_status` or check `.memory/events/`).
-2. Distill those events into the appropriate `memory/knowledge/*.md` files.
-3. Run the `memory_consolidate` tool (`scope="day"` or `"full"`) to:
-   - Apply exponential decay to old events.
-   - Archive events whose score drops below 0.2.
-   - Automatically concatenate `memory/knowledge/*.md` contents into `MEMORY.md`.
-```
-
-### 2. Update `$WORKSPACE/USER.md`
-
-Replace the `## Context` section with this to prevent the agent from endlessly accumulating raw text in `USER.md`:
-
-```markdown
-## Context & Preferences (Dynamic)
-
-> **IMPORTANT**: Do not manually list detailed user preferences, habits, or inside jokes in this file.
-> 
-> The `agent_end` hook automatically captures new preferences and decisions in the background. Periodically, you should distill these events from `.memory/events/` into `memory/knowledge/user-prefs.md` and run `memory_consolidate`. 
-> 
-> This keeps `USER.md` clean and allows the memory plugin's decay and search algorithms to manage context dynamically.
-```
-
----
-
-## Step 5.5: Configure Background Tasks (Heartbeat vs Cron)
-
-OpenClaw supports background tasks. **Heartbeats are the recommended default** for keeping memory fresh, with Cron serving as an optional deep-clean fallback.
-
-### 1. Enable Micro-Distillation (Default: Heartbeat)
-
-Heartbeats run periodically (e.g., every 30 mins) while the agent is idle. Create or update `$WORKSPACE/HEARTBEAT.md` with:
-
-```markdown
-# HEARTBEAT.md
-
-- **Memory Distillation Check**: 
-  1. Run `memory_status` to check for unconsolidated events.
-  2. If there are > 3 unconsolidated events, distill them NOW: Read the events, extract knowledge to `memory/knowledge/*.md`, and then run `memory_consolidate scope="session"`.
-```
-
-### 2. Enable Full Consolidation (Optional: Daily Cron)
-
-For long-running agents, you can set up a daily cron job in `~/.openclaw/openclaw.json` to act as an automated Tier 3 deep-cleanup:
-
-```jsonc
-{
-  "cron": [
-    {
-      "schedule": "0 3 * * *",   // 3:00 AM daily
-      "prompt": "Run Tier 3 Full Consolidation: 1) Read ALL unconsolidated events. 2) Classify: KEEP/SKILL/FORGET. 3) For KEEP: read existing knowledge file, overwrite outdated info, merge new insights. 4) For SKILL: update memory/skills/drafts/. 5) Call memory_consolidate scope=full. Reply NO_REPLY when done.",
-      "agentId": "default"
-    }
-  ]
+  "current_focus": "System Check",
+  "pending_siblings": []
 }
 ```
 
 ---
 
-## Step 6: Restart and Verify
+## 5. Deployment Verification
 
-```bash
-openclaw gateway restart
-openclaw plugins list        # Should show memory-enhanced
-openclaw plugins info memory-enhanced
-openclaw doctor
-```
+After restarting OpenClaw (`openclaw gateway restart`), verify the V8 stack:
 
-Activation message:
-
-```
-Memory v5 Hook Architecture deployed. Verify:
-1. Check that my active focus has been automatically injected into the context above.
-2. Call memory_status to check system health.
-3. Call memory_focus action="plan" with goal="Test" and focus="Verify tools".
-4. I have decided to always rely on the hooks for auto-recording (this statement triggers auto-record!).
-5. Call memory_focus action="complete".
-6. Verify memory/YYYY-MM-DD.md has the auto-recorded insight from step 4.
-```
+1.  **System 1 Check**: Start a chat and mention a keyword from your memory files. Observe the console logs. On the first run, you should see `@xenova/transformers` downloading the engine.
+2.  **Vector Persistence Check**: After the first `memory_consolidate` run, check that `_associative_graph.json` contains `vector: [...]` arrays for each node.
+3.  **System 2 Check**: Run `memory_consolidate scope="day" dry_run=false`. Check the console for `[Memory V8] Sending batch to LLM for semantic wiring...`.
+4.  **BP & Hub Check**: Observe activation energy logs. High-degree "hub" nodes should have their energy dampening significantly to prevent activation storms.
 
 ---
 
-## Tool Reference
+## 6. Maintenance & RLHF
 
-### `memory_record`
-```
-Parameters:
-  content: string (required)     — what happened
-  type: enum (required)          — decision|observation|insight|error|preference|correction
-  importance: number (optional)  — 0.0-1.0, default 0.5
-  tags: string[] (optional)      — categorization
-  associations: string[] (opt)   — linked evt_IDs or ke_IDs
-
-Returns: event ID (evt_YYYYMMDD_NNN)
-
-Writes to BOTH:
-  .memory/events/YYYY-MM-DD.jsonl  (structured data)
-  memory/YYYY-MM-DD.md             (searchable summary)
-```
-
-### `memory_explore`
-```
-Parameters:
-  entry_id: string (required)    — evt_* or ke_* ID to start from
-  depth: number (optional)       — max hops, 1-3, default 2
-  direction: enum (optional)     — forward|backward|both, default both
-
-Returns: association graph with content, importance, scores
-Side effect: reinforces accessed entries (resets decay_score to 1.0)
-```
-
-### `memory_consolidate`
-```
-Parameters:
-  scope: enum (optional)         — session|day|full, default session
-  dry_run: boolean (optional)    — preview without writing
-
-Actions (zero token cost):
-  1. Apply decay: score × e^(-(ln2/30) × ageInDays)
-  2. Archive events with score < 0.2
-  3. Regenerate MEMORY.md from knowledge files
-
-Returns: consolidation report
-```
-
-### `memory_working`
-```
-Parameters:
-  action: status|plan|push|complete|overflow|scratchpad_append|scratchpad_refill
-  goal: string (for 'plan')
-  path: string[] (for 'plan')
-  focus: string (for 'plan' or 'complete')
-  siblings: string[] (for 'plan' or 'push')
-  insight: string (for 'complete' — triggers auto memory_record)
-  next_focus: string (for 'complete')
-  section: string (for 'overflow' or 'scratchpad_append')
-  content: string (for 'scratchpad_append')
-
-Details:
-  - L1 Working Memory Manager. Backed by an unbounded JSON queue, but auto-generates a strictly 7-item Markdown list for the LLM.
-  - Combines ADaPT focus stack with non-destructive scratchpad logging.
-```
-
----
-
-## Architecture: Plugin vs SKILL.md
-
-| Aspect | v3 (SKILL.md) | v7 (Hooks + SAR Plugin) |
-|---|---|---|
-| Token cost per turn | ~2000 (SKILL.md injected) | ~200 (minimal SKILL.md) |
-| Event recording | LLM writes 2 files manually | `agent_end` hook auto-records heuristically |
-| Association traversal | LLM reads + follows links | V7 SAR Stream Injection or BFS plugin |
-| Decay calculation | Bash script | Plugin does it natively |
-| MEMORY Generation(L3) | Bash script via soft-links| Native JSON graph generation |
-| Recall Latency | Tool-call roundtrip | Zero (Real-time Stream Intercept) |
-
-**Net result**: Structural operations run on native hooks at zero token cost. The Subconscious Associative Recall engine feeds the LLM memories exactly when needed, eliminating the cognitive burden of manual tool invocation.
+The system is self-tuning. However, you can manually guide it:
+- **Pruning**: If the agent recalls something irrelevant, use `memory_explore` to find the offending edge and manually lower the weight in `_associative_graph.json`, or use the `adaptWeights` hook if integrated via custom UI.
+- **Distillation**: Periodically review `.memory/events/` and move core facts to `memory/knowledge/`. The consolidator will automatically pick up the new files and re-wire the graph.

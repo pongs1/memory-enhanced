@@ -5,7 +5,7 @@
  *   - memory_record:      Write structured events (dual-format JSONL + MD)
  *   - memory_explore:     Traverse association chains
  *   - memory_consolidate: Decay, archive, MEMORY.md regeneration
- *   - memory_status:      Health check and statistics
+ *   - memory_working:      ADaPT Focus Stack & Scratchpad
  *
  * These complement (not replace) the built-in memory_search and memory_get tools.
  */
