@@ -10,12 +10,17 @@ interface GraphData {
 export class AssociativeScanner {
     private graph: GraphData;
     private activations: Record<string, number> = {};
-    private threshold: number = 3.0; // The threshold for recall
-    private decayRate: number = 0.95; // Applied every N tokens
-    private tokenBuffer: string = "";
-    private tokenCount: number = 0;
+    private threshold: number = 2.0; // Lowered threshold since vectors are more precise
+    private decayRate: number = 0.95;
+    private wordBuffer: string[] = [];
     private firedMemories: Set<string> = new Set();
     private workspace: string;
+
+    // Xenova Integration
+    private pipeline: any = null;
+    private pipelineLoading: boolean = false;
+    private vPrevious: number[] | null = null;
+    private readonly alpha: number = 0.7; // EMA weight for current thought chunk
 
     constructor(workspace: string) {
         this.workspace = workspace;
@@ -23,74 +28,139 @@ export class AssociativeScanner {
         this.graph = readJson<GraphData>(graphPath, { nodes: {}, edges: [] });
     }
 
+    private async initPipeline() {
+        if (this.pipeline || this.pipelineLoading) return;
+        this.pipelineLoading = true;
+        try {
+            const xenova = await import("@xenova/transformers");
+            this.pipeline = await xenova.pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+        } catch (e) {
+            console.warn("[Memory V8] Real-time Xenova failed to load. Using pure lexical triggers.", e);
+        }
+    }
+
+    private cosineSimilarity(vecA: number[], vecB: number[]): number {
+        let dotProduct = 0;
+        let normA = 0;
+        let normB = 0;
+        for (let i = 0; i < vecA.length; i++) {
+            dotProduct += vecA[i] * vecB[i];
+            normA += vecA[i] * vecA[i];
+            normB += vecB[i] * vecB[i];
+        }
+        if (normA === 0 || normB === 0) return 0;
+        return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+    }
+
     /**
-     * Pre-excite the network based on the user's initial prompt to solve the
-     * "cold-start amnesia" problem. Pumps massive initial energy into matched nodes.
+     * Pre-excite the network based on the user's initial prompt.
      */
-    public preExcite(prompt: string) {
+    public async preExcite(prompt: string) {
         if (!prompt || !this.graph || Object.keys(this.graph.nodes).length === 0) return;
+        await this.initPipeline();
 
         const lowerPrompt = prompt.toLowerCase();
         let excitationTriggered = false;
 
         for (const [nodeId, node] of Object.entries(this.graph.nodes)) {
-            if (node.type === "concept") {
-                // If the user's prompt contains the concept, fire it up
-                // We use a simple word boundary or substring match
-                if (lowerPrompt.includes(nodeId)) {
-                    this.activate(nodeId, 5.0); // Pump 5.0 massive initial energy
-                    excitationTriggered = true;
+            // Check triggers first
+            if (node.triggers && node.triggers.some((t: string) => lowerPrompt.includes(t.toLowerCase()))) {
+                this.activate(nodeId, 3.0);
+                excitationTriggered = true;
+            }
+        }
+
+        if (this.pipeline) {
+            try {
+                const output = await this.pipeline(prompt, { pooling: "mean", normalize: true });
+                const vPrompt = Array.from(output.data) as number[];
+                for (const [nodeId, node] of Object.entries(this.graph.nodes)) {
+                    if (node.vector) {
+                        const sim = this.cosineSimilarity(vPrompt, node.vector as number[]);
+                        if (sim > 0.5) { // Similarity threshold for user prompt
+                            this.activate(nodeId, sim * 4.0);
+                            excitationTriggered = true;
+                        }
+                    }
                 }
+            } catch (e) {
+                // Ignore silent
             }
         }
 
         if (excitationTriggered) {
-            // Spread the initial shockwave
             this.spreadActivation();
-            // Spread it one more time to reach deeper memories quickly
             this.spreadActivation();
         }
     }
 
     /**
      * Process a new text chunk from the LLM stream.
-     * Returns a triggered memory file path if activation exceeds threshold,
-     * otherwise returns null.
+     * Buffers tokens. Every ~10 words, triggers real-time vector EMA.
      */
-    public processChunk(chunk: string): string | null {
+    public async processChunk(chunk: string): Promise<string | null> {
         if (!chunk || !this.graph || Object.keys(this.graph.nodes).length === 0) return null;
+        await this.initPipeline();
 
-        this.tokenBuffer += chunk.toLowerCase();
-        this.tokenCount++;
-
-        // Excite nodes that strictly match the end of the buffer
+        // 1. Primitive Lexical Ignition (Fallback & Fast Match)
+        const lowerChunk = chunk.toLowerCase();
         let excitationTriggered = false;
         for (const [nodeId, node] of Object.entries(this.graph.nodes)) {
-            if (node.type === "concept") {
-                // simple substring check at the tail of the buffer
-                if (this.tokenBuffer.endsWith(nodeId)) {
-                    this.activate(nodeId, 1.0); // Pump 1.0 energy unit
-                    excitationTriggered = true;
+            if (node.triggers && node.triggers.some((t: string) => lowerChunk.includes(t.toLowerCase()))) {
+                this.activate(nodeId, 0.5);
+                excitationTriggered = true;
+            }
+        }
+
+        // 2. Sliding Window Buffer
+        // We split by spaces just to approximate word counts
+        const newWords = chunk.split(/(\s+)/).filter(w => w.trim().length > 0);
+        this.wordBuffer.push(...newWords);
+
+        if (this.wordBuffer.length >= 10) {
+            this.applyDecay();
+            const thoughtString = this.wordBuffer.join(" ");
+
+            // 3. V8 Continuous Vector Thought Trajectory
+            if (this.pipeline) {
+                try {
+                    const output = await this.pipeline(thoughtString, { pooling: "mean", normalize: true });
+                    const vCurrent = Array.from(output.data) as number[];
+
+                    let vQuery: number[];
+                    if (this.vPrevious) {
+                        vQuery = vCurrent.map((v, i) => (this.alpha * v) + ((1 - this.alpha) * this.vPrevious![i]));
+                    } else {
+                        vQuery = vCurrent;
+                    }
+                    this.vPrevious = vQuery;
+
+                    // Surface Match
+                    for (const [nodeId, node] of Object.entries(this.graph.nodes)) {
+                        if (node.vector) {
+                            const sim = this.cosineSimilarity(vQuery, node.vector as number[]);
+                            if (sim > 0.55) { // Ignition Threshold
+                                this.activate(nodeId, sim * 1.5);
+                                excitationTriggered = true;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // Ignore silent
                 }
             }
+
+            // Keep window rolling, retain last 5 words for overlap context
+            this.wordBuffer = this.wordBuffer.slice(this.wordBuffer.length - 5);
         }
 
         if (excitationTriggered) {
             this.spreadActivation();
         }
 
-        // Apply decay every some tokens
-        if (this.tokenCount % 5 === 0) {
-            this.applyDecay();
-            // Keep buffer small
-            if (this.tokenBuffer.length > 100) {
-                this.tokenBuffer = this.tokenBuffer.slice(this.tokenBuffer.length - 50);
-            }
-        }
-
-        // Check for threshold breach
-        for (const [nodeId, node] of Object.entries(this.graph.nodes)) {
-            if (node.type === "memory" && !this.firedMemories.has(nodeId)) {
+        // 4. Memory Threshold Breach Check
+        for (const nodeId of Object.keys(this.graph.nodes)) {
+            if (!this.firedMemories.has(nodeId)) {
                 const energy = this.activations[nodeId] || 0;
                 if (energy >= this.threshold) {
                     this.firedMemories.add(nodeId);
@@ -109,13 +179,21 @@ export class AssociativeScanner {
     private spreadActivation() {
         const spreadAmount: Record<string, number> = {};
 
-        // For each edge, spread energy from source to target
+        // For each edge, spread energy bidirectionally
         for (const edge of this.graph.edges) {
             const sourceEnergy = this.activations[edge.source] || 0;
+            const targetEnergy = this.activations[edge.target] || 0;
+
             if (sourceEnergy > 0.1) {
-                // Standard spreading formula: spread = source_energy * edge_weight * dampening
-                const transfer = sourceEnergy * edge.weight * 0.2;
+                // Forward spread
+                const transfer = sourceEnergy * edge.weight * 0.3; // 0.3 dampening
                 spreadAmount[edge.target] = (spreadAmount[edge.target] || 0) + transfer;
+            }
+            if (targetEnergy > 0.1) {
+                // Reverse spread (back-propagation of association)
+                // We use slightly lower dampening for reverse associations (e.g., thinking of B reminds you of A)
+                const reverseTransfer = targetEnergy * edge.weight * 0.15;
+                spreadAmount[edge.source] = (spreadAmount[edge.source] || 0) + reverseTransfer;
             }
         }
 
@@ -136,7 +214,7 @@ export class AssociativeScanner {
 
     public getMemoryContent(filePath: string): string {
         const p = paths(this.workspace);
-        const fullPath = path.join(this.workspace, filePath); // memory/knowledge/file.md
+        const fullPath = path.join(this.workspace, filePath);
         return readFileOr(fullPath, "No content found");
     }
 }

@@ -28,7 +28,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
 
                 // Only intercept deltas
                 if (chunk.type === "text_delta" || chunk.type === "thinking_delta") {
-                    const triggerFile = scanner.processChunk(chunk.delta);
+                    const triggerFile = await scanner.processChunk(chunk.delta);
 
                     if (triggerFile) {
                         // A memory node breached the activation threshold!
@@ -81,7 +81,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
 
         if (promptText) {
             // Pre-excite the network with the user's stimulus!
-            scanner.preExcite(promptText);
+            await scanner.preExcite(promptText);
         }
     });
 }

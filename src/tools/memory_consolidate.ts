@@ -47,6 +47,7 @@ interface ConsolidationReport {
     archived: number;
     memoryMdChars: number;
     memoryMdRegenerated: boolean;
+    semanticCorpusEntries: number;
     associativeGraphNodes: number;
     associativeGraphEdges: number;
 }
@@ -99,6 +100,7 @@ export async function executeMemoryConsolidate(
         archived: 0,
         memoryIndexChars: 0,
         memoryIndexRegenerated: false,
+        semanticCorpusEntries: 0,
         associativeGraphNodes: 0,
         associativeGraphEdges: 0,
     };
@@ -167,12 +169,26 @@ export async function executeMemoryConsolidate(
         report.memoryIndexRegenerated = true;
     }
 
-    // --- 4. Regenerate _associative_graph.json ---
-    const { nodes, edges } = generateAssociativeGraph(p.knowledgeDir);
+    // --- 4. Regenerate Dual-Storage Architecture ---
+
+    // 4A. Build Semantic Corpus (The "Library" for Offline LLM Annotation)
+    const semanticCorpus = buildSemanticCorpus(p.knowledgeDir);
+    report.semanticCorpusEntries = semanticCorpus.length;
+
+    // 4B. Offline LLM Semantic Wiring (The "Batch Annotation" phase)
+    // We only perform the expensive API call if we are NOT in dry_run mode
+    let annotatedEdges: AssociativeEdge[] = [];
+    if (!dryRun) {
+        annotatedEdges = await annotateEdgesWithLLM(semanticCorpus);
+    }
+
+    // 4C. Build Associative Graph (The "Nerve Net" for Real-Time CPU Scanner)
+    const { nodes, edges } = await buildAssociativeGraph(semanticCorpus, annotatedEdges);
     report.associativeGraphNodes = Object.keys(nodes).length;
     report.associativeGraphEdges = edges.length;
 
     if (!dryRun) {
+        fs.writeFileSync(p.semanticCorpus, JSON.stringify(semanticCorpus, null, 2), "utf-8");
         fs.writeFileSync(p.associativeGraph, JSON.stringify({ nodes, edges }, null, 2), "utf-8");
     }
 
@@ -185,7 +201,8 @@ export async function executeMemoryConsolidate(
         `  Decay applied: ${report.decayed}`,
         `  Archived (score < ${archiveThresh}): ${report.archived}`,
         `  MEMORY_INDEX.md: ${report.memoryIndexChars} chars ${report.memoryIndexRegenerated ? "(regenerated)" : "(preview)"}`,
-        `  Associative Graph: ${report.associativeGraphNodes} nodes, ${report.associativeGraphEdges} edges`,
+        `  Semantic Corpus: ${report.semanticCorpusEntries} events compiled for offline LLM annotation`,
+        `  Associative Graph: ${report.associativeGraphNodes} fast nodes, ${report.associativeGraphEdges} structural edges`,
     ];
 
     if (report.unconsolidated > 0) {
@@ -287,13 +304,16 @@ function generateMemoryIndex(knowledgeDir: string): string {
     return lines.join("\n");
 }
 
-function generateAssociativeGraph(knowledgeDir: string): { nodes: Record<string, any>; edges: any[] } {
-    const nodes: Record<string, any> = {};
-    const edges: any[] = [];
+export interface SemanticCorpusEntry {
+    id: string;          // e.g. "macro_economy_analysis_2026.md"
+    title: string;
+    summary: string;
+    entities: string[];
+}
 
-    if (!fs.existsSync(knowledgeDir)) {
-        return { nodes, edges };
-    }
+function buildSemanticCorpus(knowledgeDir: string): SemanticCorpusEntry[] {
+    const corpus: SemanticCorpusEntry[] = [];
+    if (!fs.existsSync(knowledgeDir)) return corpus;
 
     const files = fs
         .readdirSync(knowledgeDir)
@@ -301,97 +321,216 @@ function generateAssociativeGraph(knowledgeDir: string): { nodes: Record<string,
 
     const stopWords = new Set(["the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "with", "about", "is", "are", "was", "were", "be", "this", "that", "it", "of", "by", "as", "from", "how", "what", "where", "when", "why", "who", "which", "can", "will", "would", "should"]);
 
-    // Helper to tokenize and find n-grams (up to bigrams)
-    const extractConcepts = (text: string): string[] => {
+    // Extremely basic entity extraction purely for LLM context hints. 
+    // True intelligence lies in the offline LLM deep wiring, not this extraction.
+    const extractEntities = (text: string): string[] => {
         const words = text
-            .toLowerCase()
-            .replace(/[^a-z0-9\s-]/g, " ")
+            .replace(/[^a-zA-Z\u4e00-\u9fa5]/g, " ")
             .split(/\s+/)
-            .filter((w) => w.length > 2 && !stopWords.has(w));
+            .filter((w) => w.length >= 2 && !stopWords.has(w.toLowerCase()));
 
-        const concepts = new Set<string>();
-        // Unigrams
-        for (const w of words) concepts.add(w);
-        // Bigrams
-        for (let i = 0; i < words.length - 1; i++) {
-            concepts.add(`${words[i]} ${words[i + 1]}`);
-        }
-        return Array.from(concepts);
+        // Simple trick: proper nouns or specific Chinese keywords often appear multiple times.
+        // We just return a deduplicated array of the top words.
+        const freq: Record<string, number> = {};
+        for (const w of words) freq[w] = (freq[w] || 0) + 1;
+
+        return Object.entries(freq)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 8)
+            .map(e => e[0]);
     };
 
     for (const file of files) {
         const filePath = `memory/knowledge/${file}`;
         const content = readFileOr(path.join(knowledgeDir, file));
 
-        // Find titles and headers to weigh them stronger
         const headers = content.match(/^#+\s+(.*)$/gm) || [];
-        const headerText = headers.map(h => h.replace(/^#+\s+/, "")).join(" ");
-
-        // Extract concepts
-        const headerConcepts = extractConcepts(headerText);
-        const bodyConcepts = extractConcepts(content);
-
-        // Calculate frequencies for body
-        const bodyConceptFreq: Record<string, number> = {};
-        for (const c of bodyConcepts) {
-            bodyConceptFreq[c] = (bodyConceptFreq[c] || 0) + 1;
-        }
-
-        // Create Memory Node
         const titleLine = headers.length > 0 ? headers[0].replace(/^#\s*/, "") : file.replace(".md", "");
-        let description = "";
+
+        // Extract a crude summary (first non-header chunk of text)
+        let summary = "";
         const lines = content.split("\n");
         for (const line of lines) {
             if (line.trim() && !line.startsWith("#") && !line.startsWith("<!--")) {
-                description = line.substring(0, 150);
+                summary = line.substring(0, 200).trim();
                 break;
             }
         }
 
-        nodes[filePath] = {
-            type: "memory",
+        const entities = extractEntities(headers.join(" ") + " " + summary);
+
+        corpus.push({
+            id: filePath,
             title: titleLine,
-            preview: description
-        };
+            summary: summary,
+            entities: entities
+        });
+    }
 
-        // Add Concept Nodes and Edges
-        // Headers get weight 2.0, Body frequency gets 0.5 * freq
+    return corpus;
+}
 
-        const processConcepts = (concepts: string[], baseWeight: number) => {
-            for (const concept of concepts) {
-                if (!nodes[concept]) {
-                    nodes[concept] = { type: "concept" };
-                }
+export interface AssociativeNode {
+    id: string;
+    triggers: string[];
+    vector?: number[];
+}
 
-                // Find if edge exists
-                let edge = edges.find(e => e.source === concept && e.target === filePath);
-                if (!edge) {
-                    edge = { source: concept, target: filePath, weight: 0 };
-                    edges.push(edge);
-                }
-                edge!.weight += baseWeight;
+export interface AssociativeEdge {
+    source: string;
+    target: string;
+    weight: number;
+}
+
+async function buildAssociativeGraph(corpus: SemanticCorpusEntry[], annotatedEdges: AssociativeEdge[]): Promise<{ nodes: Record<string, AssociativeNode>; edges: AssociativeEdge[] }> {
+    const nodes: Record<string, AssociativeNode> = {};
+    const edges: AssociativeEdge[] = [...annotatedEdges];
+
+    let pipeline: any;
+    try {
+        const xenova = await import("@xenova/transformers");
+        // Using the tiny, blazing fast 22MB all-MiniLM-L6-v2 model
+        pipeline = await xenova.pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+    } catch (e) {
+        console.warn("[Memory V8] @xenova/transformers failed to load. Falling back to keyword triggers only.", e);
+    }
+
+    for (const entry of corpus) {
+        // Fast Trigger generation: The CPU scanner matches against these triggers as a fallback.
+        const titleWords = entry.title
+            .replace(/[^a-zA-Z\u4e00-\u9fa5]/g, " ")
+            .split(/\s+/)
+            .filter(w => w.length >= 2);
+
+        const triggers = Array.from(new Set([...titleWords, ...entry.entities]));
+
+        // V8 Latent Surface Target: Embed the node's core identity down to 384 dimensions
+        let vector: number[] | undefined = undefined;
+        if (pipeline) {
+            try {
+                // We embed the title and top entities to represent the 'surface' area of the node
+                const textToEmbed = `${entry.title}. ${entry.entities.join(" ")}`;
+                const output = await pipeline(textToEmbed, { pooling: "mean", normalize: true });
+                vector = Array.from(output.data);
+            } catch (e) {
+                console.warn(`[Memory V8] Embedding failed for ${entry.id}`, e);
             }
+        }
+
+        nodes[entry.id] = {
+            id: entry.id,
+            triggers: triggers,
+            vector: vector
         };
-
-        processConcepts(headerConcepts, 2.0);
-
-        for (const [concept, freq] of Object.entries(bodyConceptFreq)) {
-            processConcepts([concept], 0.2 * freq);
-        }
     }
 
-    // Prune weak edges and orphaned concepts to keep JSON small
-    const pruneThreshold = 0.5;
-    const prunedEdges = edges.filter(e => e.weight >= pruneThreshold);
+    return { nodes, edges };
+}
 
-    // Prune nodes that have no edges
-    const activeConcepts = new Set(prunedEdges.map(e => e.source));
-    const prunedNodes: Record<string, any> = {};
-    for (const [id, node] of Object.entries(nodes)) {
-        if (node.type === "memory" || activeConcepts.has(id)) {
-            prunedNodes[id] = node;
-        }
+/**
+ * Batches the Semantic Corpus and sends it to an LLM API to deduce deep semantic wormholes (edges).
+ * Uses process.env.OPENAI_API_KEY and OPENAI_BASE_URL (compatible with SiliconFlow/Ollama/DeepSeek).
+ */
+async function annotateEdgesWithLLM(corpus: SemanticCorpusEntry[]): Promise<AssociativeEdge[]> {
+    if (corpus.length < 2) return [];
+
+    const apiKey = process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY;
+    const baseUrl = process.env.OPENAI_BASE_URL || "https://api.siliconflow.cn/v1";
+    // Defaulting to a strong reasoning model suitable for topology generation
+    const model = process.env.MEMORY_ANNOTATION_MODEL || "deepseek-ai/DeepSeek-V3";
+
+    if (!apiKey) {
+        console.warn("[Memory V8] No OPENAI_API_KEY or SILICONFLOW_API_KEY found. Skipping offline semantic wiring.");
+        return [];
     }
 
-    return { nodes: prunedNodes, edges: prunedEdges };
+    // We constrain the payload by selecting a concise representation of the entries
+    const batchPayload = corpus.map(c => ({
+        id: c.id,
+        title: c.title,
+        entities: c.entities.join(", ")
+    }));
+
+    const systemPrompt = `You are a Subconscious Pattern Recognizer (Hippocampus Consolidator).
+Your task is to analyze a batch of disjointed memory nodes and discover deep, latent, non-obvious structural connections between them (e.g., causality, strong metaphor, hidden correlation).
+
+CRITICAL CONSTRAINTS:
+1. Do NOT link nodes just because they share trivial words. Only link them if triggering one should absolutely bring the other into the conscious mind context.
+2. The "source" and "target" MUST perfectly match the exact "id" provided in the input JSON. Do not hallucinate IDs.
+3. You must ONLY output a valid JSON array. Do not include markdown formatting like \`\`\`json. Do not include conversational text or explanations outside the JSON array. Output perfectly parsable JSON.
+
+Format requirement:
+[
+  {
+    "source": "memory/knowledge/node_A.md",
+    "target": "memory/knowledge/node_B.md",
+    "weight": 0.9,
+    "reason": "Causality: event A directly caused event B."
+  }
+]`;
+
+    const userPrompt = `Here is the current memory corpus:\n${JSON.stringify(batchPayload, null, 2)}\n\nGenerate the structural edges as a raw JSON array. Do not wrap in markdown code blocks.`;
+
+    try {
+        console.log(`[Memory V8] Sending ${corpus.length} nodes to ${model} for deep semantic wiring...`);
+        const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: model,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt }
+                ],
+                temperature: 0.1,
+                response_format: { type: "json_object" } // if supported, else rely on prompt
+            })
+        });
+
+        if (!response.ok) {
+            console.warn(`[Memory V8] LLM Annotation failed with status: ${response.status}`);
+            return [];
+        }
+
+        const data = await response.json();
+        let rawContent = data.choices[0].message.content.trim();
+
+        // Strip markdown blocks if the LLM ignored instructions
+        if (rawContent.startsWith("\`\`\`json")) {
+            rawContent = rawContent.replace(/^\`\`\`json/i, "").replace(/\`\`\`$/, "").trim();
+        } else if (rawContent.startsWith("\`\`\`")) {
+            rawContent = rawContent.replace(/^\`\`\`/i, "").replace(/\`\`\`$/, "").trim();
+        }
+
+        let parsed = JSON.parse(rawContent);
+        // If wrapped in an object
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            const possibleArray = Object.values(parsed).find(v => Array.isArray(v));
+            if (possibleArray) parsed = possibleArray;
+        }
+
+        if (Array.isArray(parsed)) {
+            // Validate output
+            const validEdges: AssociativeEdge[] = [];
+            for (const item of parsed) {
+                if (item.source && item.target && typeof item.weight === "number") {
+                    validEdges.push({
+                        source: item.source,
+                        target: item.target,
+                        weight: Math.min(Math.max(item.weight, 0.1), 1.0)
+                    });
+                }
+            }
+            console.log(`[Memory V8] Successfully wired ${validEdges.length} latent semantic edges.`);
+            return validEdges;
+        }
+
+    } catch (e) {
+        console.warn(`[Memory V8] Failed to parse LLM annotation JSON: ${String(e)}`);
+    }
+
+    return [];
 }
