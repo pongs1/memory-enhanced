@@ -1,10 +1,110 @@
 # OpenClaw Core Patch Guide for Memory V7 (SAR Architecture)
 
-To enable the Subconscious Associative Recall (SAR) engine to intercept and read the LLM stream in real-time, we must add a small hook into the OpenClaw core. This patch instructs the `pi-embedded-runner` to expose the generative stream to our plugin.
+To enable the Subconscious Associative Recall (SAR) engine to intercept and read the LLM stream in real-time, we must natively add the `wrap_stream_fn` hook into the OpenClaw plugin architecture.
+
+Since OpenClaw uses a strict Typescript HookRunner (`src/plugins/hooks.ts`), we cannot randomly emit events. We must structurally patch 3 files in your WSL OpenClaw core.
 
 Please apply the following changes to your OpenClaw source code in WSL.
 
-## 1. Modify `src/agents/pi-embedded-runner/run/attempt.ts`
+## 1. Modify `src/plugins/types.ts`
+
+**Location:** `\\wsl.localhost\Ubuntu-24.04\home\pongs\openclaw\src\plugins\types.ts`
+
+**A. Add to `PluginHookName` (Around Line 327)**:
+```typescript
+  | "gateway_start"
+  | "gateway_stop"
+  | "wrap_stream_fn";  // <-- Add this line
+```
+
+**B. Define the Event and Result Types (Around Line 370, below `PluginHookBeforeAgentStartResult`)**:
+```typescript
+// wrap_stream_fn hook
+export type PluginHookWrapStreamFnEvent = {
+  streamFn: any; // The original stream generator
+};
+
+export type PluginHookWrapStreamFnResult = {
+  streamFn?: any; // The hijacked/wrapped stream generator
+};
+```
+
+**C. Add to `PluginHookHandlerMap` (Around Line 758, before the end of the type)**:
+```typescript
+  gateway_stop: (
+    event: PluginHookGatewayStopEvent,
+    ctx: PluginHookGatewayContext,
+  ) => Promise<void> | void;
+  // <-- Add the block below -->
+  wrap_stream_fn: (
+    event: PluginHookWrapStreamFnEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookWrapStreamFnResult | void> | PluginHookWrapStreamFnResult | void;
+};
+```
+
+---
+
+## 2. Modify `src/plugins/hooks.ts`
+
+**Location:** `\\wsl.localhost\Ubuntu-24.04\home\pongs\openclaw\src\plugins\hooks.ts`
+
+**A. Update Imports (Line 52)**:
+Add standard exports from `./types.js` to the import list and the re-export list.
+```typescript
+  PluginHookBeforeMessageWriteEvent,
+  PluginHookBeforeMessageWriteResult,
+  PluginHookWrapStreamFnEvent,    // <-- Add this
+  PluginHookWrapStreamFnResult,   // <-- Add this
+} from "./types.js";
+```
+
+**B. Update Re-exports (Line 96)**:
+```typescript
+  PluginHookGatewayContext,
+  PluginHookGatewayStartEvent,
+  PluginHookGatewayStopEvent,
+  PluginHookWrapStreamFnEvent,    // <-- Add this
+  PluginHookWrapStreamFnResult,   // <-- Add this
+};
+```
+
+**C. Implement `runWrapStreamFn` inside `createHookRunner` (Around Line 322, inside `createHookRunner(registry, options)` after `runBeforeAgentStart`)**:
+```typescript
+  /**
+   * Run wrap_stream_fn hook.
+   * Allows plugins to intercept and hijack the raw text delta stream.
+   */
+  async function runWrapStreamFn(
+    event: PluginHookWrapStreamFnEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookWrapStreamFnResult | undefined> {
+    return runModifyingHook<"wrap_stream_fn", PluginHookWrapStreamFnResult>(
+      "wrap_stream_fn",
+      event,
+      ctx,
+      (acc, next) => ({
+        streamFn: next.streamFn ?? acc?.streamFn,
+      }),
+    );
+  }
+```
+
+**D. Return it from `createHookRunner` (Around Line 745, in the returned object)**:
+```typescript
+  return {
+    // Agent hooks
+    runBeforeModelResolve,
+    runBeforePromptBuild,
+    runBeforeAgentStart,
+    runWrapStreamFn,  // <-- Add this line
+    runLlmInput,
+// ...
+```
+
+---
+
+## 3. Modify `src/agents/pi-embedded-runner/run/attempt.ts`
 
 **File:** `\\wsl.localhost\Ubuntu-24.04\home\pongs\openclaw\src\agents\pi-embedded-runner\run\attempt.ts`
 
@@ -21,15 +121,10 @@ Please apply the following changes to your OpenClaw source code in WSL.
 
       // ==========================================
       // [START] MEMORY V7 SAR PATCH
-      // Expose the raw stream function to plugins
       // ==========================================
-      if (hookRunner) {
+      if (hookRunner?.hasHooks("wrap_stream_fn")) {
         try {
-          // Create an event object that plugins can mutate
-          const wrapEvent = { 
-            streamFn: activeSession.agent.streamFn 
-          };
-          
+          const wrapEvent = { streamFn: activeSession.agent.streamFn };
           const hookCtx = {
             agentId: hookAgentId,
             sessionKey: params.sessionKey,
@@ -38,24 +133,10 @@ Please apply the following changes to your OpenClaw source code in WSL.
             messageProvider: params.messageProvider ?? undefined,
           };
 
-          // Use the internal event emitter or hook interface
-          // Note: Since 'wrap_stream_fn' is custom, we cast to any or use a raw emit if available.
-          // In OpenClaw's Plugin API, `hookRunner.pluginApi.emit` or equivalent triggers all `api.on` listeners.
-          const anyRunner = hookRunner as any;
-          if (typeof anyRunner.emit === "function") {
-             await anyRunner.emit("wrap_stream_fn", wrapEvent, hookCtx);
-          } else if (anyRunner.plugins) {
-             // Iterate through active plugins manually if emit isn't exposed
-             for (const plugin of anyRunner.plugins) {
-                 if (typeof plugin.api?.emit === "function") {
-                     await plugin.api.emit("wrap_stream_fn", wrapEvent, hookCtx);
-                 }
-             }
-          }
+          const wrapResult = await hookRunner.runWrapStreamFn(wrapEvent, hookCtx);
           
-          // Re-assign the streamFn if a plugin wrapped it
-          if (typeof wrapEvent.streamFn === "function") {
-             activeSession.agent.streamFn = wrapEvent.streamFn;
+          if (wrapResult?.streamFn) {
+             activeSession.agent.streamFn = wrapResult.streamFn;
           }
         } catch (e) {
            log.warn(`Memory V7 wrap_stream_fn hook failed: ${String(e)}`);
@@ -67,21 +148,17 @@ Please apply the following changes to your OpenClaw source code in WSL.
 
       try {
         const prior = await sanitizeSessionHistory({
-          messages: activeSession.messages,
 // ...
 ```
 
-## 2. Note on the `llm_input` Hook (Pre-Excitation)
+## 4. Rebuild OpenClaw
 
-You do **not** need to modify OpenClaw to support the `llm_input` hook! This hook is already built natively into OpenClaw and runs right before the LLM prompt is executed (around line 1390 in `attempt.ts`). Our `memory-enhanced` plugin will automatically listen to it to fetch the user's stimulus prompt and solve the Cold-Start Amnesia problem.
-
-## 3. Rebuild OpenClaw
-
-After saving `attempt.ts`, remember to rebuild/restart your OpenClaw instance in WSL so the changes take effect:
+After saving these three files (`types.ts`, `hooks.ts`, `attempt.ts`), remember to rebuild your OpenClaw instance in WSL so the new TypeScript typings and interfaces compile:
 
 ```bash
 cd /home/pongs/openclaw
 npm run build # (Or whatever pnpm/build command you use)
+openclaw gateway restart
 ```
 
 Once this is patched, your local `memory-enhanced` plugin will instantly gain root-level access to the Token generation stream!
