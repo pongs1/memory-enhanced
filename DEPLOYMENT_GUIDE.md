@@ -137,8 +137,7 @@ mkdir -p .memory/archive
 ### `$WORKSPACE/.memory/active/scratchpad.md`
 ```markdown
 # Scratchpad
-## Current Focus
-(auto-filled on session start)
+
 ## Reasoning Notes
 (intermediate steps)
 ## Pending Verification

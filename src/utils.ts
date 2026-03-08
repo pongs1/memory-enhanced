@@ -188,10 +188,11 @@ export function appendScratchpad(workspace: string, section: string, content: st
     const sectionHeader = `## ${section}`;
 
     let newContent = "";
+    const formattedContent = content.includes("\\n") ? content.replace(/\\n/g, "\\n  ") : content;
     if (existing.includes(sectionHeader)) {
-        newContent = existing.replace(sectionHeader, `${sectionHeader}\n- [${nowTime()}] ${content}`);
+        newContent = existing.replace(sectionHeader, `${sectionHeader}\n- [${nowTime()}] ${formattedContent}`);
     } else {
-        newContent = existing.trim() + `\n\n${sectionHeader}\n- [${nowTime()}] ${content}\n`;
+        newContent = existing.trim() + `\n\n${sectionHeader}\n- [${nowTime()}] ${formattedContent}\n`;
     }
 
     fs.writeFileSync(p.scratchpad, newContent.trim() + "\n", "utf-8");
