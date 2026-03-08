@@ -1,97 +1,81 @@
-# 🧠 memory-enhanced | V8 神经常驻+符号逻辑记忆系统
-
-[![GitHub License](https://img.shields.io/github/license/pongs1/memory-enhanced)](https://github.com/pongs1/memory-enhanced/blob/main/LICENSE)
-[![OpenClaw Version](https://img.shields.io/badge/OpenClaw-%E2%89%A52026.1.26-blue)](https://github.com/openclaw/openclaw)
-[![V8 Neuro-Symbolic](https://img.shields.io/badge/Architecture-Neuro--Symbolic%20V8-orange)](#)
+# 🧠 memory-enhanced — 为 OpenClaw 打造的仿生 4 层认知系统 (V8)
 
 [**English**](./README.md) | [**中文简体**](./README_zh.md)
 
-`memory-enhanced` 是为 OpenClaw Agent 设计的高性能、脑启发式记忆架构。它将您的 AI 从一个“无状态”的聊天机器人转变为拥有**情节记录**、**语义提炼**和**无意识联想唤醒**能力的拟人化 Agent。
+> **“为什么你的 AI 总是记不住你昨天刚交代的代码风格？为什么解决过的 Bug 三周后又重演？”**
 
-V8 版本融合了连续向量思维轨迹（System 1）与离线符号逻辑图（System 2），旨在解决 LLM Agent 在长上下文中的“注意力流失”与“灾难性遗忘”问题。
-
----
-
-## ✨ 核心特性
-
-- **🚀 System 1: 实时联想唤醒**: 毫秒级的“潜意识”记忆注入。使用局部 ONNX 嵌入模型（Xenova）与能量扩散算法（Spreading Activation）。
-- **🧠 System 2: 深度语义路由**: 离线状态下由 LLM 驱动的图谱自动标注，挖掘潜在的因果逻辑与隐喻跨度。
-- **📉 指数级衰减与裁减**: 模拟艾宾浩斯遗忘曲线。非核心记忆会随着时间自然淡出或归档。
-- **🛡️ 认知压力调节**: 防止任务“隧道视野”。在长工具链执行中通过 Cognitive Pulse 强制 Agent 进行保存点记录与状态更新。
-- **⚡ 零 Token 生命周期钩子**: 原生注入 OpenClaw 生成流——相比传统的 SKILL.md 指令，单回合可节省数千 Token。
-- **⚖️ 枢纽节点惩罚与 RLHF**: 通过计算度数（Degree）防止“激活风暴”，并支持根据用户反馈动态裁剪图边缘权重。
+`memory-enhanced` 插件将 OpenClaw 从一个“只有鱼的记忆”的对话框，进化为一个拥有定期整理、自动遗忘、触类旁通能力的**长效智能体**。
 
 ---
 
-## 🏗️ 架构图：神经符号波
+## 🏗️ 架构概览：模仿大脑的 4 层记忆
 
-```mermaid
-graph TD
-    User([用户输入]) --> EMA[向量 EMA 轨迹跟踪]
-    EMA -- "Cosine Similarity > 0.55" --> SurfaceNode[表层记忆节点]
-    SurfaceNode -- "双向能量扩散" --> Graph[符号知识图谱]
-    Graph -- "反向传播" --> SurfaceNode
-    Graph -- "结构化扩散" --> DeepNode[深层潜在记忆]
-    DeepNode -- "能量破阈" --> Injection{{无意识记忆注入}}
-    Injection --> LLM[OpenClaw 上下文注入]
-    
-    Offline[离线巩固] -. "LLM 语义标注" .-> Graph
-    Offline -. "局部向量编码" .-> SurfaceNode
-```
+| 记忆层 | 职责 | 存储位置 | AI 能感觉到什么？ |
+|---|---|---|---|
+| **L1：工作记忆** | 正在做的任务与随手笔记 | `.memory/active/` | 每次醒来都会自动看到最近 7 个焦点任务和逻辑草稿。 |
+| **L2：事件记忆** | 刚才发生了什么重要决策 | `.memory/events/` | 像日记一样记录，支持根据思维方向自动调取相关片段。 |
+| **L3：语义记忆** | 积累的硬核知识与用户偏好 | `memory/knowledge/` | 经过“睡前整理”提炼出的精华，不再是细碎的消息。 |
+| **L4：程序记忆** | 验证过的“操作手册” (SOP) | `memory/skills/` | 下次遇到同样的问题，直接翻手册，拒绝重新摸索。 |
 
-### 双智能内核
-1.  **连续轨迹跟踪 (Xenova)**: 实时捕捉 LLM 的“思维动量” ($V_{query} = 0.7 * V_{curr} + 0.3 * V_{prev}$)。
-2.  **离线离散映射 (Symbolic Graph)**: 由“思考模型” (如 DeepSeek R1) 预计算的逻辑神经网络边。
+---
+
+## 🧬 V8 核心黑科技：潜意识联想唤醒 (SAR)
+
+V8 架构引入了模拟“海马体-皮层转移”的双智能引擎。
+
+### 1. 思维倾向追踪 (Trajectory Tracking)
+系统会实时捕捉 AI 的“思维惯性”。我们不再只看它说的最后一个词，而是计算它最近一段思路的**向量移动平均值**：
+$$思维中心 = 0.7 \cdot 当前输入 + 0.3 \cdot 先前思路$$
+这就像你在思考“微服务”时，脑子里会预热“K8s”和“Docker”，即便你还没说出这些词。
+
+### 2. 深层符号轴突 (System 2)
+当 System 1 处理“直觉”匹配时，System 2 通过离线 LLM（如 DeepSeek R1）定期对记忆图谱进行标注。它能挖掘出纯数学向量匹配可能遗漏的**元引申关联**与**因果依赖**。
+*   **双向激活传播**：能量从源节点流向目标（0.3x）并进行反向传播（0.15x），模拟认知的共振与溯源。
+
+### 3. 指数级衰减与枢纽节点惩罚
+为了防止“记忆风暴”（即高频词汇触发过多无关记忆）：
+*   **枢纽惩罚 (Hub Penalization)**：能量传递会除以 $\sqrt{degree(node)}$。像“API”或“项目”这类高连接度的枢纽节点会被自然抑制，防止能量爆炸。
+*   **活跃日衰减**：记忆根据系统**活跃**的天数进行衰减，而非自然日。
+$$Score_{new} = Score_{old} \cdot e^{-\frac{\ln 2}{30} \cdot Days}$$
+
+---
+
+## ⚡ 为什么选择插件而非 SKILL.md 指令？
+
+| 维度 | SKILL.md (基于指令) | memory-enhanced (基于插件) |
+|---|---|---|
+| **Token 成本** | 每回合 ~2000 tokens (指令注入) | 每回合 ~50 tokens (工具注册) |
+| **可靠性** | LLM 可能会忽略或误读指令 | 原生 TypeScript 代码执行 |
+| **延迟** | 高 (需要 LLM 理解并解释指令) | 近乎零 (原生钩子拦截) |
+| **自动化** | 必须由 Assistant 手动写入日志 | `agent_end` 钩子自动识别并记录洞察 |
+
+---
+
+## 🛠️ 工具箱概览
+
+- **`memory_record`**: 编码情节事件。触发双写逻辑（结构化 JSONL + 可搜索 MD）。
+- **`memory_working`**: 管理任务焦点栈。强制执行 7 槽位的认知上限。
+- **`memory_consolidate`**: “深度睡眠”整理器。应用衰减、归档旧项，并通过离线 LLM 批量标注语义图谱。
+- **`memory_explore`**: 直接图谱遍历。沿着“轴突”寻找关联知识。
 
 ---
 
 ## 🚦 快速开始
 
-### 1. 安装
-```bash
-git clone https://github.com/pongs1/memory-enhanced.git ~/openclaw/extensions/memory-enhanced
-cd ~/openclaw/extensions/memory-enhanced
-pnpm install
-openclaw plugins install -l .
-```
+1.  **拉取仓库**：将本项目克隆到 OpenClaw 的扩展目录。
+2.  **安装环境**：执行 `pnpm install`。
+3.  **配置**：修改 `openclaw.json` 开启插件模式。
+4.  **初始化**：在工作区创建 `memory/` 目录结构。
 
-### 2. 配置 `openclaw.json`
-确保插件路径正确并启用工作区映射：
-```json
-{
-  "plugins": {
-    "load": { "paths": ["/absolute/path/to/memory-enhanced"] }
-  },
-  "agents": {
-    "defaults": {
-      "bootstrapExtraFiles": [".memory/active/scratchpad.md", "memory/"]
-    }
-  }
-}
-```
-
-### 3. 环境需求
-- **实时模式**: 使用 `@xenova/transformers` (首次运行自动下载)。
-- **离线模式**: 配置 `OPENAI_API_KEY` 以进行 System 2 语义建图。
+**👉 [点击查看：超级详尽的《开箱即用部署手册》](./DEPLOYMENT_GUIDE.md)**
 
 ---
 
-## 🛠️ 工具箱
+## 📜 设计哲学
 
-| 工具名 | 用途 | 认知角色 |
-|---|---|---|
-| `memory_record` | 记录关键决策与事实 | 情节编码 |
-| `memory_working` | 管理任务焦点栈 (最高 7 项) | 工作记忆 |
-| `memory_consolidate` | 触发衰减、归档与建图 | 记忆巩固 |
-| `memory_explore` | 人工遍历记忆图谱 | 深度调取 |
-
----
-
-## 📜 运行原则
-
-- **稀疏符号层**: 与致密的权重不同，知识图谱是离散且可解释的。你可以手动增加或削减任意一条“联想边”。
-- **赫布学习 (Hebbian Learning)**: 经常被唤醒的记忆会被强化（衰减重置），而未使用的知识会滑入归档。
-- **神经一致性**: 使用基于度的分摊算法，确保激活能在图中自然流动，而不至于陷入死循环或爆炸。
+1.  **可解释性**: 不同于黑盒的 LLM 权重，知识图谱是一个你可以直接阅读并手动修改权重或关联的 JSON 文件。
+2.  **极致效率**: 繁重的计算任务（衰减、连边）在后台钩子中通过 CPU 完成，零 Token 消耗。
+3.  **独立性**: Agent 的长期记忆以静态文件形式存在，这意味着它可以轻松在不同的 LLM 模型间迁移。
 
 ---
 

@@ -1,106 +1,71 @@
-# 🧠 memory-enhanced | V8 Neuro-Symbolic Memory System
-
-[![GitHub License](https://img.shields.io/github/license/pongs1/memory-enhanced)](https://github.com/pongs1/memory-enhanced/blob/main/LICENSE)
-[![OpenClaw Version](https://img.shields.io/badge/OpenClaw-%E2%89%A52026.1.26-blue)](https://github.com/openclaw/openclaw)
-[![V8 Neuro-Symbolic](https://img.shields.io/badge/Architecture-Neuro--Symbolic%20V8-orange)](#)
+# 🧠 memory-enhanced — Biomorphic 4-Layer Cognitive Layer (V8)
 
 [**English**](./README.md) | [**中文简体**](./README_zh.md)
 
-`memory-enhanced` is a state-of-the-art cognitive memory architecture for OpenClaw agents. It transforms your AI from a stateless chatbot into a personified agent capable of **episodic recording**, **semantic distillation**, and **subconscious associative recall**.
+> **"Why does your AI always forget the coding style you just explained yesterday? Why do solved bugs repeat themselves 3 weeks later? Why does your Agent lose its way after a dozen tool calls?"**
 
-Built upon cognitive science principles, V8 merges continuous vector thought trajectories with discrete logical graphs to solve the "lost in context" and "catastrophic forgetting" problems in LLM agents.
-
----
-
-## ✨ Key Features
-
-- **🚀 System 1: Real-time Associative Recall**: Sub-millisecond "subconscious" memory injection using local ONNX embeddings (Xenova) and Spreading Activation.
-- **🧠 System 2: Deep Semantic Routing**: Offline LLM-driven graph annotation to discover latent causality and metaphorical links.
-- **📉 Exponential Decay & Pruning**: Mimics the Ebbinghaus Forgetting Curve. Non-essential memories gracefully fade or archive.
-- **🛡️ Cognitive Pressure Regulation**: Prevents task "tunnel vision" by forcing checkpoints and status updates during long tool chains.
-- **⚡ Zero-Token Lifecycle Hooks**: Intercepts the generative stream natively via OpenClaw hooks—saving thousands of tokens compared to SKILL-based instructions.
-- **⚖️ Hub Penalization & RLHF**: Prevents "activation storms" by penalizing high-degree nodes and allows dynamic user feedback to prune graph edges.
+The `memory-enhanced` plugin transforms OpenClaw from a "goldfish memory" chat box into a **long-term intelligent agent** with active consolidation, automatic forgetting, and associative recall.
 
 ---
 
-## 🏗️ Architecture: The Neuro-Symbolic Wave
+## 🏗️ Architecture Overview: 4 Bio-Inspired Layers
 
-```mermaid
-graph TD
-    User([User Prompt]) --> EMA[Vector EMA Trajectory]
-    EMA -- "Cosine Similarity > 0.55" --> SurfaceNode[Surface Memory Node]
-    SurfaceNode -- "Activation Spread (Bidirectional)" --> Graph[Symbolic Knowledge Graph]
-    Graph -- "Back-propagation" --> SurfaceNode
-    Graph -- "Structural Wave" --> DeepNode[Deep Latent Memory]
-    DeepNode -- "Threshold Breach" --> Injection{{Subconscious Recall Injection}}
-    Injection --> LLM[OpenClaw LLM Context]
-    
-    Offline[Offline Consolidation] -. "LLM Annotation" .-> Graph
-    Offline -. "Local Embedding" .-> SurfaceNode
-```
+| Layer | Responsibility | Storage Location | What does the AI feel? |
+|---|---|---|---|
+| **L1: Working Memory** | Active tasks & rough notes | `.memory/active/` | On wake, it is **forced** to see the 7 priority tasks and logic drafts—no search required. |
+| **L2: Episodic Memory** | Events, decisions & "Aha!" moments | `.memory/events/` | Recorded like a personalized diary; fragments are recalled based on the "thinking direction." |
+| **L3: Semantic Memory** | Distilled knowledge & preferences | `memory/knowledge/` | The "essence" of past events, no longer cluttered with raw messages. |
+| **L4: Procedural Memory** | Verified "How-To" SOPs | `memory/skills/` | When facing the same problem, it checks the manual instead of reinventing the wheel. |
 
-### The Dual-Intelligence Core
-1.  **Continuous Tracking (Xenova)**: We track the "momentum" of the LLM's thought process ($V_{query} = 0.7 * V_{curr} + 0.3 * V_{prev}$).
-2.  **Discrete Mapping (Symbolic Graph)**: Logical edges pre-computed by a "thinking" model (e.g., DeepSeek R1) define the axons.
+---
+
+## 🧬 V8 Tech: Subconscious Associative Recall (SAR)
+
+We no longer ask the AI to "search" through thousands of files. Instead, we mimic human **"subconscious association."**
+
+### 1. Thought Inertia Tracking (Formally "Momentum")
+The system captures the AI's "thinking inertia." We don't just look at the last word; we calculate the **Vector Moving Average** of the recent context:
+$$Thought Center = 0.7 \cdot Current Input + 0.3 \cdot Past Context$$
+Just as thinking of "Microservices" warms up "K8s" and "Docker" in your brain before you even say them.
+
+### 2. Deep Symbolic Axons
+We use offline LLMs (e.g., DeepSeek R1) to label and link memories in the background. These are not keyword matches, but **logical dependencies** and **metaphorical links**.
+*   **Energy Spread**: When a thought hits a point, energy flows through "axons" (bidirectional) to pull deep-seated knowledge into the light.
+*   **Hub Penalization**: To prevent generic terms (e.g., "Code") from triggering everything, the system automatically suppresses "Super-Hubs" using degree-centrality dampening.
+
+### 3. Forced Context Injection
+The ultimate solution for low LLM initiative. We bypass the LLM's "tool-calling preference." Using OpenClaw core Hooks, we **force highly relevant memories into the mind-model** before generation even starts. The AI doesn't think "Should I search?"; it just "knows" the background.
+
+---
+
+## ⚡ Why avoid the old Instruction Scripts (SKILL.md)?
+
+1.  **Saving Money**: Saves about 2000 tokens per turn. Over time, this cuts 80% of API costs.
+2.  **Zero Command Blindness**: Instruction scripts get drowned out by noise. Plugins use **native code execution**, independent of the LLM's obedience.
+3.  **Real-Time Recall**: Millisecond response via ONNX CPU execution. The AI no longer pauses because it "can't remember."
 
 ---
 
 ## 🚦 Quick Start
 
-### 1. Installation
-```bash
-git clone https://github.com/pongs1/memory-enhanced.git ~/openclaw/extensions/memory-enhanced
-cd ~/openclaw/extensions/memory-enhanced
-pnpm install
-openclaw plugins install -l .
-```
+1.  **Clone**: Clone this repo into the OpenClaw extensions directory.
+2.  **Install**: Run `pnpm install`.
+3.  **Config**: Update `openclaw.json` to enable plugin mode and "Forced Injection" paths.
+4.  **Init**: Create the `memory/` directory structure in your workspace.
 
-### 2. Configure `openclaw.json`
-Add the plugin path and enable the hooks:
-```json
-{
-  "plugins": {
-    "load": { "paths": ["/absolute/path/to/memory-enhanced"] }
-  },
-  "agents": {
-    "defaults": {
-      "bootstrapExtraFiles": [".memory/active/scratchpad.md", "memory/"]
-    }
-  }
-}
-```
-
-### 3. Requirements
-- **Local Mode**: Uses `@xenova/transformers` (auto-downloaded on first run).
-- **Offline Mode**: Set `OPENAI_API_KEY` for System 2 semantic wiring.
+**👉 [CLICK HERE: The Hyper-Detailed "Out-of-the-Box" Deployment Guide](./DEPLOYMENT_GUIDE.md)**
 
 ---
 
-## 🛠️ Tool Suite
+## 📜 Task Management Philosophy (ADaPT)
 
-| Tool | Purpose | Cognitive Role |
-|---|---|---|
-| `memory_record` | Logs important decisions/facts | Episodic Encoding |
-| `memory_working` | Manages focus stack (max 7 items) | Working Memory |
-| `memory_consolidate` | Triggers decay, archiving, and graph wiring | Consolidation |
-| `memory_explore` | Manual graph traversal | Deep Retrieval |
+This project strictly follows the **ADaPT (Action Development and Project Tracking)** framework:
+1.  **Flattening**: No deep folder trees. Focus only on the 7 most critical next steps.
+2.  **Pressure Valve**: If more than 7 tasks pile up, old ones "overflow" to the scratchpad, forcing brain decompression.
+3.  **Reliability Check**: Every session start forces a `memory_working status` check to recover state.
 
 ---
 
-## 📜 Principles of Operation
+## 🤝 Contributing & Feedback
 
-- **Sparse Symbolic Layer**: Unlike dense LLM weights, the knowledge graph is discrete and interpretable. You can manually prune or boost edges.
-- **Hebbian Learning**: Memories that are frequently recalled are reinforced (decay reset), while unused facts slide into the archive.
-- **Neuro-Consistency**: Uses O(E) degree-based dampening to ensure activation energy flows naturally without exploding into chaos.
-
----
-
-## 🤝 Contributing
-
-We welcome contributions to the cognitive engine! Please see `CONTRIBUTING.md` for our coding standards and internal ADaPT protocols.
-
----
-
-## 📄 License & Credits
-
-MIT License. Inspired by the Hippocampus-Cortex transfer theory and the ADaPT task management framework.
+Join us in building a stronger cognitive layer for agents! Licensed under MIT.
