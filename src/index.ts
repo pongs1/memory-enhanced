@@ -28,6 +28,7 @@ import {
 } from "./tools/memory_working.js";
 
 import { paths, readJson, readFileOr } from "./utils.js";
+import { registerStreamWrapper } from "./hooks/wrap-stream-fn.js";
 
 // @ts-ignore
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
@@ -97,6 +98,8 @@ export default function register(api: OpenClawPluginApi) {
     });
 
     // --- HOOKS ---
+    registerStreamWrapper(api, pluginConfig);
+
     // Cognitive Pulse Ticker to track continuous tool executions without memory updates
     const sessionTickers = new Map<string, number>();
 

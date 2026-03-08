@@ -47,6 +47,8 @@ interface ConsolidationReport {
     archived: number;
     memoryMdChars: number;
     memoryMdRegenerated: boolean;
+    associativeGraphNodes: number;
+    associativeGraphEdges: number;
 }
 
 /**
@@ -97,6 +99,8 @@ export async function executeMemoryConsolidate(
         archived: 0,
         memoryIndexChars: 0,
         memoryIndexRegenerated: false,
+        associativeGraphNodes: 0,
+        associativeGraphEdges: 0,
     };
 
     // --- 1. Collect event files based on scope ---
@@ -163,6 +167,15 @@ export async function executeMemoryConsolidate(
         report.memoryIndexRegenerated = true;
     }
 
+    // --- 4. Regenerate _associative_graph.json ---
+    const { nodes, edges } = generateAssociativeGraph(p.knowledgeDir);
+    report.associativeGraphNodes = Object.keys(nodes).length;
+    report.associativeGraphEdges = edges.length;
+
+    if (!dryRun) {
+        fs.writeFileSync(p.associativeGraph, JSON.stringify({ nodes, edges }, null, 2), "utf-8");
+    }
+
     // --- Format report ---
     const lines = [
         `Consolidation ${dryRun ? "(DRY RUN) " : ""}complete:`,
@@ -172,6 +185,7 @@ export async function executeMemoryConsolidate(
         `  Decay applied: ${report.decayed}`,
         `  Archived (score < ${archiveThresh}): ${report.archived}`,
         `  MEMORY_INDEX.md: ${report.memoryIndexChars} chars ${report.memoryIndexRegenerated ? "(regenerated)" : "(preview)"}`,
+        `  Associative Graph: ${report.associativeGraphNodes} nodes, ${report.associativeGraphEdges} edges`,
     ];
 
     if (report.unconsolidated > 0) {
@@ -271,4 +285,113 @@ function generateMemoryIndex(knowledgeDir: string): string {
     }
 
     return lines.join("\n");
+}
+
+function generateAssociativeGraph(knowledgeDir: string): { nodes: Record<string, any>; edges: any[] } {
+    const nodes: Record<string, any> = {};
+    const edges: any[] = [];
+
+    if (!fs.existsSync(knowledgeDir)) {
+        return { nodes, edges };
+    }
+
+    const files = fs
+        .readdirSync(knowledgeDir)
+        .filter((f: string) => f.endsWith(".md"));
+
+    const stopWords = new Set(["the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "with", "about", "is", "are", "was", "were", "be", "this", "that", "it", "of", "by", "as", "from", "how", "what", "where", "when", "why", "who", "which", "can", "will", "would", "should"]);
+
+    // Helper to tokenize and find n-grams (up to bigrams)
+    const extractConcepts = (text: string): string[] => {
+        const words = text
+            .toLowerCase()
+            .replace(/[^a-z0-9\s-]/g, " ")
+            .split(/\s+/)
+            .filter((w) => w.length > 2 && !stopWords.has(w));
+
+        const concepts = new Set<string>();
+        // Unigrams
+        for (const w of words) concepts.add(w);
+        // Bigrams
+        for (let i = 0; i < words.length - 1; i++) {
+            concepts.add(`${words[i]} ${words[i + 1]}`);
+        }
+        return Array.from(concepts);
+    };
+
+    for (const file of files) {
+        const filePath = `memory/knowledge/${file}`;
+        const content = readFileOr(path.join(knowledgeDir, file));
+
+        // Find titles and headers to weigh them stronger
+        const headers = content.match(/^#+\s+(.*)$/gm) || [];
+        const headerText = headers.map(h => h.replace(/^#+\s+/, "")).join(" ");
+
+        // Extract concepts
+        const headerConcepts = extractConcepts(headerText);
+        const bodyConcepts = extractConcepts(content);
+
+        // Calculate frequencies for body
+        const bodyConceptFreq: Record<string, number> = {};
+        for (const c of bodyConcepts) {
+            bodyConceptFreq[c] = (bodyConceptFreq[c] || 0) + 1;
+        }
+
+        // Create Memory Node
+        const titleLine = headers.length > 0 ? headers[0].replace(/^#\s*/, "") : file.replace(".md", "");
+        let description = "";
+        const lines = content.split("\n");
+        for (const line of lines) {
+            if (line.trim() && !line.startsWith("#") && !line.startsWith("<!--")) {
+                description = line.substring(0, 150);
+                break;
+            }
+        }
+
+        nodes[filePath] = {
+            type: "memory",
+            title: titleLine,
+            preview: description
+        };
+
+        // Add Concept Nodes and Edges
+        // Headers get weight 2.0, Body frequency gets 0.5 * freq
+
+        const processConcepts = (concepts: string[], baseWeight: number) => {
+            for (const concept of concepts) {
+                if (!nodes[concept]) {
+                    nodes[concept] = { type: "concept" };
+                }
+
+                // Find if edge exists
+                let edge = edges.find(e => e.source === concept && e.target === filePath);
+                if (!edge) {
+                    edge = { source: concept, target: filePath, weight: 0 };
+                    edges.push(edge);
+                }
+                edge!.weight += baseWeight;
+            }
+        };
+
+        processConcepts(headerConcepts, 2.0);
+
+        for (const [concept, freq] of Object.entries(bodyConceptFreq)) {
+            processConcepts([concept], 0.2 * freq);
+        }
+    }
+
+    // Prune weak edges and orphaned concepts to keep JSON small
+    const pruneThreshold = 0.5;
+    const prunedEdges = edges.filter(e => e.weight >= pruneThreshold);
+
+    // Prune nodes that have no edges
+    const activeConcepts = new Set(prunedEdges.map(e => e.source));
+    const prunedNodes: Record<string, any> = {};
+    for (const [id, node] of Object.entries(nodes)) {
+        if (node.type === "memory" || activeConcepts.has(id)) {
+            prunedNodes[id] = node;
+        }
+    }
+
+    return { nodes: prunedNodes, edges: prunedEdges };
 }

@@ -1,4 +1,4 @@
-# 🚀 Memory System Deployment Guide (v5)
+# 🚀 Memory System Deployment Guide (v7 SAR)
 
 > **Architecture**: Native OpenClaw tool plugin with Lifecycle Hooks. Memory operations are real tools and event-listeners
 > (`memory_record`, `memory_explore`, `memory_consolidate`, `memory_status`, `memory_focus`, `memory_scratchpad`)
@@ -17,6 +17,9 @@ git clone https://github.com/pongs1/memory-enhanced.git ~/openclaw/extensions/me
 # Install dependencies
 cd ~/openclaw/extensions/memory-enhanced
 pnpm install
+
+# Apply V7 Core Patch
+# Follow the instructions in `openclaw-patch-guide.md` to expose the generative stream.
 
 # Or use openclaw's dev link for easier updates
 openclaw plugins install -l ~/openclaw/extensions/memory-enhanced
@@ -66,6 +69,9 @@ Add the SiliconFlow (or any OpenAI-compatible) provider to the global `models` s
   }
 }
 ```
+
+### 1.5. Subconscious Associative Recall (SAR) Patch
+V7 introduces true stream interception via Spreading Activation. Ensure you have followed `openclaw-patch-guide.md` to modify your WSL OpenClaw core to emit the `wrap_stream_fn` hook. The memory plugin listens to `llm_input` natively to pre-excite the network.
 
 ### 2. Configure Memory Search & Compaction
 
@@ -239,16 +245,15 @@ You wake up fresh each session, but you have a powerful 4-layer memory system.
 - **To curate long-term knowledge:** Distill insights into `memory/knowledge/*.md` files.
 - **To trigger cleanup:** Use `memory_consolidate` at the end of a session to compile knowledge into the master `MEMORY.md`.
 
-## The 4-Tool Cognitive Suite (V6)
+## The Cognitive Suite (V7 SAR)
 
-To respect LLM token windows and maximize logical grouping, the memory suite provides 4 highly optimized tools:
+To respect LLM token windows and maximize logical grouping, the memory suite provides highly optimized tools and background hooks:
 
 1.  **`memory_record`**: Your L2 episodic logger. Used for dual-format (JSONL + Markdown) recording of important decisions, user preferences, and project insights.
-2.  **`memory_explore`**: Your L3 knowledge graph navigator. Traverses semantic and chronological association chains up to a maximum depth.
-3.  **`memory_working`**: Your L1 focus stack and scratchpad manager. Combines ADaPT queue management (`plan`, `complete`, `push`) with overflow/scratchpad features (`scratchpad_append`, `overflow`, `scratchpad_refill`).
-4.  **`memory_consolidate`**: Your background chron-job. Executes the structural "Decay & Archive" routine on old events, and regenerates the lightweight `MEMORY_INDEX.md` map. You only need to manually call `memory_record` for extremely critical standalone facts.
-
-**Why this matters**: LLM attention degrades in the middle of long contexts. By checkpointing results natively, you move critical information to durable storage, preserving focus.
+2.  **`memory_explore`**: Your L3 knowledge graph navigator. Traverses semantic and chronological association chains up to a maximum depth. *(Mostly deprecated by V7 SAR, but available for deep dives).*
+3.  **`memory_working`**: Your L1 focus stack and scratchpad manager.
+4.  **`memory_consolidate`**: Your background chron-job. Executes the structural "Decay & Archive" routine on old events, and regenerates the `_associative_graph.json` semantic map. 
+5.  **Subconscious Associative Recall (Hook)**: A real-time Cognitive Spreading Activation scanner that hooks into your generative stream and `llm_input`. When a memory breaches the activation threshold, it is instantaneously injected into your active thought process via steering.
 
 ### 🔄 Memory Maintenance (During Heartbeats or Session End)
 1. Look for unconsolidated events (run `memory_status` or check `.memory/events/`).
@@ -397,15 +402,13 @@ Details:
 
 ## Architecture: Plugin vs SKILL.md
 
-| Aspect | v3 (SKILL.md) | v5 (Hooks + TS Plugin) |
+| Aspect | v3 (SKILL.md) | v7 (Hooks + SAR Plugin) |
 |---|---|---|
 | Token cost per turn | ~2000 (SKILL.md injected) | ~200 (minimal SKILL.md) |
 | Event recording | LLM writes 2 files manually | `agent_end` hook auto-records heuristically |
-| Association traversal | LLM reads + follows links | Plugin does BFS, returns graph |
+| Association traversal | LLM reads + follows links | V7 SAR Stream Injection or BFS plugin |
 | Decay calculation | Bash script | Plugin does it natively |
-| Health check | Bash script | Plugin returns structured report |
-| Focus Stack (L1) | LLM edits JSON | MD-frontend injected via `before_agent_start` |
-| MEMORY.md generation(L3) | Bash script via soft-links| Native physical file concatenation |
-| Tool signatures | Prose instructions | Typed parameters with descriptions |
+| MEMORY Generation(L3) | Bash script via soft-links| Native JSON graph generation |
+| Recall Latency | Tool-call roundtrip | Zero (Real-time Stream Intercept) |
 
-**Net result**: Structural operations run on native hooks at zero token cost. The LLM focuses instantly on the 7 active chunks and semantic distillation.
+**Net result**: Structural operations run on native hooks at zero token cost. The Subconscious Associative Recall engine feeds the LLM memories exactly when needed, eliminating the cognitive burden of manual tool invocation.

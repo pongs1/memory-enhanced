@@ -76,6 +76,7 @@ export function paths(workspace: string) {
         memoryIndex: path.join(workspace, "MEMORY_INDEX.md"),
         // Metadata (read tool only, not memory_get)
         dotMemory: path.join(workspace, ".memory"),
+        associativeGraph: path.join(workspace, ".memory", "_associative_graph.json"),
         activeDir: path.join(workspace, ".memory", "active"),
         scratchpad: path.join(workspace, ".memory", "active", "scratchpad.md"),
         focusStack: path.join(workspace, ".memory", "active", "focus_stack.json"),
