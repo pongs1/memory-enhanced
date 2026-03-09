@@ -229,7 +229,12 @@ function normalizeString(value: unknown): string {
 }
 
 export function normalizeUserRequest(value: string, maxChars = 240): string {
-    return value.replace(/\s+/g, " ").trim().slice(0, maxChars);
+    return value
+        .replace(/<!-- Memory Context \(Live\) -->[\s\S]*?<!-- End Memory Context -->/g, " ")
+        .replace(/^\[[^\]]{1,80}\]\s*/, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, maxChars);
 }
 
 function normalizeStringList(value: unknown): string[] {
@@ -240,6 +245,22 @@ function normalizeStringList(value: unknown): string[] {
 
     for (const entry of value) {
         const text = normalizeString(entry);
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+        items.push(text);
+    }
+
+    return items;
+}
+
+function normalizeTaskList(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+
+    const seen = new Set<string>();
+    const items: string[] = [];
+
+    for (const entry of value) {
+        const text = typeof entry === "string" ? normalizeUserRequest(entry) : "";
         if (!text || seen.has(text)) continue;
         seen.add(text);
         items.push(text);
@@ -306,20 +327,21 @@ function isContinuationRequest(request: string): boolean {
 export function normalizeWorkingMemoryState(raw: unknown): WorkingMemoryState {
     const source = (raw ?? {}) as LegacyFocusStack;
     const fallback = createDefaultWorkingMemoryState();
-    const projectGoal = normalizeString(source.project_goal) || fallback.project_goal;
+    const projectGoal = normalizeUserRequest(normalizeString(source.project_goal) || fallback.project_goal, 400);
     const contextPath = normalizeStringList(source.context_path ?? source.current_path);
-    const activeTask =
-        normalizeString(source.active_task ?? source.current_focus) || DEFAULT_ACTIVE_TASK;
-    const nextTasks = normalizeStringList(source.next_tasks ?? source.pending_siblings).filter(
+    const activeTask = normalizeUserRequest(
+        normalizeString(source.active_task ?? source.current_focus) || DEFAULT_ACTIVE_TASK
+    ) || DEFAULT_ACTIVE_TASK;
+    const nextTasks = normalizeTaskList(source.next_tasks ?? source.pending_siblings).filter(
         (task) => task !== activeTask
     );
-    const deferredTasks = normalizeStringList(source.deferred_tasks).filter(
+    const deferredTasks = normalizeTaskList(source.deferred_tasks).filter(
         (task) => task !== activeTask && !nextTasks.includes(task)
     );
-    const doneRecent = normalizeStringList(source.done_recent)
+    const doneRecent = normalizeTaskList(source.done_recent)
         .filter((task) => task !== activeTask && !nextTasks.includes(task))
         .slice(-5);
-    const lastUserRequest = normalizeString(source.last_user_request);
+    const lastUserRequest = normalizeUserRequest(normalizeString(source.last_user_request));
     const lastUpdated = normalizeString(source.last_updated) || fallback.last_updated;
 
     return {
