@@ -28,8 +28,8 @@ import {
 } from "./tools/memory_working.js";
 
 import {
-    DEFAULT_ACTIVE_TASK,
     countWorkingMemoryTasks,
+    isIdleTask,
     loadWorkingMemoryState,
     paths,
     renderWorkingMemory,
@@ -46,6 +46,10 @@ export default function register(api: OpenClawPluginApi) {
             halfLifeDays?: number;
             archiveThreshold?: number;
             memoryMdMaxChars?: number;
+            outputCheckpointChars?: number;
+            outputCheckpointCooldownChars?: number;
+            outputCheckpointBoundarySlackChars?: number;
+            outputCheckpointMaxInterrupts?: number;
         }
         | undefined;
 
@@ -197,12 +201,12 @@ export default function register(api: OpenClawPluginApi) {
                 const workingState = loadWorkingMemoryState(workspace);
                 if (
                     workingState.last_user_request !== latestUserRequest ||
-                    workingState.active_task === DEFAULT_ACTIVE_TASK
+                    isIdleTask(workingState.active_task)
                 ) {
                     touchWorkingMemoryState(workspace, {
                         last_user_request: latestUserRequest,
                         active_task:
-                            workingState.active_task === DEFAULT_ACTIVE_TASK
+                            isIdleTask(workingState.active_task)
                                 ? latestUserRequest
                                 : workingState.active_task,
                     });

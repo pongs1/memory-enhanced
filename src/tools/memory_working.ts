@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import {
     DEFAULT_ACTIVE_TASK,
     appendScratchpad,
+    isIdleTask,
     loadWorkingMemoryState,
     nowISO,
     paths,
@@ -305,7 +306,7 @@ function completeActiveTask(
 ): WorkingMemoryState {
     const completed = state.active_task;
     const doneRecent =
-        completed && completed !== DEFAULT_ACTIVE_TASK
+        completed && !isIdleTask(completed)
             ? trimDoneRecent([...state.done_recent, completed])
             : state.done_recent;
 
@@ -351,7 +352,7 @@ function overflowQueuedTasks(workspace: string, state: WorkingMemoryState): stri
 function deferTask(workspace: string, state: WorkingMemoryState, requestedTask?: string): string {
     const target = requestedTask?.trim() || state.active_task;
 
-    if (!target || target === DEFAULT_ACTIVE_TASK) {
+    if (!target || isIdleTask(target)) {
         return "No active task to defer.";
     }
 
@@ -395,7 +396,7 @@ function reprioritizeTasks(
     const nextTasks = dedupeTasks(
         [
             ...extraNext,
-            ...(previousActive !== DEFAULT_ACTIVE_TASK && previousActive !== target ? [previousActive] : []),
+            ...(!isIdleTask(previousActive) && previousActive !== target ? [previousActive] : []),
             ...state.next_tasks.filter((task) => task !== target),
         ],
         target

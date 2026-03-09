@@ -65,6 +65,14 @@ export function nowISO(): string {
 }
 
 export const DEFAULT_ACTIVE_TASK = "Awaiting next user request";
+const LEGACY_IDLE_TASKS = new Set([
+    DEFAULT_ACTIVE_TASK.toLowerCase(),
+    "等待用户新指令",
+    "done (pending new goal)",
+    "none",
+    "initializing",
+    "refilling...",
+]);
 const WORKING_MEMORY_SCHEMA_VERSION = 2;
 
 /** Standard workspace paths. */
@@ -239,6 +247,11 @@ export function createDefaultWorkingMemoryState(): WorkingMemoryState {
     };
 }
 
+export function isIdleTask(task: string): boolean {
+    const normalized = normalizeString(task).toLowerCase();
+    return normalized === "" || LEGACY_IDLE_TASKS.has(normalized);
+}
+
 export function normalizeWorkingMemoryState(raw: unknown): WorkingMemoryState {
     const source = (raw ?? {}) as LegacyFocusStack;
     const fallback = createDefaultWorkingMemoryState();
@@ -339,8 +352,7 @@ export function touchWorkingMemoryState(
 }
 
 export function countWorkingMemoryTasks(state: WorkingMemoryState): number {
-    const hasActiveTask =
-        normalizeString(state.active_task) !== "" && state.active_task !== DEFAULT_ACTIVE_TASK;
+    const hasActiveTask = !isIdleTask(state.active_task);
     return (hasActiveTask ? 1 : 0) + state.next_tasks.length;
 }
 

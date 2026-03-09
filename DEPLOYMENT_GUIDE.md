@@ -48,6 +48,8 @@ Locate your global config file at `~/.openclaw/openclaw.json`. Merge the followi
 > [!IMPORTANT]
 > Change `/absolute/path/to/memory-enhanced` to the actual path where you cloned the repo.
 
+`outputCheckpoint*` controls the mid-stream self-audit watchdog. For coding-heavy sessions, the defaults above are a good starting point. Lower them if you want more aggressive anti-drift steering.
+
 ```jsonc
 {
   "plugins": {
@@ -59,7 +61,11 @@ Locate your global config file at `~/.openclaw/openclaw.json`. Merge the followi
         "enabled": true,
         "config": {
           "halfLifeDays": 30,         // Decay rate for events
-          "archiveThreshold": 0.2     // Score at which memories move to archive
+          "archiveThreshold": 0.2,    // Score at which memories move to archive
+          "outputCheckpointChars": 1600,
+          "outputCheckpointCooldownChars": 1000,
+          "outputCheckpointBoundarySlackChars": 320,
+          "outputCheckpointMaxInterrupts": 2
         }
       }
     }
