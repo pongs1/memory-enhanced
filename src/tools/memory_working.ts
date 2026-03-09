@@ -37,6 +37,37 @@ const LOW_SIGNAL_TASK_PATTERNS = [
     /^收到$/,
     /^好的?$/,
 ];
+const DECISION_SIGNAL_PATTERNS = [
+    /\bdecid(?:e|ed|ing|es)\b/i,
+    /\bdecision\b/i,
+    /\bprefer(?:ence|red|s)?\b/i,
+    /\bconstraint\b/i,
+    /\bpolicy\b/i,
+    /\brule\b/i,
+    /\bprioriti[sz]e\b/i,
+    /\bdefer(?:red)?\b/i,
+    /\bdrop(?:ped)?\b/i,
+    /\badopt(?:ed|ing)?\b/i,
+    /\bdeprecat(?:e|ed|ing)\b/i,
+    /\bmigrat(?:e|ed|ing)\b/i,
+    /\brollback\b/i,
+    /决定/,
+    /改为/,
+    /改成/,
+    /优先/,
+    /偏好/,
+    /约束/,
+    /规则/,
+    /采用/,
+    /弃用/,
+    /切换/,
+    /暂停/,
+    /延后/,
+    /保留/,
+    /不再/,
+    /以后都/,
+    /默认/,
+];
 
 const WorkingAction = Type.Union(
     [
@@ -318,7 +349,7 @@ function sanitizeTaskText(input?: string, maxChars = MAX_TASK_CHARS): string {
     if (/^(Task Ledger|Working Memory Rule|Latest User Request|Last User Request)$/i.test(normalized)) {
         return "";
     }
-    if (isLowSignalTaskTitle(normalized)) {
+    if (isLowSignalTaskTitle(normalized) && !hasDecisionSignal(normalized)) {
         return "";
     }
     return normalized;
@@ -347,6 +378,10 @@ function isLowSignalTaskTitle(task: string): boolean {
     return LOW_SIGNAL_TASK_PATTERNS.some((pattern) => pattern.test(task.trim()));
 }
 
+function hasDecisionSignal(task: string): boolean {
+    return DECISION_SIGNAL_PATTERNS.some((pattern) => pattern.test(task.trim()));
+}
+
 function trimDoneRecent(tasks: string[]): string[] {
     return tasks.slice(-MAX_DONE_RECENT);
 }
@@ -358,7 +393,9 @@ function completeActiveTask(
 ): WorkingMemoryState {
     const completed = state.active_task;
     const doneRecent =
-        completed && !isIdleTask(completed) && !isLowSignalTaskTitle(completed)
+        completed &&
+            !isIdleTask(completed) &&
+            (!isLowSignalTaskTitle(completed) || hasDecisionSignal(completed))
             ? trimDoneRecent([...state.done_recent, completed])
             : state.done_recent;
 

@@ -72,6 +72,37 @@ export default function register(api: OpenClawPluginApi) {
             .replace(/\s+/g, " ")
             .trim();
     };
+    const semanticSignalPatterns = [
+        /\bdecid(?:e|ed|ing|es)\b/i,
+        /\bdecision\b/i,
+        /\bprefer(?:ence|red|s)?\b/i,
+        /\bconstraint\b/i,
+        /\bpolicy\b/i,
+        /\brule\b/i,
+        /\bprioriti[sz]e\b/i,
+        /\bdefer(?:red)?\b/i,
+        /\bdrop(?:ped)?\b/i,
+        /\badopt(?:ed|ing)?\b/i,
+        /\bdeprecat(?:e|ed|ing)\b/i,
+        /\bmigrat(?:e|ed|ing)\b/i,
+        /\brollback\b/i,
+        /决定/,
+        /改为/,
+        /改成/,
+        /优先/,
+        /偏好/,
+        /约束/,
+        /规则/,
+        /采用/,
+        /弃用/,
+        /切换/,
+        /暂停/,
+        /延后/,
+        /保留/,
+        /不再/,
+        /以后都/,
+        /默认/,
+    ];
 
     const resolveIncomingUserRequest = (event: any, fallbackMessages?: any[]) => {
         const lastUserMsg = [...(fallbackMessages || [])].reverse().find((m: any) => m.role === "user");
@@ -294,15 +325,10 @@ export default function register(api: OpenClawPluginApi) {
 
         const userText = extractText(lastUser);
         const asstText = extractText(lastAssistant);
-        const combined = `${userText}\n${asstText}`.toLowerCase();
+        const combined = `${userText}\n${asstText}`;
 
         // Heuristics for auto-recording
-        const triggerKeywords = [
-            "decided", "preference", "remember", "prefer",
-            "决定", "偏好", "记住", "以后都", "不要", "喜欢"
-        ];
-
-        const shouldRecord = triggerKeywords.some(kw => combined.includes(kw));
+        const shouldRecord = semanticSignalPatterns.some((pattern) => pattern.test(combined));
 
         if (shouldRecord) {
             const recordContent = `User: ${userText.substring(0, 500)}\nAsst: ${asstText.substring(0, 500)}`;
@@ -311,8 +337,8 @@ export default function register(api: OpenClawPluginApi) {
                 await executeMemoryRecord("auto_hook", {
                     content: recordContent,
                     type: "insight",
-                    importance: 0.6,
-                    tags: ["auto-recorded"],
+                    importance: 0.7,
+                    tags: ["auto-recorded", "semantic-candidate"],
                     associations: []
                 }, ctx);
             } catch (e) {
