@@ -264,7 +264,9 @@ Those paths either operate only at queue boundaries or abort the run without res
 
 ### Minimal 3.1 Shape
 
-For a 3.1 fork, the bridge should look roughly like this:
+For a 3.1 fork, the bridge should look roughly like this.
+
+This section is only the architecture sketch. The exact 3.1-safe patch is in Section 7 below.
 
 ```typescript
 type PendingLiveInterrupt =
@@ -278,7 +280,7 @@ Inside `attempt.ts`, maintain one pending interrupt for the active attempt and e
 liveInterrupt: async (text, meta) => {
   pendingLiveInterrupt = { text, reason: meta?.reason };
   await activeSession.steer(text);
-  abortRun(false);
+  void activeSession.abort();
   return true;
 }
 ```
@@ -294,3 +296,199 @@ The key idea is:
 - `runs.ts` exposes global "abort / queue" primitives
 - `abort-cutoff.ts` and `/stop` already solve stale queued inbound work
 - but **plugin live interruption must be completed inside `attempt.ts`**, because only that layer can abort and then resume the same streaming attempt cleanly
+
+## 7. Minimal OpenClaw 3.1 `liveInterrupt(...)` Bridge
+
+If you are staying on OpenClaw 3.1, this is the smallest patch that turns the existing `wrap_stream_fn` hook into a real interrupt-and-resume bridge.
+
+This section assumes you already completed:
+
+- Section 1 (`PluginHookAgentContext.liveInterrupt`)
+- Section 2 (`runWrapStreamFn`)
+- Section 3 (base `wrap_stream_fn` wiring in `attempt.ts`)
+
+### What the patch must do
+
+When the plugin requests a live interrupt:
+
+1. Queue the checkpoint/recall text onto the active session via `activeSession.steer(...)`.
+2. Abort only the **current streaming pass**.
+3. Resume the **same attempt** immediately with `activeSession.agent.continue()`.
+4. Leave the outer attempt alive so `agent_end`, usage accounting, and final cleanup still behave normally.
+
+### Important: do **not** reuse `abortRun()`
+
+In OpenClaw 3.1, `abortRun()` sets the whole attempt to `aborted = true` and aborts the shared `runAbortController`. That is correct for `/stop`, external timeout, and queue interrupt mode. It is the wrong primitive for plugin checkpoint steering.
+
+For plugin-driven `liveInterrupt(...)`, you want to abort the active stream without killing the parent attempt.
+
+### A. Add attempt-local interrupt state
+
+In `src/agents/pi-embedded-runner/run/attempt.ts`, add the following locals **right before** the existing `if (hookRunner?.hasHooks("wrap_stream_fn")) {` block:
+
+```typescript
+      type PendingLiveInterrupt = { text: string; reason?: string } | null;
+
+      let pendingLiveInterrupt: PendingLiveInterrupt = null;
+      let liveInterruptResumeCount = 0;
+      const maxLiveInterruptResumes = 2;
+      let requestLiveInterrupt:
+        | ((text: string, meta?: { reason?: string }) => Promise<boolean>)
+        | undefined;
+```
+
+This solves the ordering problem in 3.1: the stream wrapper is registered before `abortRun()` and `abortable(...)` are defined, so the hook context needs a function reference that can be filled in later.
+
+### B. Replace `liveInterrupt: undefined` with a delegating callback
+
+In the `hookCtx` object from Section 3, replace the placeholder with:
+
+```typescript
+            liveInterrupt: async (text, meta) => {
+              if (!requestLiveInterrupt) {
+                return false;
+              }
+              return requestLiveInterrupt(text, meta);
+            },
+```
+
+This keeps the base patch safe on forks that have not finished the advanced bridge yet.
+
+### C. Define the real interrupt callback after `abortRun()` exists
+
+In `attempt.ts`, add this block **right after** the existing `abortable(...)` helper:
+
+```typescript
+      requestLiveInterrupt = async (text, meta) => {
+        const payload = text.trim();
+        if (!payload || pendingLiveInterrupt) {
+          return false;
+        }
+        if (timedOut || params.abortSignal?.aborted) {
+          return false;
+        }
+        if (!activeSession.isStreaming || activeSession.isCompacting) {
+          return false;
+        }
+
+        pendingLiveInterrupt = {
+          text: payload,
+          reason: meta?.reason,
+        };
+
+        await activeSession.steer(payload);
+
+        // Intentionally do NOT call abortRun().
+        // We only want to stop the current streaming pass, not mark the
+        // whole attempt as aborted.
+        void activeSession.abort();
+
+        return true;
+      };
+```
+
+Why this shape is correct on 3.1:
+
+- `activeSession.steer(...)` is a real queueing API.
+- `activeSession.abort()` aborts the current agent operation and waits for idle.
+- `activeSession.agent.continue()` can then consume queued steering messages on the next pass.
+- The shared attempt state stays alive, so usage, compaction wait, `llm_output`, and `agent_end` still run once at the real end of the attempt.
+
+### D. Replace the one-shot prompt call with a resume loop
+
+Inside the big `try { ... }` block where `imageResult.images.length > 0` currently decides between:
+
+- `await abortable(activeSession.prompt(...))`
+- `await abortable(activeSession.prompt(effectivePrompt))`
+
+replace that one-shot call with this loop:
+
+```typescript
+          let shouldResumeFromLiveInterrupt = false;
+
+          while (true) {
+            try {
+              if (shouldResumeFromLiveInterrupt) {
+                await abortable(activeSession.agent.continue());
+              } else if (imageResult.images.length > 0) {
+                await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+              } else {
+                await abortable(activeSession.prompt(effectivePrompt));
+              }
+
+              break;
+            } catch (err) {
+              const resumeFromLiveInterrupt =
+                pendingLiveInterrupt !== null && isRunnerAbortError(err);
+
+              if (resumeFromLiveInterrupt && liveInterruptResumeCount < maxLiveInterruptResumes) {
+                const interrupt = pendingLiveInterrupt;
+                pendingLiveInterrupt = null;
+                liveInterruptResumeCount += 1;
+                shouldResumeFromLiveInterrupt = true;
+
+                log.debug(
+                  `live interrupt resume: runId=${params.runId} sessionId=${params.sessionId} ` +
+                    `reason=${interrupt?.reason ?? "unknown"} count=${liveInterruptResumeCount}`,
+                );
+
+                continue;
+              }
+
+              promptError = err;
+              promptErrorSource = "prompt";
+              break;
+            }
+          }
+```
+
+This is the crucial 3.1 piece. Without this loop, `activeSession.steer(...) + activeSession.abort()` only stops the current generation. It does **not** resume the same attempt automatically.
+
+### E. Why `activeSession.agent.continue()` is the correct resume primitive
+
+On your 3.1 dependency stack:
+
+- `AgentSession.steer(...)` in `node_modules/@mariozechner/pi-coding-agent/dist/core/agent-session.js`
+  - queues the text into `_steeringMessages`
+  - forwards it to `this.agent.steer(...)`
+- `Agent.continue()` in `node_modules/@mariozechner/pi-agent-core/dist/agent.js`
+  - dequeues queued steering messages when the last message is an assistant message
+  - resumes `_runLoop(...)` with `skipInitialSteeringPoll: true`
+
+So the actual 3.1 resume chain is:
+
+`wrap_stream_fn` -> `ctx.liveInterrupt(...)` -> `activeSession.steer(...)` -> `activeSession.abort()` -> `activeSession.agent.continue()`
+
+### F. Expected behavior after patching
+
+After this bridge is installed:
+
+- long outputs can trigger a checkpoint without faking any custom stream event
+- the current generation aborts once
+- the same attempt resumes with the injected checkpoint text
+- final `agent_end` still runs once for the completed answer
+
+What should **not** happen anymore:
+
+- fake `type: "steer"` events
+- whole-attempt `aborted=true` just because a checkpoint fired
+- output watchdogs that log drift but never actually alter the generation
+
+### G. Quick verification on 3.1
+
+Use a small watchdog threshold for the first test:
+
+```jsonc
+"outputCheckpointChars": 500,
+"outputCheckpointCooldownChars": 300,
+"outputCheckpointMaxInterrupts": 1,
+"outputCheckpointDriftThreshold": 0.55
+```
+
+Then ask the agent for a deliberately long answer. A successful 3.1 bridge should show all of the following:
+
+1. The reply starts normally.
+2. The watchdog triggers once.
+3. A `live interrupt resume` debug line appears in OpenClaw logs.
+4. The answer continues without emitting any invalid custom stream event.
+5. The final attempt is **not** marked as globally aborted unless the user or timeout actually aborted it.

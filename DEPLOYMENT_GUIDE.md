@@ -36,8 +36,9 @@ pnpm install
 The **Subconscious Associative Recall (SAR)** requires intercepting the LLM's generative stream. 
 
 1.  Open [openclaw-patch-guide.md](./openclaw-patch-guide.md).
-2.  Follow the instructions to modify `pi-embedded-runner/src/run/attempt.ts` and `types.ts`.
-3.  **Why?** This enables the native `wrap_stream_fn` hook so the plugin can inspect live stream deltas. True mid-stream checkpoint/recovery additionally requires the optional `liveInterrupt(...)` bridge described in the patch guide.
+2.  Apply the base `wrap_stream_fn` patch first.
+3.  If you are on **OpenClaw 3.1**, also apply **Section 7** from the patch guide. That section adds the minimal `liveInterrupt(...)` bridge in `attempt.ts`.
+4.  **Why?** The base patch enables native live stream inspection. The 3.1 advanced bridge is what turns drift detection and associative recall into a real interrupt-and-resume path instead of a read-only watchdog.
 
 ---
 
@@ -49,6 +50,8 @@ Locate your global config file at `~/.openclaw/openclaw.json`. Merge the followi
 > Change `/absolute/path/to/memory-enhanced` to the actual path where you cloned the repo.
 
 `outputCheckpoint*` controls the long-output self-audit watchdog. These settings only produce live interruptions when your OpenClaw fork exposes the optional `liveInterrupt(...)` bridge from the patch guide. Without that bridge, the plugin will observe drift signals but will not fake unsupported stream events.
+
+If you are testing on OpenClaw 3.1 and checkpoint steering never changes the reply, the usual cause is simple: only the base `wrap_stream_fn` hook was installed, but Section 7 of [openclaw-patch-guide.md](./openclaw-patch-guide.md) was not.
 
 ```jsonc
 {

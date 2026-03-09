@@ -39,6 +39,8 @@ The ultimate solution for low LLM initiative. We bypass the LLM's "tool-calling 
 ### 4. Output Checkpoint Steering
 When your OpenClaw fork exposes the optional `liveInterrupt(...)` bridge from [openclaw-patch-guide.md](./openclaw-patch-guide.md), the plugin can interrupt long answers mid-generation and inject a hard self-audit checkpoint. This is designed for large coding tasks where the model may drift, over-explain, or keep following stale backlog after the user has changed priorities.
 
+For OpenClaw 3.1 specifically, use Section 7 of the patch guide. That section adds the minimal abort-and-resume bridge in `attempt.ts`; the base `wrap_stream_fn` hook alone is read-only.
+
 ---
 
 ## ⚡ Why avoid the old Instruction Scripts (SKILL.md)?

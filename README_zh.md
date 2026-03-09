@@ -41,6 +41,8 @@ $$Score_{new} = Score_{old} \cdot e^{-\frac{\ln 2}{30} \cdot Days}$$
 ### 4. 长输出检查点转向 (Output Checkpoint Steering)
 当你的 OpenClaw 分叉按 [openclaw-patch-guide.md](./openclaw-patch-guide.md) 暴露了可选的 `liveInterrupt(...)` 桥接后，插件就可以在流式生成中途插入一次强制自检，把“当前目标 / 当前任务 / 最新用户请求”重新压回上下文，防止模型在超大型任务中越写越偏。
 
+如果你当前用的是 OpenClaw 3.1，请直接看 patch guide 的第 7 节。只有基础 `wrap_stream_fn` 还只是“看流”，第 7 节补的是 `attempt.ts` 里的最小 abort-and-resume bridge。
+
 ---
 
 ## ⚡ 为什么选择插件而非 SKILL.md 指令？
