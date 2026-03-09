@@ -5,6 +5,7 @@ import {
     appendScratchpad,
     isIdleTask,
     loadWorkingMemoryState,
+    normalizeUserRequest,
     nowISO,
     paths,
     readFileOr,
@@ -16,6 +17,8 @@ import { executeMemoryRecord } from "./memory_record.js";
 
 const MAX_NEXT_TASKS = 5;
 const MAX_DONE_RECENT = 5;
+const MAX_TASK_CHARS = 120;
+const MAX_GOAL_CHARS = 400;
 
 const WorkingAction = Type.Union(
     [
@@ -85,32 +88,38 @@ export async function executeMemoryWorking(
             return { content: [{ type: "text" as const, text: renderStatus(state) }] };
 
         case "plan":
-            if (!params.goal || !params.focus || !params.goal.trim() || !params.focus.trim()) {
+            {
+                const sanitizedGoal = sanitizeGoalText(params.goal);
+                const sanitizedFocus = sanitizeTaskText(params.focus);
+                if (!sanitizedGoal || !sanitizedFocus) {
+                    return {
+                        content: [
+                            {
+                                type: "text" as const,
+                                text:
+                                    "Error: Action 'plan' requires a concise plain-text 'goal' and 'focus'. " +
+                                    "Do not pass timestamps, injected prompt blocks, or markdown labels.",
+                            },
+                        ],
+                    };
+                }
+
+                state = writeWorkingMemoryState(workspace, {
+                    ...state,
+                    project_goal: sanitizedGoal,
+                    context_path: sanitizeTaskList(params.path),
+                    active_task: sanitizedFocus,
+                    next_tasks: sanitizeTaskList(params.siblings),
+                    deferred_tasks:
+                        sanitizedGoal === state.project_goal ? state.deferred_tasks : [],
+                    done_recent: sanitizedGoal === state.project_goal ? state.done_recent : [],
+                    last_updated: nowISO(),
+                });
+
                 return {
-                    content: [
-                        {
-                            type: "text" as const,
-                            text: "Error: Action 'plan' requires 'goal' and 'focus'.",
-                        },
-                    ],
+                    content: [{ type: "text" as const, text: withPrefix("Task ledger reset.", state) }],
                 };
             }
-
-            state = writeWorkingMemoryState(workspace, {
-                ...state,
-                project_goal: params.goal,
-                context_path: sanitizeTaskList(params.path),
-                active_task: params.focus.trim(),
-                next_tasks: sanitizeTaskList(params.siblings),
-                deferred_tasks:
-                    params.goal.trim() === state.project_goal ? state.deferred_tasks : [],
-                done_recent: params.goal.trim() === state.project_goal ? state.done_recent : [],
-                last_updated: nowISO(),
-            });
-
-            return {
-                content: [{ type: "text" as const, text: withPrefix("Task ledger reset.", state) }],
-            };
 
         case "push":
             if (!params.siblings || params.siblings.length === 0) {
@@ -173,12 +182,14 @@ export async function executeMemoryWorking(
             };
 
         case "reprioritize":
-            if (!params.focus || !params.focus.trim()) {
+            if (!sanitizeTaskText(params.focus)) {
                 return {
                     content: [
                         {
                             type: "text" as const,
-                            text: "Error: Action 'reprioritize' requires 'focus'.",
+                            text:
+                                "Error: Action 'reprioritize' requires a concise plain-text 'focus'. " +
+                                "Do not pass timestamps, injected prompt blocks, or markdown labels.",
                         },
                     ],
                 };
@@ -276,9 +287,24 @@ function sanitizeTaskList(input?: string[]): string[] {
     if (!input) return [];
     return dedupeTasks(
         input
-            .map((entry) => entry.trim())
+            .map((entry) => sanitizeTaskText(entry))
             .filter(Boolean)
     );
+}
+
+function sanitizeTaskText(input?: string, maxChars = MAX_TASK_CHARS): string {
+    if (!input) return "";
+    const normalized = normalizeUserRequest(input, maxChars);
+    if (!normalized) return "";
+    if (/^(Task Ledger|Working Memory Rule|Latest User Request|Last User Request)$/i.test(normalized)) {
+        return "";
+    }
+    return normalized;
+}
+
+function sanitizeGoalText(input?: string): string {
+    if (!input) return "";
+    return normalizeUserRequest(input, MAX_GOAL_CHARS);
 }
 
 function dedupeTasks(tasks: string[], activeTask?: string): string[] {
@@ -311,7 +337,7 @@ function completeActiveTask(
             : state.done_recent;
 
     const queue = [...state.next_tasks];
-    const explicitNext = nextFocus?.trim();
+    const explicitNext = sanitizeTaskText(nextFocus);
 
     let activeTask = DEFAULT_ACTIVE_TASK;
     if (explicitNext) {
@@ -350,7 +376,7 @@ function overflowQueuedTasks(workspace: string, state: WorkingMemoryState): stri
 }
 
 function deferTask(workspace: string, state: WorkingMemoryState, requestedTask?: string): string {
-    const target = requestedTask?.trim() || state.active_task;
+    const target = sanitizeTaskText(requestedTask) || state.active_task;
 
     if (!target || isIdleTask(target)) {
         return "No active task to defer.";
@@ -389,7 +415,7 @@ function reprioritizeTasks(
     focus: string,
     siblings?: string[]
 ): WorkingMemoryState {
-    const target = focus.trim();
+    const target = sanitizeTaskText(focus);
     const previousActive = state.active_task;
     const extraNext = sanitizeTaskList(siblings);
 

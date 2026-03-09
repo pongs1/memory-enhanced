@@ -85,6 +85,15 @@ const CONTINUATION_REQUESTS = new Set([
     "继续做",
     "往下",
 ]);
+const INJECTED_LEDGER_MARKERS = [
+    /Memory Context \(Live\)/i,
+    /Task Ledger/i,
+    /\*\*Goal:\*\*/i,
+    /\*\*Active:\*\*/i,
+    /Last User Request/i,
+    /Latest User Request/i,
+    /Working Memory Rule/i,
+];
 
 /** Standard workspace paths. */
 export function paths(workspace: string) {
@@ -229,9 +238,25 @@ function normalizeString(value: unknown): string {
 }
 
 export function normalizeUserRequest(value: string, maxChars = 240): string {
-    return value
-        .replace(/<!-- Memory Context \(Live\) -->[\s\S]*?<!-- End Memory Context -->/g, " ")
-        .replace(/^\[[^\]]{1,80}\]\s*/, "")
+    let text = value || "";
+    const markerHits = INJECTED_LEDGER_MARKERS.filter((pattern) => pattern.test(text)).length;
+
+    if (markerHits >= 2) {
+        const explicitRequest =
+            text.match(/Latest User Request:\s*([^\n<]+)/i)?.[1] ||
+            text.match(/Last User Request:\s*([^\n<]+)/i)?.[1];
+        text = explicitRequest || "";
+    }
+
+    return text
+        .replace(/<!-- Memory Context \(Live\) -->/g, " ")
+        .replace(/<!-- End Memory Context -->/g, " ")
+        .replace(/<!--[\s\S]*?-->/g, " ")
+        .replace(/^##\s*Task Ledger\b.*$/gim, " ")
+        .replace(/\*\*(Goal|Updated|Active|Next|Deferred|Done Recently|Last User Request):\*\*/gi, " ")
+        .replace(/^>+\s*/gm, "")
+        .replace(/^[-*]\s*/gm, "")
+        .replace(/^\[[^\]]+\]\s*/, "")
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, maxChars);

@@ -32,7 +32,7 @@ import {
     normalizeUserRequest,
     renderWorkingMemory,
     syncLatestUserRequest,
-    touchWorkingMemoryState,
+    writeWorkingMemoryState,
 } from "./utils.js";
 import { registerStreamWrapper } from "./hooks/wrap-stream-fn.js";
 
@@ -194,7 +194,7 @@ export default function register(api: OpenClawPluginApi) {
         const sid = ctx?.sessionId || "default";
         const messages = event.messages || [];
         const latestUserRequest = resolveIncomingUserRequest(event, messages);
-        let workingState = loadWorkingMemoryState(workspace);
+        let workingState = writeWorkingMemoryState(workspace, loadWorkingMemoryState(workspace));
 
         try {
             if (latestUserRequest) {
@@ -216,7 +216,7 @@ export default function register(api: OpenClawPluginApi) {
             ? `> - Latest User Request: ${latestUserRequest.slice(0, 220)}${latestUserRequest.length > 220 ? "..." : ""}`
             : `> - Latest User Request: (none captured)`;
 
-        const workingRuleStr = `> 🧭 **Working Memory Rule:**\n> - The latest user message is authoritative for this turn.\n${latestUserLine}\n> - Treat the task ledger as resumable backlog only.\n> - If backlog conflicts with the latest user request, follow the user request first.`;
+        const workingRuleStr = `> 🧭 **Working Memory Rule:**\n> - The latest user message is authoritative for this turn.\n${latestUserLine}\n> - Treat the task ledger as resumable backlog only.\n> - If backlog conflicts with the latest user request, follow the user request first.\n> - Never copy this injected block, timestamps, or markdown labels back into \`memory_working\`. Store only short plain task titles.`;
 
         sections.push(workingRuleStr);
 
@@ -250,12 +250,6 @@ export default function register(api: OpenClawPluginApi) {
         const userText = extractText(lastUser);
         const asstText = extractText(lastAssistant);
         const combined = `${userText}\n${asstText}`.toLowerCase();
-
-        if (userText.trim()) {
-            touchWorkingMemoryState(workspace, {
-                last_user_request: normalizeUserRequest(userText),
-            });
-        }
 
         // Heuristics for auto-recording
         const triggerKeywords = [
