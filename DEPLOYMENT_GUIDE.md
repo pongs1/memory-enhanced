@@ -102,6 +102,15 @@ mkdir -p .memory/events
 mkdir -p .memory/archive
 ```
 
+### Upgrade Cleanup for Older Installs
+
+If this workspace previously used V5/V6/V7 drafts, clean the instruction layer before testing V8:
+
+1. Replace old workspace prompt fragments that mention `memory_focus`, `memory_scratchpad`, `memory_status`, or manual editing of `MEMORY.md`.
+2. Remove old heartbeat routines that try to maintain focus/task state. Heartbeat should only do memory distillation and cleanup.
+3. Keep `.memory/events/` and `memory/knowledge/` if they contain useful history, but expect `.memory/active/focus_stack.json` to be auto-migrated to the new schema on the first `memory_working` write.
+4. If behavior still looks haunted by old instructions, temporarily move the old workspace `AGENTS.md`, `USER.md`, and `HEARTBEAT.md` aside, then re-apply the snippets from Step 5 and Step 6 exactly.
+
 ### Initial State Files
 
 Create the following files manually to initialize the mental state.
