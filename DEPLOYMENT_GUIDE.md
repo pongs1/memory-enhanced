@@ -120,10 +120,14 @@ Create the following files manually to initialize the mental state.
 #### B. `.memory/active/focus_stack.json`
 ```json
 {
+  "schema_version": 2,
   "project_goal": "Initialize Memory System",
-  "current_path": [],
-  "current_focus": "System Verification",
-  "pending_siblings": [],
+  "context_path": ["deployment"],
+  "active_task": "System Verification",
+  "next_tasks": ["Record first preference", "Run first consolidation"],
+  "deferred_tasks": [],
+  "done_recent": [],
+  "last_user_request": "",
   "last_updated": ""
 }
 ```
@@ -142,13 +146,14 @@ Find the `## Memory` section and replace it entirely:
 
 You possess a 4-layer memory system. **DO NOT manually edit text files in the memory/ directory.** Always use your cognitive tools.
 
-- **To manage tasks:** Use `memory_working`. The system maintains a 7-item focus stack.
+- **To manage tasks:** Use `memory_working`. It maintains a passive task ledger (`Goal / Active / Next / Deferred / Done Recently`) that is injected every turn.
+- **Priority rule:** The latest user request is always authoritative. Stored tasks are resumable backlog, not hard commands.
 - **To record insights:** Use `memory_record`. This triggers dual-write episodic encoding.
 - **To explore associations:** Use `memory_explore` when you need to follow semantic "linkages".
 - **To perform maintenance:** Use `memory_consolidate`. This applies decay to old events and regenerates your memory map.
 
-### 🧠 MEMORY.md - Your Long-Term Gateway
-- **DO NOT edit MEMORY.md manually.** It is an auto-generated index maintained by `memory_consolidate`.
+### 🧠 MEMORY_INDEX.md - Your Long-Term Gateway
+- **DO NOT edit MEMORY_INDEX.md manually.** It is an auto-generated index maintained by `memory_consolidate`.
 - To update knowledge, update files in `memory/knowledge/` and run consolidation.
 ```
 
@@ -173,7 +178,7 @@ Add this to `$WORKSPACE/HEARTBEAT.md` to ensure the agent cleans up while idle:
 ```markdown
 # HEARTBEAT.md
 - **Memory Check**: 
-  1. Run `memory_status` (or check telemetry in system prompt).
+  1. Check the telemetry in the system prompt or inspect `.memory/events/*.jsonl`.
   2. If unconsolidated events > 3: Distill knowledge to `memory/knowledge/*.md` then run `memory_consolidate scope="session"`.
 ```
 
@@ -198,9 +203,9 @@ Add a daily cron job to `openclaw.json` for deep archiving:
 
 Restart OpenClaw: `openclaw gateway restart`. Start a session and run this sequence:
 
-1.  **Status**: `"Run memory_working action='status'"` → Should show the initial focus from Step 4.
+1.  **Status**: `"Run memory_working action='status'"` → Should show the passive task ledger from Step 4.
 2.  **Episodic Check**: `"Run memory_record content='User likes dark mode' type='preference'"` → Check if `memory/2026-XX-XX.md` is updated.
-3.  **System 1 Warmup**: Mention keywords from your recorded preference. Observe logs for `[Scanner] Ignition: User likes dark mode`.
-4.  **Consolidation Check**: `"Run memory_consolidate scope='session'"` → Check if `MEMORY.md` is regenerated.
+3.  **Reprioritization Check**: `"Run memory_working action='reprioritize' focus='Handle a new urgent request'"` → The new active task should move to the top and the previous task should fall back into `Next`.
+4.  **Consolidation Check**: `"Run memory_consolidate scope='session'"` → Check if `MEMORY_INDEX.md` is regenerated.
 
 **Congratulations! Your Agent now has a functional, evolving mind.**

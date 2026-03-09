@@ -54,7 +54,7 @@ $$Score_{new} = Score_{old} \cdot e^{-\frac{\ln 2}{30} \cdot Days}$$
 ## 🛠️ 工具箱概览
 
 - **`memory_record`**: 编码情节事件。触发双写逻辑（结构化 JSONL + 可搜索 MD）。
-- **`memory_working`**: 管理任务焦点栈。强制执行 7 槽位的认知上限。
+- **`memory_working`**: 管理被动式工作记忆账本。核心结构是 `目标 / 当前任务 / 下一批任务 / 延后任务 / 最近完成`，并支持 `reprioritize` 与 `defer`。
 - **`memory_consolidate`**: “深度睡眠”整理器。应用衰减、归档旧项，并通过离线 LLM 批量标注语义图谱。
 - **`memory_explore`**: 直接图谱遍历。沿着“轴突”寻找关联知识。
 

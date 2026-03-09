@@ -45,8 +45,8 @@ interface ConsolidationReport {
     unconsolidated: number;
     decayed: number;
     archived: number;
-    memoryMdChars: number;
-    memoryMdRegenerated: boolean;
+    memoryIndexChars: number;
+    memoryIndexRegenerated: boolean;
     semanticCorpusEntries: number;
     associativeGraphNodes: number;
     associativeGraphEdges: number;
@@ -345,7 +345,7 @@ function buildSemanticCorpus(knowledgeDir: string): SemanticCorpusEntry[] {
         const content = readFileOr(path.join(knowledgeDir, file));
 
         const headers = content.match(/^#+\s+(.*)$/gm) || [];
-        const titleLine = headers.length > 0 ? headers[0].replace(/^#\s*/, "") : file.replace(".md", "");
+        const titleLine = headers[0]?.replace(/^#\s*/, "") || file.replace(".md", "");
 
         // Extract a crude summary (first non-header chunk of text)
         let summary = "";

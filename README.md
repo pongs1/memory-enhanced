@@ -60,9 +60,9 @@ The ultimate solution for low LLM initiative. We bypass the LLM's "tool-calling 
 ## 📜 Task Management Philosophy (ADaPT)
 
 This project strictly follows the **ADaPT (Action Development and Project Tracking)** framework:
-1.  **Flattening**: No deep folder trees. Focus only on the 7 most critical next steps.
-2.  **Pressure Valve**: If more than 7 tasks pile up, old ones "overflow" to the scratchpad, forcing brain decompression.
-3.  **Reliability Check**: Every session start forces a `memory_working status` check to recover state.
+1.  **Passive Ledger**: Working memory is always injected as a small task ledger (`Goal / Active / Next / Deferred / Done Recently`). The model does not need to "remember to check it."
+2.  **User-First Priority**: The latest user request always outranks the stored ledger. Old tasks are resumable backlog, not marching orders.
+3.  **Reorder, Don't Drift**: Use `memory_working reprioritize`, `complete`, and `defer` to keep long projects moving without letting stale tasks hijack a new turn.
 
 ---
 

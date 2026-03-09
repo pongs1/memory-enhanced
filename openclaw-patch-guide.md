@@ -126,7 +126,7 @@ Add standard exports from `./types.js` to the import list and the re-export list
         try {
           const wrapEvent = { streamFn: activeSession.agent.streamFn };
           const hookCtx = {
-            agentId: hookAgentId,
+            agentId: sessionAgentId,
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
             workspaceDir: params.workspaceDir,

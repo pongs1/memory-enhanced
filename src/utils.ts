@@ -64,6 +64,9 @@ export function nowISO(): string {
     return new Date().toISOString();
 }
 
+export const DEFAULT_ACTIVE_TASK = "Awaiting next user request";
+const WORKING_MEMORY_SCHEMA_VERSION = 2;
+
 /** Standard workspace paths. */
 export function paths(workspace: string) {
     return {
@@ -175,12 +178,170 @@ export interface MemoryEvent {
 }
 
 /** Focus stack structure. */
-export interface FocusStack {
+export interface WorkingMemoryState {
+    schema_version: number;
     project_goal: string;
-    current_path: string[];
-    current_focus: string;
-    pending_siblings: string[];
+    context_path: string[];
+    active_task: string;
+    next_tasks: string[];
+    deferred_tasks: string[];
+    done_recent: string[];
+    last_user_request: string;
     last_updated: string;
+}
+
+interface LegacyFocusStack {
+    project_goal?: string;
+    current_path?: unknown;
+    current_focus?: unknown;
+    pending_siblings?: unknown;
+    last_updated?: unknown;
+    context_path?: unknown;
+    active_task?: unknown;
+    next_tasks?: unknown;
+    deferred_tasks?: unknown;
+    done_recent?: unknown;
+    last_user_request?: unknown;
+    schema_version?: unknown;
+}
+
+function normalizeString(value: unknown): string {
+    return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeStringList(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+
+    const seen = new Set<string>();
+    const items: string[] = [];
+
+    for (const entry of value) {
+        const text = normalizeString(entry);
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+        items.push(text);
+    }
+
+    return items;
+}
+
+export function createDefaultWorkingMemoryState(): WorkingMemoryState {
+    return {
+        schema_version: WORKING_MEMORY_SCHEMA_VERSION,
+        project_goal: "Not set",
+        context_path: [],
+        active_task: DEFAULT_ACTIVE_TASK,
+        next_tasks: [],
+        deferred_tasks: [],
+        done_recent: [],
+        last_user_request: "",
+        last_updated: nowISO(),
+    };
+}
+
+export function normalizeWorkingMemoryState(raw: unknown): WorkingMemoryState {
+    const source = (raw ?? {}) as LegacyFocusStack;
+    const fallback = createDefaultWorkingMemoryState();
+    const projectGoal = normalizeString(source.project_goal) || fallback.project_goal;
+    const contextPath = normalizeStringList(source.context_path ?? source.current_path);
+    const activeTask =
+        normalizeString(source.active_task ?? source.current_focus) || DEFAULT_ACTIVE_TASK;
+    const nextTasks = normalizeStringList(source.next_tasks ?? source.pending_siblings).filter(
+        (task) => task !== activeTask
+    );
+    const deferredTasks = normalizeStringList(source.deferred_tasks).filter(
+        (task) => task !== activeTask && !nextTasks.includes(task)
+    );
+    const doneRecent = normalizeStringList(source.done_recent)
+        .filter((task) => task !== activeTask && !nextTasks.includes(task))
+        .slice(-5);
+    const lastUserRequest = normalizeString(source.last_user_request);
+    const lastUpdated = normalizeString(source.last_updated) || fallback.last_updated;
+
+    return {
+        schema_version: WORKING_MEMORY_SCHEMA_VERSION,
+        project_goal: projectGoal,
+        context_path: contextPath,
+        active_task: activeTask,
+        next_tasks: nextTasks,
+        deferred_tasks: deferredTasks,
+        done_recent: doneRecent,
+        last_user_request: lastUserRequest,
+        last_updated: lastUpdated,
+    };
+}
+
+export function loadWorkingMemoryState(workspace: string): WorkingMemoryState {
+    const p = paths(workspace);
+    return normalizeWorkingMemoryState(readJson(p.focusStack, createDefaultWorkingMemoryState()));
+}
+
+export function renderWorkingMemory(state: WorkingMemoryState): string {
+    const lines = [
+        `**Goal:** ${state.project_goal}`,
+        `**Updated:** ${state.last_updated}`,
+    ];
+
+    if (state.context_path.length > 0) {
+        lines.push(`**Context:** ${state.context_path.join(" / ")}`);
+    }
+
+    lines.push(`**Active:** ${state.active_task}`);
+
+    if (state.next_tasks.length > 0) {
+        lines.push("", "**Next:**");
+        state.next_tasks.slice(0, 5).forEach((task) => lines.push(`- ${task}`));
+        if (state.next_tasks.length > 5) {
+            lines.push(`- ... (${state.next_tasks.length - 5} more queued)`);
+        }
+    }
+
+    if (state.deferred_tasks.length > 0) {
+        lines.push("", `**Deferred:** ${state.deferred_tasks.length} task(s) parked`);
+    }
+
+    if (state.done_recent.length > 0) {
+        lines.push("", "**Done Recently:**");
+        state.done_recent
+            .slice(-3)
+            .reverse()
+            .forEach((task) => lines.push(`- ${task}`));
+    }
+
+    if (state.last_user_request) {
+        lines.push("", `**Last User Request:** ${state.last_user_request}`);
+    }
+
+    return lines.join("\n");
+}
+
+export function writeWorkingMemoryState(workspace: string, state: WorkingMemoryState): WorkingMemoryState {
+    const p = paths(workspace);
+    const normalized = normalizeWorkingMemoryState(state);
+
+    ensureDir(p.activeDir);
+    writeJson(p.focusStack, normalized);
+    fs.writeFileSync(p.focusStackMd, renderWorkingMemory(normalized) + "\n", "utf-8");
+
+    return normalized;
+}
+
+export function touchWorkingMemoryState(
+    workspace: string,
+    patch: Partial<WorkingMemoryState> = {}
+): WorkingMemoryState {
+    const current = loadWorkingMemoryState(workspace);
+    return writeWorkingMemoryState(workspace, {
+        ...current,
+        ...patch,
+        last_updated: patch.last_updated ?? nowISO(),
+    });
+}
+
+export function countWorkingMemoryTasks(state: WorkingMemoryState): number {
+    const hasActiveTask =
+        normalizeString(state.active_task) !== "" && state.active_task !== DEFAULT_ACTIVE_TASK;
+    return (hasActiveTask ? 1 : 0) + state.next_tasks.length;
 }
 
 /** Append a note to a specific section in scratchpad.md. */
@@ -190,7 +351,10 @@ export function appendScratchpad(workspace: string, section: string, content: st
     const sectionHeader = `## ${section}`;
 
     let newContent = "";
-    const formattedContent = content.includes("\\n") ? content.replace(/\\n/g, "\\n  ") : content;
+    const formattedContent = content
+        .split("\n")
+        .map((line, index) => (index === 0 ? line : `  ${line}`))
+        .join("\n");
     if (existing.includes(sectionHeader)) {
         newContent = existing.replace(sectionHeader, `${sectionHeader}\n- [${nowTime()}] ${formattedContent}`);
     } else {

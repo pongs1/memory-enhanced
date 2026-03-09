@@ -8,8 +8,7 @@ import {
     nextEventSeq,
     appendLine,
     ensureDir,
-    readJson,
-    writeJson,
+    touchWorkingMemoryState,
     type MemoryEvent,
 } from "../utils.js";
 
@@ -87,22 +86,8 @@ export async function executeMemoryRecord(
     ensureDir(p.eventsDir);
     appendLine(jsonlPath, JSON.stringify(event));
 
-    // Update active time in focus_stack.json
-    const focusStack = readJson<{
-        project_goal?: string;
-        current_path?: string[];
-        current_focus?: string;
-        pending_siblings?: string[];
-        last_updated?: string;
-    }>(p.focusStack, {
-        project_goal: "Checking system...",
-        current_path: [],
-        current_focus: "Initializing",
-        pending_siblings: [],
-        last_updated: "",
-    });
-    focusStack.last_updated = nowISO();
-    writeJson(p.focusStack, focusStack);
+    // Keep the working-memory ledger warm without desynchronizing the MD frontend.
+    touchWorkingMemoryState(workspace, { last_updated: nowISO() });
 
     // --- Write MD (searchable summary, memory/YYYY-MM-DD.md) ---
     const assocStr =

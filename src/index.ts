@@ -4,8 +4,8 @@
  * Registers 4 agent tools:
  *   - memory_record:      Write structured events (dual-format JSONL + MD)
  *   - memory_explore:     Traverse association chains
- *   - memory_consolidate: Decay, archive, MEMORY.md regeneration
- *   - memory_working:      ADaPT Focus Stack & Scratchpad
+ *   - memory_consolidate: Decay, archive, MEMORY_INDEX.md regeneration
+ *   - memory_working:     Passive working-memory ledger & scratchpad
  *
  * These complement (not replace) the built-in memory_search and memory_get tools.
  */
@@ -23,11 +23,17 @@ import {
     executeMemoryConsolidate,
 } from "./tools/memory_consolidate.js";
 import {
-    MemoryWorkingParams,
     executeMemoryWorking,
+    MemoryWorkingParams,
 } from "./tools/memory_working.js";
 
-import { paths, readJson, readFileOr } from "./utils.js";
+import {
+    countWorkingMemoryTasks,
+    loadWorkingMemoryState,
+    paths,
+    renderWorkingMemory,
+    touchWorkingMemoryState,
+} from "./utils.js";
 import { registerStreamWrapper } from "./hooks/wrap-stream-fn.js";
 
 // @ts-ignore
@@ -41,6 +47,15 @@ export default function register(api: OpenClawPluginApi) {
             memoryMdMaxChars?: number;
         }
         | undefined;
+
+    const extractText = (msg: any) => {
+        if (!msg) return "";
+        if (typeof msg.content === "string") return msg.content;
+        if (Array.isArray(msg.content)) {
+            return msg.content.map((c: any) => c.text || "").join("\n");
+        }
+        return "";
+    };
 
     // --- memory_record ---
     api.registerTool({
@@ -73,7 +88,7 @@ export default function register(api: OpenClawPluginApi) {
         name: "memory_consolidate",
         description:
             "Run structural consolidation: apply decay to old events, archive low-score " +
-            "entries, and regenerate MEMORY.md from knowledge files. This handles " +
+            "entries, and regenerate MEMORY_INDEX.md from knowledge files. This handles " +
             "mechanical tasks at zero token cost. NOTE: knowledge *distillation* " +
             "(extracting knowledge from events) still requires you to read the events " +
             "and write to memory/knowledge/*.md before calling this tool.",
@@ -86,13 +101,11 @@ export default function register(api: OpenClawPluginApi) {
     api.registerTool({
         name: "memory_working",
         description:
-            "Manage the ADaPT focus stack and scratchpad (working memory). " +
-            "Use 'plan' to set goal/path/focus/siblings. " +
-            "Use 'complete' to finish a task and auto-record insights. " +
-            "Use 'push' to add pending tasks. " +
-            "Use 'status' to view the entire stack queue. " +
-            "Automatically enforces a 7-chunk limit. Use 'overflow' to move excess to scratchpad.md. " +
-            "Use 'scratchpad_append' to log notes. Use 'scratchpad_refill' to bring overflow back.",
+            "Manage the passive working-memory ledger and scratchpad. " +
+            "The ledger tracks goal, active task, queued next tasks, deferred tasks, and recently completed work. " +
+            "Use 'plan' to reset the ledger, 'reprioritize' to move a new task to the top, " +
+            "'complete' to finish the active task, 'defer' to park a task, and 'push' to queue more work. " +
+            "Use 'scratchpad_append' for rough notes and 'scratchpad_refill' to recover parked tasks.",
         parameters: MemoryWorkingParams,
         execute: executeMemoryWorking,
     });
@@ -124,20 +137,19 @@ export default function register(api: OpenClawPluginApi) {
         const sections: string[] = [];
         const sid = ctx?.sessionId || "default";
 
-        // L1: Active Focus (MD Frontend) always injected live!
+        // L1: Passive working-memory ledger, always injected from source-of-truth JSON.
         try {
-            const fs = await import("node:fs");
-            if (fs.existsSync(p.focusStackMd)) {
-                const focusMd = fs.readFileSync(p.focusStackMd, "utf-8").trim();
-                if (focusMd) {
-                    sections.push(`## 🎯 Active Focus\n${focusMd}`);
-                }
+            const workingState = loadWorkingMemoryState(workspace);
+            const ledgerMd = renderWorkingMemory(workingState).trim();
+            if (ledgerMd) {
+                sections.push(`## Task Ledger\n${ledgerMd}`);
             }
         } catch (e) { }
 
         // --- Telemetry Calculation (Zero LLM Token Cost) ---
         let unconsolidatedCount = 0;
-        let stackUsed = 0;
+        let trackedTasks = 0;
+        let deferredTasks = 0;
         try {
             const fs = await import("node:fs");
             const path = await import("node:path");
@@ -160,18 +172,24 @@ export default function register(api: OpenClawPluginApi) {
                 }
             }
 
-            // Stack usage
-            if (fs.existsSync(p.focusStack)) {
-                const stack = JSON.parse(fs.readFileSync(p.focusStack, "utf-8"));
-                stackUsed = (stack.current_path?.length || 0) + 1 + (stack.pending_siblings?.length || 0);
-            }
+            const workingState = loadWorkingMemoryState(workspace);
+            trackedTasks = countWorkingMemoryTasks(workingState);
+            deferredTasks = workingState.deferred_tasks.length;
         } catch (e) { }
 
         const messages = event.messages || [];
         const isNewSession = messages.filter((m: any) => m.role === "user").length <= 1 && messages.filter((m: any) => m.role === "assistant").length === 0;
+        const lastUserMsg = [...messages].reverse().find((m: any) => m.role === "user");
+        const lastUserText = extractText(lastUserMsg).replace(/\s+/g, " ").trim();
+        const latestUserLine = lastUserText
+            ? `> - Latest User Request: ${lastUserText.slice(0, 220)}${lastUserText.length > 220 ? "..." : ""}`
+            : `> - Latest User Request: (none captured)`;
 
         const memoryIndexStr = `> 📁 **Available Memory Index (Partial):**\n> - \`memory/knowledge/user-prefs.md\` (User preferences & coding style)\n> - \`memory/knowledge/architecture.md\` (System design decisions)\n> - \`memory/YYYY-MM-DD.md\` (Recent historical events)`;
-        const telemetryStr = `> 📊 **System Health Telemetry:**\n> - Unconsolidated Events: ${unconsolidatedCount} (If > 3, consider calling \`memory_consolidate\`)\n> - Active Focus Stack: ${stackUsed}/7 slots filled`;
+        const telemetryStr = `> 📊 **System Health Telemetry:**\n> - Unconsolidated Events: ${unconsolidatedCount} (If > 3, consider calling \`memory_consolidate\`)\n> - Working Ledger: ${trackedTasks} active/next task(s), ${deferredTasks} deferred`;
+        const workingRuleStr = `> 🧭 **Working Memory Rule:**\n> - The latest user message is authoritative for this turn.\n${latestUserLine}\n> - Treat the task ledger as resumable backlog only. If it conflicts with the latest user request, serve the user request first and update the ledger afterward.`;
+
+        sections.push(workingRuleStr);
 
         if (isNewSession) {
             sections.push(`> [SYSTEM NOTIFICATION: COGNITIVE WAKE-UP]\n> You are waking up to a new session or beginning a complex task. Before proceeding, perform an explicit Context Check:\n> \n> 1. Are you aware of the user's specific definitions, rules, or long-term preferences?\n> 2. Do you have the historical architecture or constraints for the current project?\n>\n${telemetryStr}\n>\n${memoryIndexStr}\n>\n> ⚡ **MANDATORY DIRECTIVE**:\n> IF you lack the necessary context to fulfill the user's request flawlessly, you MUST use the \`read\` or \`memory_explore\` tool to fetch the exact file contents from the index above. IF you already have the context, proceed without reading.`);
@@ -179,7 +197,7 @@ export default function register(api: OpenClawPluginApi) {
             // Cognitive Pulse Injection
             const ticks = sessionTickers.get(sid) || 0;
             if (ticks >= 5) {
-                sections.push(`> ⚠️ **[SYSTEM INTERRUPT: COGNITIVE OVERLOAD DETECTED]**\n> You have executed ${ticks} consecutive steps. Your operating context may be saturated, or you may be suffering from task tunnel vision.\n>\n${telemetryStr}\n>\n${memoryIndexStr}\n>\n> ⚡ **REQUIRED ACTION**: \n> 1. Does your current blocker match anything in the long-term index? If so, evaluate if you need to call \`read\` or \`memory_explore\`.\n> 2. You MUST update your \`memory_working\` stack to reflect your current stage.\n> 3. You MUST save your intermediate findings via \`memory_record\` before resuming the task.`);
+                sections.push(`> ⚠️ **[SYSTEM INTERRUPT: COGNITIVE OVERLOAD DETECTED]**\n> You have executed ${ticks} consecutive steps. Your operating context may be saturated, or you may be suffering from task tunnel vision.\n>\n${telemetryStr}\n>\n${memoryIndexStr}\n>\n> ⚡ **REQUIRED ACTION**: \n> 1. Does your current blocker match anything in the long-term index? If so, evaluate if you need to call \`read\` or \`memory_explore\`.\n> 2. You MUST update your \`memory_working\` ledger to reflect your current stage.\n> 3. You MUST save your intermediate findings via \`memory_record\` before resuming the task.`);
                 sessionTickers.set(sid, 0);
             }
         }
@@ -203,18 +221,15 @@ export default function register(api: OpenClawPluginApi) {
 
         if (!lastUser && !lastAssistant) return;
 
-        const extractText = (msg: any) => {
-            if (!msg) return "";
-            if (typeof msg.content === "string") return msg.content;
-            if (Array.isArray(msg.content)) {
-                return msg.content.map((c: any) => c.text || "").join("\n");
-            }
-            return "";
-        };
-
         const userText = extractText(lastUser);
         const asstText = extractText(lastAssistant);
         const combined = `${userText}\n${asstText}`.toLowerCase();
+
+        if (userText.trim()) {
+            touchWorkingMemoryState(workspace, {
+                last_user_request: userText.replace(/\s+/g, " ").trim().slice(0, 240),
+            });
+        }
 
         // Heuristics for auto-recording
         const triggerKeywords = [
