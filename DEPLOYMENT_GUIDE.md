@@ -37,7 +37,7 @@ The **Subconscious Associative Recall (SAR)** requires intercepting the LLM's ge
 
 1.  Open [openclaw-patch-guide.md](./openclaw-patch-guide.md).
 2.  Follow the instructions to modify `pi-embedded-runner/src/run/attempt.ts` and `types.ts`.
-3.  **Why?** This enables the native `wrap_stream_fn` hook, allowing the plugin to inject memories *during* the generation process at zero token cost.
+3.  **Why?** This enables the native `wrap_stream_fn` hook so the plugin can inspect live stream deltas. True mid-stream checkpoint/recovery additionally requires the optional `liveInterrupt(...)` bridge described in the patch guide.
 
 ---
 
@@ -48,7 +48,7 @@ Locate your global config file at `~/.openclaw/openclaw.json`. Merge the followi
 > [!IMPORTANT]
 > Change `/absolute/path/to/memory-enhanced` to the actual path where you cloned the repo.
 
-`outputCheckpoint*` controls the mid-stream self-audit watchdog. For coding-heavy sessions, the defaults above are a good starting point. Lower them if you want more aggressive anti-drift steering.
+`outputCheckpoint*` controls the long-output self-audit watchdog. These settings only produce live interruptions when your OpenClaw fork exposes the optional `liveInterrupt(...)` bridge from the patch guide. Without that bridge, the plugin will observe drift signals but will not fake unsupported stream events.
 
 ```jsonc
 {
@@ -65,7 +65,9 @@ Locate your global config file at `~/.openclaw/openclaw.json`. Merge the followi
           "outputCheckpointChars": 1600,
           "outputCheckpointCooldownChars": 1000,
           "outputCheckpointBoundarySlackChars": 320,
-          "outputCheckpointMaxInterrupts": 2
+          "outputCheckpointMaxInterrupts": 2,
+          "outputCheckpointDriftThreshold": 0.84,
+          "outputCheckpointTailChars": 1400
         }
       }
     }

@@ -14,6 +14,9 @@ interface OutputWatchdogState {
     charsStreamed: number;
     lastCheckpointAt: number;
     interruptsUsed: number;
+    recentOutput: string;
+    lastDriftScore: number;
+    liveInterruptWarned: boolean;
 }
 
 interface StreamCheckpointConfig {
@@ -21,6 +24,17 @@ interface StreamCheckpointConfig {
     outputCheckpointCooldownChars: number;
     outputCheckpointBoundarySlackChars: number;
     outputCheckpointMaxInterrupts: number;
+    outputCheckpointDriftThreshold: number;
+    outputCheckpointTailChars: number;
+}
+
+interface CheckpointCandidate {
+    prompt: string;
+    driftScore: number;
+}
+
+interface LiveInterruptContext {
+    liveInterrupt?: (text: string, meta?: { reason?: string }) => Promise<boolean> | boolean;
 }
 
 function getCheckpointConfig(pluginConfig: any): StreamCheckpointConfig {
@@ -29,6 +43,8 @@ function getCheckpointConfig(pluginConfig: any): StreamCheckpointConfig {
         outputCheckpointCooldownChars: pluginConfig?.outputCheckpointCooldownChars ?? 1000,
         outputCheckpointBoundarySlackChars: pluginConfig?.outputCheckpointBoundarySlackChars ?? 320,
         outputCheckpointMaxInterrupts: pluginConfig?.outputCheckpointMaxInterrupts ?? 2,
+        outputCheckpointDriftThreshold: pluginConfig?.outputCheckpointDriftThreshold ?? 0.84,
+        outputCheckpointTailChars: pluginConfig?.outputCheckpointTailChars ?? 1400,
     };
 }
 
@@ -38,6 +54,9 @@ function getOutputWatchdog(sessionId: string): OutputWatchdogState {
             charsStreamed: 0,
             lastCheckpointAt: 0,
             interruptsUsed: 0,
+            recentOutput: "",
+            lastDriftScore: 0,
+            liveInterruptWarned: false,
         });
     }
     return outputWatchdogs.get(sessionId)!;
@@ -66,6 +85,64 @@ function hasMeaningfulTaskOverlap(activeTask: string, lastUserRequest: string): 
     return requestTokens.some((token) => activeTokens.has(token));
 }
 
+function updateRecentOutput(
+    watchdog: OutputWatchdogState,
+    delta: string,
+    maxChars: number
+) {
+    if (maxChars <= 0) return;
+
+    const merged = watchdog.recentOutput + delta;
+    watchdog.recentOutput =
+        merged.length > maxChars ? merged.slice(-maxChars) : merged;
+}
+
+function calculateTokenOverlap(sourceText: string, referenceText: string): number {
+    const sourceTokens = new Set(normalizeForOverlap(sourceText));
+    const referenceTokens = [...new Set(normalizeForOverlap(referenceText))];
+
+    if (sourceTokens.size === 0 || referenceTokens.length === 0) {
+        return 0;
+    }
+
+    let matches = 0;
+    for (const token of referenceTokens) {
+        if (sourceTokens.has(token)) {
+            matches += 1;
+        }
+    }
+
+    return matches / referenceTokens.length;
+}
+
+function calculateDriftScore(
+    workingState: WorkingMemoryState,
+    recentOutput: string
+): number {
+    const requestScore = workingState.last_user_request
+        ? calculateTokenOverlap(recentOutput, workingState.last_user_request)
+        : 0;
+    const activeScore = !isIdleTask(workingState.active_task)
+        ? calculateTokenOverlap(recentOutput, workingState.active_task)
+        : 0;
+    const goalScore = workingState.project_goal
+        ? calculateTokenOverlap(recentOutput, workingState.project_goal)
+        : 0;
+
+    let alignmentScore = Math.max(requestScore, activeScore * 0.9, goalScore * 0.6);
+
+    if (
+        workingState.last_user_request &&
+        !isIdleTask(workingState.active_task) &&
+        !hasMeaningfulTaskOverlap(workingState.active_task, workingState.last_user_request) &&
+        activeScore > requestScore + 0.15
+    ) {
+        alignmentScore = Math.max(0, alignmentScore - 0.12);
+    }
+
+    return Math.max(0, Math.min(1, 1 - alignmentScore));
+}
+
 function maybeRefreshWorkingState(workspace: string): WorkingMemoryState {
     const workingState = loadWorkingMemoryState(workspace);
 
@@ -80,8 +157,10 @@ function maybeRefreshWorkingState(workspace: string): WorkingMemoryState {
 
 function buildCheckpointPrompt(
     workingState: WorkingMemoryState,
-    watchdog: OutputWatchdogState
+    watchdog: OutputWatchdogState,
+    driftScore: number
 ): string {
+    const driftPercent = Math.round(driftScore * 100);
     const driftSignal =
         workingState.last_user_request &&
             !isIdleTask(workingState.active_task) &&
@@ -89,7 +168,7 @@ function buildCheckpointPrompt(
             ? `\n- Potential drift signal: the current active task may be stale relative to the latest user request.`
             : "";
 
-    return `\n\n[WORKING MEMORY CHECKPOINT]\nYou have already produced approximately ${watchdog.charsStreamed} characters in this reply. Pause your current momentum and self-audit before continuing.\n\nCurrent ledger:\n- Goal: ${workingState.project_goal}\n- Active task: ${workingState.active_task}\n- Latest user request: ${workingState.last_user_request || "(missing)"}${driftSignal}\n\nMandatory self-check:\n1. Are you still directly answering the latest user request?\n2. Have you drifted into stale backlog, repetition, or over-explaining?\n3. If drifted, correct course immediately and continue from the user's priority.\n4. If the real task changed, treat the latest user request as authoritative and update the working-memory ledger after this response.\n\nRules:\n- Continue the answer without mentioning this checkpoint.\n- Prefer concise correction over repeating earlier material.\n- Preserve any useful progress already made; do not restart from scratch unless the answer is clearly off-track.\n`;
+    return `\n\n[WORKING MEMORY CHECKPOINT]\nYou have already produced approximately ${watchdog.charsStreamed} characters in this reply. Pause your current momentum and self-audit before continuing.\n\nCurrent ledger:\n- Goal: ${workingState.project_goal}\n- Active task: ${workingState.active_task}\n- Latest user request: ${workingState.last_user_request || "(missing)"}\n- Drift estimate: ${driftPercent}%${driftSignal}\n\nMandatory self-check:\n1. Are you still directly answering the latest user request?\n2. Have you drifted into stale backlog, repetition, or over-explaining?\n3. If drifted, correct course immediately and continue from the user's priority.\n4. If the real task changed, treat the latest user request as authoritative and update the working-memory ledger after this response.\n\nRules:\n- Continue the answer without mentioning this checkpoint.\n- Prefer concise correction over repeating earlier material.\n- Preserve any useful progress already made; do not restart from scratch unless the answer is clearly off-track.\n`;
 }
 
 function maybeBuildCheckpointPrompt(
@@ -97,7 +176,7 @@ function maybeBuildCheckpointPrompt(
     delta: string,
     watchdog: OutputWatchdogState,
     config: StreamCheckpointConfig
-): string | null {
+) : CheckpointCandidate | null {
     if (config.outputCheckpointChars <= 0) return null;
     if (watchdog.interruptsUsed >= config.outputCheckpointMaxInterrupts) return null;
 
@@ -110,12 +189,62 @@ function maybeBuildCheckpointPrompt(
     if (!crossedHardLimit && !isCheckpointBoundary(delta)) return null;
 
     const workingState = maybeRefreshWorkingState(workspace);
+    const driftScore = calculateDriftScore(workingState, watchdog.recentOutput);
+    watchdog.lastDriftScore = driftScore;
+
+    if (!crossedHardLimit && driftScore < config.outputCheckpointDriftThreshold) {
+        return null;
+    }
+
+    return {
+        prompt: buildCheckpointPrompt(workingState, watchdog, driftScore),
+        driftScore,
+    };
+}
+
+function markCheckpointAttempt(
+    watchdog: OutputWatchdogState,
+    config: StreamCheckpointConfig
+) {
     watchdog.interruptsUsed += 1;
     watchdog.lastCheckpointAt =
         watchdog.charsStreamed -
         Math.max(0, config.outputCheckpointChars - config.outputCheckpointCooldownChars);
+}
 
-    return buildCheckpointPrompt(workingState, watchdog);
+function hasLiveInterrupt(ctx: any): ctx is LiveInterruptContext & {
+    liveInterrupt: NonNullable<LiveInterruptContext["liveInterrupt"]>;
+} {
+    return typeof ctx?.liveInterrupt === "function";
+}
+
+async function requestLiveInterrupt(
+    ctx: any,
+    prompt: string,
+    reason: string
+): Promise<boolean> {
+    if (!hasLiveInterrupt(ctx)) {
+        return false;
+    }
+
+    return !!(await ctx.liveInterrupt(prompt, { reason }));
+}
+
+function warnMissingLiveInterrupt(
+    sid: string,
+    watchdog: OutputWatchdogState
+) {
+    if (watchdog.liveInterruptWarned) {
+        return;
+    }
+
+    watchdog.liveInterruptWarned = true;
+    console.warn(
+        `[memory-enhanced] session ${sid} requested live stream interruption, ` +
+        `but the current OpenClaw core only exposes wrap_stream_fn read access. ` +
+        `Install the liveInterrupt bridge from openclaw-patch-guide.md to enable ` +
+        `mid-stream recall/checkpoint steering.`
+    );
 }
 
 export function registerStreamWrapper(api: any, pluginConfig: any) {
@@ -146,32 +275,54 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                 // Only intercept deltas
                 if (chunk.type === "text_delta" || chunk.type === "thinking_delta") {
                     const delta = typeof chunk.delta === "string" ? chunk.delta : "";
+                    if (!delta) {
+                        continue;
+                    }
+
                     watchdog.charsStreamed += delta.length;
+                    updateRecentOutput(
+                        watchdog,
+                        delta,
+                        checkpointConfig.outputCheckpointTailChars
+                    );
 
                     const triggerFile = await scanner.processChunk(delta);
                     if (triggerFile) {
                         const memoryContent = scanner.getMemoryContent(triggerFile);
                         const interruptPrompt = `\n\n[SUBCONSCIOUS RECALL TRIGGERED] Your recent thoughts strongly activated a latent memory regarding "${triggerFile}".\n\nMemory contents:\n${memoryContent}\n\nPlease immediately integrate this into your current thought process and continue.\n`;
 
-                        yield {
-                            type: "steer",
-                            content: interruptPrompt,
-                        };
-                        break;
+                        const didInterrupt = await requestLiveInterrupt(
+                            ctx,
+                            interruptPrompt,
+                            "memory-enhanced associative recall"
+                        );
+                        if (didInterrupt) {
+                            return;
+                        }
+
+                        warnMissingLiveInterrupt(sid, watchdog);
                     }
 
-                    const checkpointPrompt = maybeBuildCheckpointPrompt(
+                    const checkpoint = maybeBuildCheckpointPrompt(
                         workspace,
                         delta,
                         watchdog,
                         checkpointConfig
                     );
-                    if (checkpointPrompt) {
-                        yield {
-                            type: "steer",
-                            content: checkpointPrompt,
-                        };
-                        break;
+                    if (checkpoint) {
+                        const didInterrupt = await requestLiveInterrupt(
+                            ctx,
+                            checkpoint.prompt,
+                            "memory-enhanced output checkpoint"
+                        );
+
+                        markCheckpointAttempt(watchdog, checkpointConfig);
+
+                        if (didInterrupt) {
+                            return;
+                        }
+
+                        warnMissingLiveInterrupt(sid, watchdog);
                     }
                 }
             }

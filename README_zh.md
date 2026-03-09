@@ -39,7 +39,7 @@ $$思维中心 = 0.7 \cdot 当前输入 + 0.3 \cdot 先前思路$$
 $$Score_{new} = Score_{old} \cdot e^{-\frac{\ln 2}{30} \cdot Days}$$
 
 ### 4. 长输出检查点转向 (Output Checkpoint Steering)
-当回答过长时，插件可以在流式生成中途插入一次强制自检，把“当前目标 / 当前任务 / 最新用户请求”重新压回上下文，防止模型在超大型任务中越写越偏。
+当你的 OpenClaw 分叉按 [openclaw-patch-guide.md](./openclaw-patch-guide.md) 暴露了可选的 `liveInterrupt(...)` 桥接后，插件就可以在流式生成中途插入一次强制自检，把“当前目标 / 当前任务 / 最新用户请求”重新压回上下文，防止模型在超大型任务中越写越偏。
 
 ---
 

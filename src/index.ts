@@ -50,6 +50,8 @@ export default function register(api: OpenClawPluginApi) {
             outputCheckpointCooldownChars?: number;
             outputCheckpointBoundarySlackChars?: number;
             outputCheckpointMaxInterrupts?: number;
+            outputCheckpointDriftThreshold?: number;
+            outputCheckpointTailChars?: number;
         }
         | undefined;
 

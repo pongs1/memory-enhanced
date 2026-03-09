@@ -37,7 +37,7 @@ We use offline LLMs (e.g., DeepSeek R1) to label and link memories in the backgr
 The ultimate solution for low LLM initiative. We bypass the LLM's "tool-calling preference." Using OpenClaw core Hooks, we **force highly relevant memories into the mind-model** before generation even starts. The AI doesn't think "Should I search?"; it just "knows" the background.
 
 ### 4. Output Checkpoint Steering
-For long answers, the plugin can interrupt the stream mid-generation and inject a hard self-audit checkpoint. This is designed for large coding tasks where the model may drift, over-explain, or keep following stale backlog after the user has changed priorities.
+When your OpenClaw fork exposes the optional `liveInterrupt(...)` bridge from [openclaw-patch-guide.md](./openclaw-patch-guide.md), the plugin can interrupt long answers mid-generation and inject a hard self-audit checkpoint. This is designed for large coding tasks where the model may drift, over-explain, or keep following stale backlog after the user has changed priorities.
 
 ---
 

@@ -1,10 +1,21 @@
-# OpenClaw Core Patch Guide for Memory V7 (SAR Architecture)
+# OpenClaw Core Patch Guide for Memory V8 Stream Hooks
 
-To enable the Subconscious Associative Recall (SAR) engine to intercept and read the LLM stream in real-time, we must natively add the `wrap_stream_fn` hook into the OpenClaw plugin architecture.
+To let the memory system inspect the raw LLM stream in real time, OpenClaw needs a native `wrap_stream_fn` hook.
 
-Since OpenClaw uses a strict Typescript HookRunner (`src/plugins/hooks.ts`), we cannot randomly emit events. We must structurally patch 3 files in your WSL OpenClaw core.
+Since OpenClaw uses a strict Typescript HookRunner (`src/plugins/hooks.ts`), this must be added structurally in core.
 
-Please apply the following changes to your OpenClaw source code in WSL.
+Important limits before you patch:
+
+- `wrap_stream_fn` by itself is a **read-stream hook**, not a magic interrupt channel.
+- `@mariozechner/pi-ai` does **not** accept custom stream events such as `type: "steer"`.
+- `activeSession.steer(...)` is a real queueing API, but it is **not** a true mid-token injection primitive. By default it is consumed after the current tool/turn boundary.
+
+So this guide is split into two layers:
+
+1. Base patch: enable `wrap_stream_fn` so the plugin can observe stream deltas.
+2. Optional advanced bridge: expose a verified `liveInterrupt(...)` callback from your own OpenClaw fork if you want true mid-stream checkpoint/recovery.
+
+Please apply the base patch below to your OpenClaw source code in WSL.
 
 ## 1. Modify `src/plugins/types.ts`
 
@@ -29,7 +40,20 @@ export type PluginHookWrapStreamFnResult = {
 };
 ```
 
-**C. Add to `PluginHookHandlerMap` (Around Line 758, before the end of the type)**:
+**C. Optional advanced bridge: extend `PluginHookAgentContext`**
+
+If your fork supports true interrupt-and-resume, add an optional callback to the agent hook context:
+
+```typescript
+liveInterrupt?: (
+  text: string,
+  meta?: { reason?: string },
+) => Promise<boolean> | boolean;
+```
+
+This callback should return `true` only if your fork really interrupted the active stream and will resume using the injected instruction.
+
+**D. Add to `PluginHookHandlerMap` (Around Line 758, before the end of the type)**:
 ```typescript
   gateway_stop: (
     event: PluginHookGatewayStopEvent,
@@ -131,6 +155,11 @@ Add standard exports from `./types.js` to the import list and the re-export list
             sessionId: params.sessionId,
             workspaceDir: params.workspaceDir,
             messageProvider: params.messageProvider ?? undefined,
+            // Optional advanced bridge.
+            // Only expose this if your fork has a verified interrupt-and-resume path.
+            // Do NOT fake this by yielding custom stream events or by calling
+            // activeSession.steer(...) alone.
+            liveInterrupt: undefined,
           };
 
           const wrapResult = await hookRunner.runWrapStreamFn(wrapEvent, hookCtx);
@@ -161,4 +190,17 @@ npm run build # (Or whatever pnpm/build command you use)
 openclaw gateway restart
 ```
 
-Once this is patched, your local `memory-enhanced` plugin will instantly gain root-level access to the Token generation stream!
+## 5. What This Enables
+
+After the base patch:
+
+- The plugin can observe `text_delta` / `thinking_delta` in real time.
+- SAR pre-activation and stream-time analysis work.
+- The plugin can compute drift signals for long outputs.
+
+What it does **not** automatically enable:
+
+- Fake stream events such as `type: "steer"` are still invalid.
+- True mid-stream checkpoint steering still requires your fork to implement `liveInterrupt(...)`.
+
+`memory-enhanced` will automatically detect `ctx.liveInterrupt(...)` if your fork provides it. If absent, it will disable live interrupt behavior instead of pretending it works.
