@@ -94,6 +94,18 @@ const INJECTED_LEDGER_MARKERS = [
     /Latest User Request/i,
     /Working Memory Rule/i,
 ];
+const TASK_SWITCH_PATTERNS = [
+    /^(?:现在|接下来)?\s*(?:优先)?处理\s+(.+)$/u,
+    /^(?:先别做|先不要做|不要做)\s+.+?[，,。]\s*(?:改成|改为|先处理|优先处理)\s+(.+)$/u,
+    /^(?:现在)?停止\s+.+?[，,。]\s*(?:改成|改为)\s*(?:优先)?处理\s+(.+)$/u,
+    /^(?:停止|暂停)\s+.+?[，,。]\s*(?:先|改为)\s*(?:处理|做)\s+(.+)$/u,
+    /^(?:switch to|prioritize)\s+(.+)$/i,
+];
+const TASK_TRAILING_REPLY_RULES = [
+    /[，,。.!?]\s*(?:不要展开|不要解释|不要分析|只回复|只回答|仅回复|只输出|直接回复|不要做别的|不要执行其他操作).*/u,
+    /[，,。.!?]\s*(?:先别解释|先不要解释|不必解释).*/u,
+    /[.,;:]\s*(?:do not explain|don't explain|reply only|just reply|only reply|do not do anything else).*/i,
+];
 
 /** Standard workspace paths. */
 export function paths(workspace: string) {
@@ -262,6 +274,25 @@ export function normalizeUserRequest(value: string, maxChars = 240): string {
         .slice(0, maxChars);
 }
 
+export function summarizeUserRequestForTask(value: string, maxChars = 120): string {
+    let text = normalizeUserRequest(value, Math.max(maxChars * 2, 240));
+
+    for (const pattern of TASK_SWITCH_PATTERNS) {
+        const matched = text.match(pattern)?.[1];
+        if (matched) {
+            text = matched.trim();
+            break;
+        }
+    }
+
+    for (const pattern of TASK_TRAILING_REPLY_RULES) {
+        text = text.replace(pattern, "");
+    }
+
+    text = text.replace(/^(?:请|请你)\s*/u, "").trim();
+    return normalizeUserRequest(text, maxChars);
+}
+
 function normalizeStringList(value: unknown): string[] {
     if (!Array.isArray(value)) return [];
 
@@ -334,7 +365,7 @@ export function shouldSwitchToLatestUserRequest(
     state: Pick<WorkingMemoryState, "active_task" | "last_user_request">,
     latestUserRequest: string
 ): boolean {
-    const normalizedRequest = normalizeUserRequest(latestUserRequest);
+    const normalizedRequest = summarizeUserRequestForTask(latestUserRequest) || normalizeUserRequest(latestUserRequest);
     if (!normalizedRequest || isContinuationRequest(normalizedRequest)) {
         return false;
     }
@@ -490,7 +521,8 @@ export function syncLatestUserRequest(
     workspace: string,
     latestUserRequest: string
 ): WorkingMemoryState {
-    const normalizedRequest = normalizeUserRequest(latestUserRequest);
+    const normalizedRequest =
+        summarizeUserRequestForTask(latestUserRequest) || normalizeUserRequest(latestUserRequest);
     const current = loadWorkingMemoryState(workspace);
 
     if (!normalizedRequest) {

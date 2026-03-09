@@ -32,6 +32,7 @@ import {
     loadWorkingMemoryState,
     normalizeUserRequest,
     renderInjectedWorkingMemory,
+    summarizeUserRequestForTask,
     shouldSwitchToLatestUserRequest,
     syncLatestUserRequest,
     writeWorkingMemoryState,
@@ -218,9 +219,12 @@ export default function register(api: OpenClawPluginApi) {
         } catch (e) { }
 
         const isNewSession = messages.filter((m: any) => m.role === "user").length <= 1 && messages.filter((m: any) => m.role === "assistant").length === 0;
+        const latestUserTaskTitle = latestUserRequest
+            ? summarizeUserRequestForTask(latestUserRequest, 220) || latestUserRequest
+            : "";
 
-        const latestUserLine = latestUserRequest
-            ? `> - Latest User Request: ${latestUserRequest.slice(0, 220)}${latestUserRequest.length > 220 ? "..." : ""}`
+        const latestUserLine = latestUserTaskTitle
+            ? `> - Latest User Request: ${latestUserTaskTitle.slice(0, 220)}${latestUserTaskTitle.length > 220 ? "..." : ""}`
             : `> - Latest User Request: (none captured)`;
 
         if (
