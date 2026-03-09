@@ -4,6 +4,36 @@ To let the memory system inspect the raw LLM stream in real time, OpenClaw needs
 
 Since OpenClaw uses a strict Typescript HookRunner (`src/plugins/hooks.ts`), this must be added structurally in core.
 
+## 0. Recommended Workflow: Managed Overlay, Not Permanent Hand Edits
+
+If you are running OpenClaw from a source checkout, the default workflow is now:
+
+```bash
+pnpm openclaw:overlay:check -- --openclaw-dir /home/pongs/openclaw
+pnpm openclaw:overlay:apply -- --openclaw-dir /home/pongs/openclaw
+```
+
+For future source updates:
+
+```bash
+pnpm openclaw:overlay:update -- --openclaw-dir /home/pongs/openclaw
+```
+
+Why this exists:
+
+- `openclaw update` requires a clean git worktree
+- hand-edited `types.ts` / `hooks.ts` / `attempt.ts` keep the checkout dirty
+- an in-repo plugin clone like `~/openclaw/extensions/memory-enhanced` is also seen as an untracked blocker unless excluded
+
+The overlay script shipped with this repo solves that by:
+
+1. backing up clean versions of the managed core files into `.openclaw-overlay/`
+2. applying the memory-enhanced 3.1 bridge on demand
+3. restoring clean core files before update
+4. reapplying the patch, rebuilding, and restarting after update
+
+The manual patch blocks below are still important, but they are now the **reference/fallback path** when the overlay script needs to be debugged or refreshed for a newer OpenClaw source layout.
+
 Important limits before you patch:
 
 - `wrap_stream_fn` by itself is a **read-stream hook**, not a magic interrupt channel.
@@ -15,7 +45,7 @@ So this guide is split into two layers:
 1. Base patch: enable `wrap_stream_fn` so the plugin can observe stream deltas.
 2. Optional advanced bridge: expose a verified `liveInterrupt(...)` callback from your own OpenClaw fork if you want true mid-stream checkpoint/recovery.
 
-Please apply the base patch below to your OpenClaw source code in WSL.
+If you are debugging or refreshing the overlay script, apply the base patch below to your OpenClaw source code in WSL.
 
 ## 1. Modify `src/plugins/types.ts`
 
@@ -492,3 +522,15 @@ Then ask the agent for a deliberately long answer. A successful 3.1 bridge shoul
 3. A `live interrupt resume` debug line appears in OpenClaw logs.
 4. The answer continues without emitting any invalid custom stream event.
 5. The final attempt is **not** marked as globally aborted unless the user or timeout actually aborted it.
+
+## 8. Update-Safe Rules for Source Checkouts
+
+These rules are non-optional if you want OpenClaw source updates to stop breaking your memory bridge:
+
+1. Do not keep the 3 managed patch targets dirty forever:
+   - `src/plugins/types.ts`
+   - `src/plugins/hooks.ts`
+   - `src/agents/pi-embedded-runner/run/attempt.ts`
+2. Do not run `openclaw update` directly on a hand-patched checkout. Use `pnpm openclaw:overlay:update -- --openclaw-dir /home/pongs/openclaw`.
+3. If `memory-enhanced` lives inside `~/openclaw/extensions/memory-enhanced`, add that path to `.git/info/exclude` or let the overlay script manage it for you.
+4. The overlay only manages the memory bridge files. Extra dirty files like `pnpm-lock.yaml` will still block OpenClaw's update runner and must be handled separately.

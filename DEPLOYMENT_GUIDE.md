@@ -15,11 +15,12 @@ This guide provides step-by-step instructions for deploying the **V8 Memory Arch
 
 ## 🛠️ Step 1: Install the Plugin Source
 
-Clone the repository into your OpenClaw extensions directory and install its internal dependencies:
+Clone the repository into a directory that is **outside** the OpenClaw git checkout, then install its internal dependencies:
 
 ```bash
-# Navigate to extensions (default location)
-cd ~/openclaw/extensions
+# Recommended: keep plugin source outside ~/openclaw so git updates stay clean
+mkdir -p ~/.openclaw/plugins-src
+cd ~/.openclaw/plugins-src
 
 # Clone the repository
 git clone https://github.com/pongs1/memory-enhanced.git
@@ -29,16 +30,55 @@ cd memory-enhanced
 pnpm install
 ```
 
+> [!IMPORTANT]
+> If you keep `memory-enhanced` inside `~/openclaw/extensions/memory-enhanced`, OpenClaw's git updater will treat it as an untracked path and may skip source updates. The overlay workflow in Step 2 can add a local `.git/info/exclude` entry for that path, but the out-of-tree layout above is still the cleanest default.
+
 ---
 
-## 💉 Step 2: Patch OpenClaw Core (For SAR Support)
+## 💉 Step 2: Patch OpenClaw Core (Overlay Workflow for SAR)
 
 The **Subconscious Associative Recall (SAR)** requires intercepting the LLM's generative stream. 
 
-1.  Open [openclaw-patch-guide.md](./openclaw-patch-guide.md).
-2.  Apply the base `wrap_stream_fn` patch first.
-3.  If you are on **OpenClaw 3.1**, also apply **Section 7** from the patch guide. That section adds the minimal `liveInterrupt(...)` bridge in `attempt.ts`.
-4.  **Why?** The base patch enables native live stream inspection. The 3.1 advanced bridge is what turns drift detection and associative recall into a real interrupt-and-resume path instead of a read-only watchdog.
+**Do not keep hand-edited core files drifting in `~/openclaw`.** OpenClaw's source updater requires a clean worktree, and your current 3.1 checkout can be blocked by:
+
+- modified core patch files like `src/plugins/types.ts`, `src/plugins/hooks.ts`, and `attempt.ts`
+- untracked in-repo plugin source like `extensions/memory-enhanced/`
+
+The supported workflow for this repo is now an **overlay patch**:
+
+```bash
+# Inspect current blockers first
+pnpm openclaw:overlay:check -- --openclaw-dir /home/pongs/openclaw
+
+# Apply the managed 3.1 overlay patch once
+pnpm openclaw:overlay:apply -- --openclaw-dir /home/pongs/openclaw
+```
+
+What the overlay does:
+
+1. Saves pristine backups of the managed OpenClaw core files into `.openclaw-overlay/` inside this repo.
+2. Applies the base `wrap_stream_fn` hook and the 3.1 `liveInterrupt(...)` resume loop.
+3. Optionally adds `.git/info/exclude` for `extensions/memory-enhanced` if you keep the plugin source inside the OpenClaw git checkout.
+
+For **future OpenClaw source updates**, use this instead of `openclaw update` directly:
+
+```bash
+pnpm openclaw:overlay:update -- --openclaw-dir /home/pongs/openclaw
+```
+
+That command performs:
+
+1. Restores clean core files from backup.
+2. Runs `openclaw update --no-restart`.
+3. Reapplies the memory-enhanced core bridge.
+4. Rebuilds OpenClaw.
+5. Restarts the gateway.
+
+> [!NOTE]
+> The overlay only manages the three memory-enhanced core patch targets. If `check` still reports unrelated dirty files such as `pnpm-lock.yaml`, you must clean or commit those yourself before expecting OpenClaw's updater to succeed.
+
+> [!TIP]
+> The manual file-by-file instructions are still preserved in [openclaw-patch-guide.md](./openclaw-patch-guide.md), but they are now the fallback/reference path. The default installation path is the overlay script above.
 
 ---
 
@@ -51,7 +91,7 @@ Locate your global config file at `~/.openclaw/openclaw.json`. Merge the followi
 
 `outputCheckpoint*` controls the long-output self-audit watchdog. These settings only produce live interruptions when your OpenClaw fork exposes the optional `liveInterrupt(...)` bridge from the patch guide. Without that bridge, the plugin will observe drift signals but will not fake unsupported stream events.
 
-If you are testing on OpenClaw 3.1 and checkpoint steering never changes the reply, the usual cause is simple: only the base `wrap_stream_fn` hook was installed, but Section 7 of [openclaw-patch-guide.md](./openclaw-patch-guide.md) was not.
+If you are testing on OpenClaw 3.1 and checkpoint steering never changes the reply, the usual cause is simple: the overlay patch was never applied, or OpenClaw was updated later without re-running `pnpm openclaw:overlay:update`.
 
 ```jsonc
 {
@@ -222,7 +262,17 @@ Add a daily cron job to `openclaw.json` for deep archiving:
 
 ## ✅ Step 7: Final Verification
 
-Restart OpenClaw: `openclaw gateway restart`. Start a session and run this sequence:
+Run this sequence:
+
+```bash
+pnpm openclaw:overlay:check -- --openclaw-dir /home/pongs/openclaw
+/home/pongs/openclaw/openclaw.mjs gateway restart
+/home/pongs/openclaw/openclaw.mjs plugins list
+/home/pongs/openclaw/openclaw.mjs plugins info memory-enhanced
+/home/pongs/openclaw/openclaw.mjs doctor
+```
+
+Then start a session and run this sequence:
 
 1.  **Status**: `"Run memory_working action='status'"` → Should show the passive task ledger from Step 4.
 2.  **Episodic Check**: `"Run memory_record content='User likes dark mode' type='preference'"` → Check if `memory/2026-XX-XX.md` is updated.

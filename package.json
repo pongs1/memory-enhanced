@@ -5,6 +5,12 @@
     "type": "module",
     "author": "OpenClaw Community",
     "license": "MIT",
+    "scripts": {
+        "openclaw:overlay:check": "node ./scripts/openclaw-overlay.mjs check",
+        "openclaw:overlay:apply": "node ./scripts/openclaw-overlay.mjs apply",
+        "openclaw:overlay:unapply": "node ./scripts/openclaw-overlay.mjs unapply",
+        "openclaw:overlay:update": "node ./scripts/openclaw-overlay.mjs update"
+    },
     "keywords": [
         "openclaw",
         "memory",
