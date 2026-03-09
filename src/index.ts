@@ -57,9 +57,14 @@ export default function register(api: OpenClawPluginApi) {
         return "";
     };
 
+    // OpenClaw runtime supplies a richer context object than the current plugin-sdk type exposes.
+    // Keep runtime behavior intact and bridge the stale type surface here.
+    const toolExecute = <T extends Function>(fn: T) => fn as any;
+
     // --- memory_record ---
     api.registerTool({
         name: "memory_record",
+        label: "Record Memory",
         description:
             "Record an important event in dual format (structured JSONL + searchable Markdown). " +
             "Use this for decisions, preferences, insights, errors, and corrections that are " +
@@ -67,12 +72,13 @@ export default function register(api: OpenClawPluginApi) {
             "Note: casual chat and raw tool outputs should NOT be recorded (session JSONL " +
             "already captures those).",
         parameters: MemoryRecordParams,
-        execute: executeMemoryRecord,
+        execute: toolExecute(executeMemoryRecord),
     });
 
     // --- memory_explore ---
     api.registerTool({
         name: "memory_explore",
+        label: "Explore Memory",
         description:
             "Traverse association chains starting from an event ID (evt_*) or knowledge " +
             "entry ID (ke_*). Follows linked entries up to the specified depth, calculates " +
@@ -80,12 +86,13 @@ export default function register(api: OpenClawPluginApi) {
             "entries (resets their decay score). Use this when a retrieved memory has " +
             "associations you want to investigate.",
         parameters: MemoryExploreParams,
-        execute: executeMemoryExplore,
+        execute: toolExecute(executeMemoryExplore),
     });
 
     // --- memory_consolidate ---
     api.registerTool({
         name: "memory_consolidate",
+        label: "Consolidate Memory",
         description:
             "Run structural consolidation: apply decay to old events, archive low-score " +
             "entries, and regenerate MEMORY_INDEX.md from knowledge files. This handles " +
@@ -93,13 +100,14 @@ export default function register(api: OpenClawPluginApi) {
             "(extracting knowledge from events) still requires you to read the events " +
             "and write to memory/knowledge/*.md before calling this tool.",
         parameters: MemoryConsolidateParams,
-        execute: (id: string, params: any, ctx: any) =>
-            executeMemoryConsolidate(id, params, { ...ctx, config: pluginConfig }),
+        execute: toolExecute((id: string, params: any, ctx: any) =>
+            executeMemoryConsolidate(id, params, { ...ctx, config: pluginConfig })),
     });
 
     // --- memory_working ---
     api.registerTool({
         name: "memory_working",
+        label: "Working Memory",
         description:
             "Manage the passive working-memory ledger and scratchpad. " +
             "The ledger tracks goal, active task, queued next tasks, deferred tasks, and recently completed work. " +
@@ -107,7 +115,7 @@ export default function register(api: OpenClawPluginApi) {
             "'complete' to finish the active task, 'defer' to park a task, and 'push' to queue more work. " +
             "Use 'scratchpad_append' for rough notes and 'scratchpad_refill' to recover parked tasks.",
         parameters: MemoryWorkingParams,
-        execute: executeMemoryWorking,
+        execute: toolExecute(executeMemoryWorking),
     });
 
     // --- HOOKS ---
@@ -210,7 +218,7 @@ export default function register(api: OpenClawPluginApi) {
         return {};
     });
 
-    api.on("agent_end", async (event: any, ctx: { workspaceDir: string }) => {
+    api.on("agent_end", async (event: any, ctx: { workspaceDir?: string }) => {
         // L2: Auto-record user intent & assistant reply
         const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
         const msgs = event?.messages || [];
