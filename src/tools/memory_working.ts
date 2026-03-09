@@ -131,6 +131,7 @@ export async function executeMemoryWorking(
                     deferred_tasks:
                         sanitizedGoal === state.project_goal ? state.deferred_tasks : [],
                     done_recent: sanitizedGoal === state.project_goal ? state.done_recent : [],
+                    last_user_request: sanitizedFocus,
                     last_updated: nowISO(),
                 });
 
@@ -460,6 +461,7 @@ function reprioritizeTasks(
         active_task: target,
         next_tasks: nextTasks,
         deferred_tasks: deferredTasks,
+        last_user_request: target,
         last_updated: nowISO(),
     });
 }
