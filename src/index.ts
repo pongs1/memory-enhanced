@@ -28,6 +28,7 @@ import {
 } from "./tools/memory_working.js";
 
 import {
+    DEFAULT_ACTIVE_TASK,
     countWorkingMemoryTasks,
     loadWorkingMemoryState,
     paths,
@@ -189,6 +190,26 @@ export default function register(api: OpenClawPluginApi) {
         const isNewSession = messages.filter((m: any) => m.role === "user").length <= 1 && messages.filter((m: any) => m.role === "assistant").length === 0;
         const lastUserMsg = [...messages].reverse().find((m: any) => m.role === "user");
         const lastUserText = extractText(lastUserMsg).replace(/\s+/g, " ").trim();
+        const latestUserRequest = lastUserText.slice(0, 240);
+
+        try {
+            if (latestUserRequest) {
+                const workingState = loadWorkingMemoryState(workspace);
+                if (
+                    workingState.last_user_request !== latestUserRequest ||
+                    workingState.active_task === DEFAULT_ACTIVE_TASK
+                ) {
+                    touchWorkingMemoryState(workspace, {
+                        last_user_request: latestUserRequest,
+                        active_task:
+                            workingState.active_task === DEFAULT_ACTIVE_TASK
+                                ? latestUserRequest
+                                : workingState.active_task,
+                    });
+                }
+            }
+        } catch (e) { }
+
         const latestUserLine = lastUserText
             ? `> - Latest User Request: ${lastUserText.slice(0, 220)}${lastUserText.length > 220 ? "..." : ""}`
             : `> - Latest User Request: (none captured)`;

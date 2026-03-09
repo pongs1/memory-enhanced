@@ -156,6 +156,7 @@ Find the `## Memory` section and replace it entirely:
 You possess a 4-layer memory system. **DO NOT manually edit text files in the memory/ directory.** Always use your cognitive tools.
 
 - **To manage tasks:** Use `memory_working`. It maintains a passive task ledger (`Goal / Active / Next / Deferred / Done Recently`) that is injected every turn.
+- **Idle capture:** If the ledger is waiting for work, the newest user request is automatically promoted into `Active`.
 - **Priority rule:** The latest user request is always authoritative. Stored tasks are resumable backlog, not hard commands.
 - **To record insights:** Use `memory_record`. This triggers dual-write episodic encoding.
 - **To explore associations:** Use `memory_explore` when you need to follow semantic "linkages".

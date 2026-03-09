@@ -61,7 +61,7 @@ The ultimate solution for low LLM initiative. We bypass the LLM's "tool-calling 
 
 This project strictly follows the **ADaPT (Action Development and Project Tracking)** framework:
 1.  **Passive Ledger**: Working memory is always injected as a small task ledger (`Goal / Active / Next / Deferred / Done Recently`). The model does not need to "remember to check it."
-2.  **User-First Priority**: The latest user request always outranks the stored ledger. Old tasks are resumable backlog, not marching orders.
+2.  **User-First Priority**: The latest user request always outranks the stored ledger. When the ledger is idle, the newest user request is auto-promoted into `Active`. Old tasks are resumable backlog, not marching orders.
 3.  **Reorder, Don't Drift**: Use `memory_working reprioritize`, `complete`, and `defer` to keep long projects moving without letting stale tasks hijack a new turn.
 
 ---
