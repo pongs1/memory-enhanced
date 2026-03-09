@@ -96,9 +96,10 @@ const INJECTED_LEDGER_MARKERS = [
 ];
 const TASK_SWITCH_PATTERNS = [
     /^(?:现在|接下来)?\s*(?:优先)?处理\s+(.+)$/u,
-    /^(?:先别做|先不要做|不要做)\s+.+?[，,。]\s*(?:改成|改为|先处理|优先处理)\s+(.+)$/u,
-    /^(?:现在)?停止\s+.+?[，,。]\s*(?:改成|改为)\s*(?:优先)?处理\s+(.+)$/u,
-    /^(?:停止|暂停)\s+.+?[，,。]\s*(?:先|改为)\s*(?:处理|做)\s+(.+)$/u,
+    /^(?:先别做|先不要做|不要做)\s+.+?[，,。]\s*(?:改成|改为)\s+(.+)$/u,
+    /^(?:先别做|先不要做|不要做)\s+.+?[，,。]\s*(?:先处理|优先处理|先排查|优先排查|先梳理|优先梳理)\s+(.+)$/u,
+    /^(?:现在)?停止\s+.+?[，,。]\s*(?:改成|改为)\s+(.+)$/u,
+    /^(?:停止|暂停)\s+.+?[，,。]\s*(?:先|改为)\s+(.+)$/u,
     /^(?:switch to|prioritize)\s+(.+)$/i,
 ];
 const TASK_TRAILING_REPLY_RULES = [
@@ -289,7 +290,10 @@ export function summarizeUserRequestForTask(value: string, maxChars = 120): stri
         text = text.replace(pattern, "");
     }
 
-    text = text.replace(/^(?:请|请你)\s*/u, "").trim();
+    text = text
+        .replace(/^(?:请|请你)\s*/u, "")
+        .replace(/^(?:优先|先)\s*/u, "")
+        .trim();
     return normalizeUserRequest(text, maxChars);
 }
 
