@@ -21,12 +21,14 @@ const managedFiles = [
 function usage() {
   console.log(`Usage:
   node scripts/openclaw-overlay.mjs check --openclaw-dir /home/you/openclaw
+  node scripts/openclaw-overlay.mjs adopt --openclaw-dir /home/you/openclaw
   node scripts/openclaw-overlay.mjs apply --openclaw-dir /home/you/openclaw
   node scripts/openclaw-overlay.mjs unapply --openclaw-dir /home/you/openclaw
   node scripts/openclaw-overlay.mjs update --openclaw-dir /home/you/openclaw
 
 Commands:
   check    Inspect update blockers and patch state.
+  adopt    Register an already hand-patched checkout with overlay backups and exclude rules.
   apply    Apply the memory-enhanced OpenClaw 3.1 overlay patch.
   unapply  Restore the original core files from local backups.
   update   Unapply -> openclaw update --no-restart -> reapply -> build -> restart.
@@ -465,6 +467,25 @@ async function checkOverlay({ openclawDir, pluginDir }) {
   }
 }
 
+async function adoptOverlay({ openclawDir, pluginDir, dryRun, skipExclude }) {
+  const gitRoot = await resolveGitRoot(openclawDir);
+
+  if (!skipExclude) {
+    const exclude = await ensureExclude(openclawDir, pluginDir, dryRun);
+    if (exclude.added) {
+      console.log(`[overlay] added .git/info/exclude entry: ${exclude.entry}`);
+    }
+  }
+
+  for (const relPath of managedFiles) {
+    await ensureBackup(openclawDir, gitRoot, relPath, dryRun);
+    console.log(`[overlay] adopted backup for ${relPath}`);
+  }
+
+  await ensureManifest(openclawDir, pluginDir, dryRun);
+  console.log("[overlay] adopted current checkout without rewriting managed core files");
+}
+
 function detectBuildCommand(openclawDir) {
   return exists(path.join(openclawDir, "pnpm-lock.yaml")).then((hasPnpm) =>
     hasPnpm ? ["pnpm", "build"] : ["npm", "run", "build"],
@@ -538,6 +559,10 @@ async function main() {
 
   if (command === "check") {
     await checkOverlay({ openclawDir, pluginDir });
+    return;
+  }
+  if (command === "adopt") {
+    await adoptOverlay({ openclawDir, pluginDir, dryRun, skipExclude });
     return;
   }
   if (command === "apply") {

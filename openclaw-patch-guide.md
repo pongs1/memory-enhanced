@@ -10,6 +10,7 @@ If you are running OpenClaw from a source checkout, the default workflow is now:
 
 ```bash
 pnpm openclaw:overlay:check -- --openclaw-dir /home/pongs/openclaw
+pnpm openclaw:overlay:adopt -- --openclaw-dir /home/pongs/openclaw   # if this checkout is already hand-patched
 pnpm openclaw:overlay:apply -- --openclaw-dir /home/pongs/openclaw
 ```
 
@@ -31,6 +32,11 @@ The overlay script shipped with this repo solves that by:
 2. applying the memory-enhanced 3.1 bridge on demand
 3. restoring clean core files before update
 4. reapplying the patch, rebuilding, and restarting after update
+
+For existing environments that already have the live-interrupt bridge hand-edited into core,
+run `pnpm openclaw:overlay:adopt -- --openclaw-dir /home/pongs/openclaw` once first. That command
+does not rewrite the current patched files. It only records clean backups from `HEAD`, writes the
+overlay manifest, and adds `.git/info/exclude` if the plugin lives under `~/openclaw/extensions/`.
 
 The manual patch blocks below are still important, but they are now the **reference/fallback path** when the overlay script needs to be debugged or refreshed for a newer OpenClaw source layout.
 

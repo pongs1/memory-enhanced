@@ -50,7 +50,10 @@ The supported workflow for this repo is now an **overlay patch**:
 # Inspect current blockers first
 pnpm openclaw:overlay:check -- --openclaw-dir /home/pongs/openclaw
 
-# Apply the managed 3.1 overlay patch once
+# If this checkout is already hand-patched, adopt it first without rewriting the core files
+pnpm openclaw:overlay:adopt -- --openclaw-dir /home/pongs/openclaw
+
+# On a clean checkout, apply the managed 3.1 overlay patch once
 pnpm openclaw:overlay:apply -- --openclaw-dir /home/pongs/openclaw
 ```
 
@@ -59,6 +62,11 @@ What the overlay does:
 1. Saves pristine backups of the managed OpenClaw core files into `.openclaw-overlay/` inside this repo.
 2. Applies the base `wrap_stream_fn` hook and the 3.1 `liveInterrupt(...)` resume loop.
 3. Optionally adds `.git/info/exclude` for `extensions/memory-enhanced` if you keep the plugin source inside the OpenClaw git checkout.
+
+`adopt` is the migration command for environments that already have working manual edits in
+`src/plugins/types.ts`, `src/plugins/hooks.ts`, and `attempt.ts`. It does **not** rewrite those
+files. It only captures clean `HEAD` backups, writes overlay metadata, and adds the optional
+exclude rule so future updates can switch to `pnpm openclaw:overlay:update`.
 
 For **future OpenClaw source updates**, use this instead of `openclaw update` directly:
 
