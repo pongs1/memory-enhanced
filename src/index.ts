@@ -29,10 +29,10 @@ import {
 
 import {
     countWorkingMemoryTasks,
-    isIdleTask,
     loadWorkingMemoryState,
-    paths,
+    normalizeUserRequest,
     renderWorkingMemory,
+    syncLatestUserRequest,
     touchWorkingMemoryState,
 } from "./utils.js";
 import { registerStreamWrapper } from "./hooks/wrap-stream-fn.js";
@@ -62,6 +62,27 @@ export default function register(api: OpenClawPluginApi) {
             return msg.content.map((c: any) => c.text || "").join("\n");
         }
         return "";
+    };
+
+    const resolveIncomingUserRequest = (event: any, fallbackMessages?: any[]) => {
+        const candidates = [
+            typeof event?.prompt === "string" ? event.prompt : "",
+            typeof event?.text === "string" ? event.text : "",
+            typeof event?.body === "string" ? event.body : "",
+            typeof event?.content === "string" ? event.content : "",
+            extractText(event?.message),
+            extractText(event),
+        ];
+
+        for (const candidate of candidates) {
+            const normalized = normalizeUserRequest(candidate);
+            if (normalized) {
+                return normalized;
+            }
+        }
+
+        const lastUserMsg = [...(fallbackMessages || [])].reverse().find((m: any) => m.role === "user");
+        return normalizeUserRequest(extractText(lastUserMsg));
     };
 
     // OpenClaw runtime supplies a richer context object than the current plugin-sdk type exposes.
@@ -146,15 +167,33 @@ export default function register(api: OpenClawPluginApi) {
         sessionTickers.set(sid, ticks);
     });
 
+    api.on("message_received", async (event: any, ctx: any) => {
+        const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
+        const latestUserRequest = resolveIncomingUserRequest(event);
+        if (!latestUserRequest) {
+            return;
+        }
+        try {
+            syncLatestUserRequest(workspace, latestUserRequest);
+        } catch (e) { }
+    });
+
     api.on("before_prompt_build", async (event: any, ctx: any) => {
         const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
-        const p = paths(workspace);
         const sections: string[] = [];
         const sid = ctx?.sessionId || "default";
+        const messages = event.messages || [];
+        const latestUserRequest = resolveIncomingUserRequest(event, messages);
+        let workingState = loadWorkingMemoryState(workspace);
+
+        try {
+            if (latestUserRequest) {
+                workingState = syncLatestUserRequest(workspace, latestUserRequest);
+            }
+        } catch (e) { }
 
         // L1: Passive working-memory ledger, always injected from source-of-truth JSON.
         try {
-            const workingState = loadWorkingMemoryState(workspace);
             const ledgerMd = renderWorkingMemory(workingState).trim();
             if (ledgerMd) {
                 sections.push(`## Task Ledger\n${ledgerMd}`);
@@ -187,37 +226,14 @@ export default function register(api: OpenClawPluginApi) {
                 }
             }
 
-            const workingState = loadWorkingMemoryState(workspace);
             trackedTasks = countWorkingMemoryTasks(workingState);
             deferredTasks = workingState.deferred_tasks.length;
         } catch (e) { }
 
-        const messages = event.messages || [];
         const isNewSession = messages.filter((m: any) => m.role === "user").length <= 1 && messages.filter((m: any) => m.role === "assistant").length === 0;
-        const lastUserMsg = [...messages].reverse().find((m: any) => m.role === "user");
-        const lastUserText = extractText(lastUserMsg).replace(/\s+/g, " ").trim();
-        const latestUserRequest = lastUserText.slice(0, 240);
 
-        try {
-            if (latestUserRequest) {
-                const workingState = loadWorkingMemoryState(workspace);
-                if (
-                    workingState.last_user_request !== latestUserRequest ||
-                    isIdleTask(workingState.active_task)
-                ) {
-                    touchWorkingMemoryState(workspace, {
-                        last_user_request: latestUserRequest,
-                        active_task:
-                            isIdleTask(workingState.active_task)
-                                ? latestUserRequest
-                                : workingState.active_task,
-                    });
-                }
-            }
-        } catch (e) { }
-
-        const latestUserLine = lastUserText
-            ? `> - Latest User Request: ${lastUserText.slice(0, 220)}${lastUserText.length > 220 ? "..." : ""}`
+        const latestUserLine = latestUserRequest
+            ? `> - Latest User Request: ${latestUserRequest.slice(0, 220)}${latestUserRequest.length > 220 ? "..." : ""}`
             : `> - Latest User Request: (none captured)`;
 
         const memoryIndexStr = `> 📁 **Available Memory Index (Partial):**\n> - \`memory/knowledge/user-prefs.md\` (User preferences & coding style)\n> - \`memory/knowledge/architecture.md\` (System design decisions)\n> - \`memory/YYYY-MM-DD.md\` (Recent historical events)`;
@@ -262,7 +278,7 @@ export default function register(api: OpenClawPluginApi) {
 
         if (userText.trim()) {
             touchWorkingMemoryState(workspace, {
-                last_user_request: userText.replace(/\s+/g, " ").trim().slice(0, 240),
+                last_user_request: normalizeUserRequest(userText),
             });
         }
 

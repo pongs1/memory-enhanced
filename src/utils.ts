@@ -74,6 +74,17 @@ const LEGACY_IDLE_TASKS = new Set([
     "refilling...",
 ]);
 const WORKING_MEMORY_SCHEMA_VERSION = 2;
+const CONTINUATION_REQUESTS = new Set([
+    "continue",
+    "continue.",
+    "go on",
+    "keep going",
+    "继续",
+    "继续。",
+    "接着",
+    "继续做",
+    "往下",
+]);
 
 /** Standard workspace paths. */
 export function paths(workspace: string) {
@@ -217,6 +228,10 @@ function normalizeString(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
+export function normalizeUserRequest(value: string, maxChars = 240): string {
+    return value.replace(/\s+/g, " ").trim().slice(0, maxChars);
+}
+
 function normalizeStringList(value: unknown): string[] {
     if (!Array.isArray(value)) return [];
 
@@ -250,6 +265,42 @@ export function createDefaultWorkingMemoryState(): WorkingMemoryState {
 export function isIdleTask(task: string): boolean {
     const normalized = normalizeString(task).toLowerCase();
     return normalized === "" || LEGACY_IDLE_TASKS.has(normalized);
+}
+
+function tokenizeWorkingMemoryText(text: string): string[] {
+    const englishWords = text.toLowerCase().match(/[a-z0-9_-]{3,}/g) || [];
+    const cjkChunks = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
+    return [...englishWords, ...cjkChunks.map((chunk) => chunk.trim())];
+}
+
+export function hasMeaningfulTaskOverlap(activeTask: string, lastUserRequest: string): boolean {
+    const activeTokens = new Set(tokenizeWorkingMemoryText(activeTask));
+    const requestTokens = tokenizeWorkingMemoryText(lastUserRequest);
+
+    if (activeTokens.size === 0 || requestTokens.length === 0) {
+        return false;
+    }
+
+    return requestTokens.some((token) => activeTokens.has(token));
+}
+
+function dedupeWorkingTasks(tasks: string[], activeTask?: string): string[] {
+    const seen = new Set<string>();
+    const cleaned: string[] = [];
+
+    for (const task of tasks) {
+        const normalized = normalizeUserRequest(task, 240);
+        if (!normalized || normalized === activeTask || seen.has(normalized)) continue;
+        seen.add(normalized);
+        cleaned.push(normalized);
+    }
+
+    return cleaned;
+}
+
+function isContinuationRequest(request: string): boolean {
+    const normalized = normalizeUserRequest(request).toLowerCase();
+    return CONTINUATION_REQUESTS.has(normalized);
 }
 
 export function normalizeWorkingMemoryState(raw: unknown): WorkingMemoryState {
@@ -348,6 +399,67 @@ export function touchWorkingMemoryState(
         ...current,
         ...patch,
         last_updated: patch.last_updated ?? nowISO(),
+    });
+}
+
+export function syncLatestUserRequest(
+    workspace: string,
+    latestUserRequest: string
+): WorkingMemoryState {
+    const normalizedRequest = normalizeUserRequest(latestUserRequest);
+    const current = loadWorkingMemoryState(workspace);
+
+    if (!normalizedRequest) {
+        return current;
+    }
+
+    const continuationOnly = isContinuationRequest(normalizedRequest);
+    if (continuationOnly) {
+        if (isIdleTask(current.active_task) && current.last_user_request) {
+            return writeWorkingMemoryState(workspace, {
+                ...current,
+                active_task: current.last_user_request,
+                last_updated: nowISO(),
+            });
+        }
+        return current;
+    }
+
+    const activeIsIdle = isIdleTask(current.active_task);
+    const conflictsWithActive =
+        !activeIsIdle && !hasMeaningfulTaskOverlap(current.active_task, normalizedRequest);
+    const shouldPromote = activeIsIdle || conflictsWithActive;
+
+    if (!shouldPromote) {
+        if (current.last_user_request === normalizedRequest) {
+            return current;
+        }
+
+        return writeWorkingMemoryState(workspace, {
+            ...current,
+            last_user_request: normalizedRequest,
+            last_updated: nowISO(),
+        });
+    }
+
+    const previousActive = current.active_task;
+    const nextTasks = dedupeWorkingTasks(
+        [
+            ...(!isIdleTask(previousActive) && previousActive !== normalizedRequest
+                ? [previousActive]
+                : []),
+            ...current.next_tasks.filter((task) => task !== normalizedRequest),
+        ],
+        normalizedRequest
+    );
+
+    return writeWorkingMemoryState(workspace, {
+        ...current,
+        active_task: normalizedRequest,
+        next_tasks: nextTasks,
+        deferred_tasks: current.deferred_tasks.filter((task) => task !== normalizedRequest),
+        last_user_request: normalizedRequest,
+        last_updated: nowISO(),
     });
 }
 

@@ -1,8 +1,9 @@
 import { AssociativeScanner } from "../stream/associative-scanner.js";
 import {
+    hasMeaningfulTaskOverlap,
     isIdleTask,
     loadWorkingMemoryState,
-    touchWorkingMemoryState,
+    syncLatestUserRequest,
     type WorkingMemoryState,
 } from "../utils.js";
 
@@ -66,25 +67,6 @@ function isCheckpointBoundary(delta: string): boolean {
     return /(\n\n|\n|```|[。！？!?](?:\s|$)|\.(?:\s|$)|:(?:\s|$))/.test(delta);
 }
 
-function normalizeForOverlap(text: string): string[] {
-    const englishWords = text
-        .toLowerCase()
-        .match(/[a-z0-9_-]{3,}/g) || [];
-    const cjkChunks = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
-    return [...englishWords, ...cjkChunks.map((chunk) => chunk.trim())];
-}
-
-function hasMeaningfulTaskOverlap(activeTask: string, lastUserRequest: string): boolean {
-    const activeTokens = new Set(normalizeForOverlap(activeTask));
-    const requestTokens = normalizeForOverlap(lastUserRequest);
-
-    if (activeTokens.size === 0 || requestTokens.length === 0) {
-        return false;
-    }
-
-    return requestTokens.some((token) => activeTokens.has(token));
-}
-
 function updateRecentOutput(
     watchdog: OutputWatchdogState,
     delta: string,
@@ -97,9 +79,15 @@ function updateRecentOutput(
         merged.length > maxChars ? merged.slice(-maxChars) : merged;
 }
 
+function tokenizeOverlap(text: string): string[] {
+    const englishWords = text.toLowerCase().match(/[a-z0-9_-]{3,}/g) || [];
+    const cjkChunks = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
+    return [...englishWords, ...cjkChunks.map((chunk) => chunk.trim())];
+}
+
 function calculateTokenOverlap(sourceText: string, referenceText: string): number {
-    const sourceTokens = new Set(normalizeForOverlap(sourceText));
-    const referenceTokens = [...new Set(normalizeForOverlap(referenceText))];
+    const sourceTokens = new Set(tokenizeOverlap(sourceText));
+    const referenceTokens = [...new Set(tokenizeOverlap(referenceText))];
 
     if (sourceTokens.size === 0 || referenceTokens.length === 0) {
         return 0;
@@ -146,10 +134,14 @@ function calculateDriftScore(
 function maybeRefreshWorkingState(workspace: string): WorkingMemoryState {
     const workingState = loadWorkingMemoryState(workspace);
 
-    if (workingState.last_user_request && isIdleTask(workingState.active_task)) {
-        return touchWorkingMemoryState(workspace, {
-            active_task: workingState.last_user_request,
-        });
+    if (
+        workingState.last_user_request &&
+        (
+            isIdleTask(workingState.active_task) ||
+            !hasMeaningfulTaskOverlap(workingState.active_task, workingState.last_user_request)
+        )
+    ) {
+        return syncLatestUserRequest(workspace, workingState.last_user_request);
     }
 
     return workingState;
