@@ -28,7 +28,6 @@ import {
 } from "./tools/memory_working.js";
 
 import {
-    countWorkingMemoryTasks,
     loadWorkingMemoryState,
     normalizeUserRequest,
     renderWorkingMemory,
@@ -211,55 +210,20 @@ export default function register(api: OpenClawPluginApi) {
             }
         } catch (e) { }
 
-        // --- Telemetry Calculation (Zero LLM Token Cost) ---
-        let unconsolidatedCount = 0;
-        let trackedTasks = 0;
-        let deferredTasks = 0;
-        try {
-            const fs = await import("node:fs");
-            const path = await import("node:path");
-
-            // Unconsolidated events
-            const eventsDir = path.join(workspace, ".memory", "events");
-            if (fs.existsSync(eventsDir)) {
-                const files = fs.readdirSync(eventsDir).filter((f: string) => f.endsWith(".jsonl"));
-                for (const f of files) {
-                    const content = fs.readFileSync(path.join(eventsDir, f), "utf-8").trim();
-                    if (content) {
-                        const lines = content.split("\n").filter((l: string) => l.trim());
-                        for (const line of lines) {
-                            try {
-                                const ev = JSON.parse(line);
-                                if (!ev.consolidated) unconsolidatedCount++;
-                            } catch (e) { }
-                        }
-                    }
-                }
-            }
-
-            trackedTasks = countWorkingMemoryTasks(workingState);
-            deferredTasks = workingState.deferred_tasks.length;
-        } catch (e) { }
-
         const isNewSession = messages.filter((m: any) => m.role === "user").length <= 1 && messages.filter((m: any) => m.role === "assistant").length === 0;
 
         const latestUserLine = latestUserRequest
             ? `> - Latest User Request: ${latestUserRequest.slice(0, 220)}${latestUserRequest.length > 220 ? "..." : ""}`
             : `> - Latest User Request: (none captured)`;
 
-        const memoryIndexStr = `> 📁 **Available Memory Index (Partial):**\n> - \`memory/knowledge/user-prefs.md\` (User preferences & coding style)\n> - \`memory/knowledge/architecture.md\` (System design decisions)\n> - \`memory/YYYY-MM-DD.md\` (Recent historical events)`;
-        const telemetryStr = `> 📊 **System Health Telemetry:**\n> - Unconsolidated Events: ${unconsolidatedCount} (If > 3, consider calling \`memory_consolidate\`)\n> - Working Ledger: ${trackedTasks} active/next task(s), ${deferredTasks} deferred`;
-        const workingRuleStr = `> 🧭 **Working Memory Rule:**\n> - The latest user message is authoritative for this turn.\n${latestUserLine}\n> - Treat the task ledger as resumable backlog only. If it conflicts with the latest user request, serve the user request first and update the ledger afterward.`;
+        const workingRuleStr = `> 🧭 **Working Memory Rule:**\n> - The latest user message is authoritative for this turn.\n${latestUserLine}\n> - Treat the task ledger as resumable backlog only.\n> - If backlog conflicts with the latest user request, follow the user request first.`;
 
         sections.push(workingRuleStr);
 
-        if (isNewSession) {
-            sections.push(`> [SYSTEM NOTIFICATION: COGNITIVE WAKE-UP]\n> You are waking up to a new session or beginning a complex task. Before proceeding, perform an explicit Context Check:\n> \n> 1. Are you aware of the user's specific definitions, rules, or long-term preferences?\n> 2. Do you have the historical architecture or constraints for the current project?\n>\n${telemetryStr}\n>\n${memoryIndexStr}\n>\n> ⚡ **MANDATORY DIRECTIVE**:\n> IF you lack the necessary context to fulfill the user's request flawlessly, you MUST use the \`read\` or \`memory_explore\` tool to fetch the exact file contents from the index above. IF you already have the context, proceed without reading.`);
-        } else {
-            // Cognitive Pulse Injection
+        if (!isNewSession) {
             const ticks = sessionTickers.get(sid) || 0;
             if (ticks >= 5) {
-                sections.push(`> ⚠️ **[SYSTEM INTERRUPT: COGNITIVE OVERLOAD DETECTED]**\n> You have executed ${ticks} consecutive steps. Your operating context may be saturated, or you may be suffering from task tunnel vision.\n>\n${telemetryStr}\n>\n${memoryIndexStr}\n>\n> ⚡ **REQUIRED ACTION**: \n> 1. Does your current blocker match anything in the long-term index? If so, evaluate if you need to call \`read\` or \`memory_explore\`.\n> 2. You MUST update your \`memory_working\` ledger to reflect your current stage.\n> 3. You MUST save your intermediate findings via \`memory_record\` before resuming the task.`);
+                sections.push(`> ⚠️ **Cognitive Check:** You have executed ${ticks} consecutive non-memory steps.\n> - Re-read the latest user request before continuing.\n> - If your active task is stale, update \`memory_working\` after you answer.`);
                 sessionTickers.set(sid, 0);
             }
         }
