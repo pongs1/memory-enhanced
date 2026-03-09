@@ -2,7 +2,7 @@
   "id": "memory-enhanced",
   "name": "Memory Enhanced",
   "description": "Brain-inspired four-layer memory system with structured events, knowledge distillation, association traversal, and automated consolidation",
-  "version": "1.0.0",
+  "version": "8.0.1",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -21,6 +21,36 @@
         "type": "number",
         "default": 5000,
         "description": "Target maximum character count for auto-generated MEMORY.md"
+      },
+      "outputCheckpointChars": {
+        "type": "number",
+        "default": 1600,
+        "description": "Approximate output length threshold before the long-answer watchdog considers a checkpoint interrupt"
+      },
+      "outputCheckpointCooldownChars": {
+        "type": "number",
+        "default": 1000,
+        "description": "Minimum output distance between checkpoint attempts"
+      },
+      "outputCheckpointBoundarySlackChars": {
+        "type": "number",
+        "default": 320,
+        "description": "Extra slack allowed while waiting for a sentence or block boundary before interrupting"
+      },
+      "outputCheckpointMaxInterrupts": {
+        "type": "number",
+        "default": 2,
+        "description": "Maximum number of output checkpoint interrupts allowed in a single reply"
+      },
+      "outputCheckpointDriftThreshold": {
+        "type": "number",
+        "default": 0.84,
+        "description": "Drift score threshold that must be crossed before a soft-boundary checkpoint interrupt fires"
+      },
+      "outputCheckpointTailChars": {
+        "type": "number",
+        "default": 1400,
+        "description": "Recent output tail length retained for drift scoring"
       }
     }
   },
