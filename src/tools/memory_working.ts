@@ -19,6 +19,24 @@ const MAX_NEXT_TASKS = 5;
 const MAX_DONE_RECENT = 5;
 const MAX_TASK_CHARS = 120;
 const MAX_GOAL_CHARS = 400;
+const LOW_SIGNAL_TASK_PATTERNS = [
+    /^reply$/i,
+    /^respond$/i,
+    /^response$/i,
+    /^answer$/i,
+    /^assistant reply$/i,
+    /^user request$/i,
+    /^ack(?:nowledge(?:ment)?)?$/i,
+    /^continue$/i,
+    /^resume$/i,
+    /^ok$/i,
+    /^ready$/i,
+    /^回复$/,
+    /^回答$/,
+    /^继续$/,
+    /^收到$/,
+    /^好的?$/,
+];
 
 const WorkingAction = Type.Union(
     [
@@ -299,6 +317,9 @@ function sanitizeTaskText(input?: string, maxChars = MAX_TASK_CHARS): string {
     if (/^(Task Ledger|Working Memory Rule|Latest User Request|Last User Request)$/i.test(normalized)) {
         return "";
     }
+    if (isLowSignalTaskTitle(normalized)) {
+        return "";
+    }
     return normalized;
 }
 
@@ -321,6 +342,10 @@ function dedupeTasks(tasks: string[], activeTask?: string): string[] {
     return cleaned;
 }
 
+function isLowSignalTaskTitle(task: string): boolean {
+    return LOW_SIGNAL_TASK_PATTERNS.some((pattern) => pattern.test(task.trim()));
+}
+
 function trimDoneRecent(tasks: string[]): string[] {
     return tasks.slice(-MAX_DONE_RECENT);
 }
@@ -332,7 +357,7 @@ function completeActiveTask(
 ): WorkingMemoryState {
     const completed = state.active_task;
     const doneRecent =
-        completed && !isIdleTask(completed)
+        completed && !isIdleTask(completed) && !isLowSignalTaskTitle(completed)
             ? trimDoneRecent([...state.done_recent, completed])
             : state.done_recent;
 

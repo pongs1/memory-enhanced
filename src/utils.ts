@@ -330,6 +330,22 @@ export function hasMeaningfulTaskOverlap(activeTask: string, lastUserRequest: st
     return requestTokens.some((token) => activeTokens.has(token));
 }
 
+export function shouldSwitchToLatestUserRequest(
+    state: Pick<WorkingMemoryState, "active_task" | "last_user_request">,
+    latestUserRequest: string
+): boolean {
+    const normalizedRequest = normalizeUserRequest(latestUserRequest);
+    if (!normalizedRequest || isContinuationRequest(normalizedRequest)) {
+        return false;
+    }
+
+    if (isIdleTask(state.active_task)) {
+        return true;
+    }
+
+    return !hasMeaningfulTaskOverlap(state.active_task, normalizedRequest);
+}
+
 function dedupeWorkingTasks(tasks: string[], activeTask?: string): string[] {
     const seen = new Set<string>();
     const cleaned: string[] = [];
@@ -426,6 +442,27 @@ export function renderWorkingMemory(state: WorkingMemoryState): string {
     return lines.join("\n");
 }
 
+export function renderInjectedWorkingMemory(state: WorkingMemoryState): string {
+    const lines = [
+        `- Goal: ${state.project_goal}`,
+        `- Active: ${state.active_task}`,
+    ];
+
+    if (state.next_tasks.length > 0) {
+        lines.push(`- Next: ${state.next_tasks.slice(0, 3).join(" | ")}`);
+    }
+
+    if (state.deferred_tasks.length > 0) {
+        lines.push(`- Deferred: ${state.deferred_tasks.length} parked`);
+    }
+
+    if (state.last_user_request) {
+        lines.push(`- Last User Request: ${state.last_user_request}`);
+    }
+
+    return lines.join("\n");
+}
+
 export function writeWorkingMemoryState(workspace: string, state: WorkingMemoryState): WorkingMemoryState {
     const p = paths(workspace);
     const normalized = normalizeWorkingMemoryState(state);
@@ -472,10 +509,7 @@ export function syncLatestUserRequest(
         return current;
     }
 
-    const activeIsIdle = isIdleTask(current.active_task);
-    const conflictsWithActive =
-        !activeIsIdle && !hasMeaningfulTaskOverlap(current.active_task, normalizedRequest);
-    const shouldPromote = activeIsIdle || conflictsWithActive;
+    const shouldPromote = shouldSwitchToLatestUserRequest(current, normalizedRequest);
 
     if (!shouldPromote) {
         if (current.last_user_request === normalizedRequest) {

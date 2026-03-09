@@ -28,9 +28,11 @@ import {
 } from "./tools/memory_working.js";
 
 import {
+    isIdleTask,
     loadWorkingMemoryState,
     normalizeUserRequest,
-    renderWorkingMemory,
+    renderInjectedWorkingMemory,
+    shouldSwitchToLatestUserRequest,
     syncLatestUserRequest,
     writeWorkingMemoryState,
 } from "./utils.js";
@@ -194,7 +196,12 @@ export default function register(api: OpenClawPluginApi) {
         const sid = ctx?.sessionId || "default";
         const messages = event.messages || [];
         const latestUserRequest = resolveIncomingUserRequest(event, messages);
-        let workingState = writeWorkingMemoryState(workspace, loadWorkingMemoryState(workspace));
+        const currentState = writeWorkingMemoryState(workspace, loadWorkingMemoryState(workspace));
+        const previousActiveTask = currentState.active_task;
+        const taskSwitchDetected = latestUserRequest
+            ? shouldSwitchToLatestUserRequest(currentState, latestUserRequest)
+            : false;
+        let workingState = currentState;
 
         try {
             if (latestUserRequest) {
@@ -204,7 +211,7 @@ export default function register(api: OpenClawPluginApi) {
 
         // L1: Passive working-memory ledger, always injected from source-of-truth JSON.
         try {
-            const ledgerMd = renderWorkingMemory(workingState).trim();
+            const ledgerMd = renderInjectedWorkingMemory(workingState).trim();
             if (ledgerMd) {
                 sections.push(`## Task Ledger\n${ledgerMd}`);
             }
@@ -216,9 +223,43 @@ export default function register(api: OpenClawPluginApi) {
             ? `> - Latest User Request: ${latestUserRequest.slice(0, 220)}${latestUserRequest.length > 220 ? "..." : ""}`
             : `> - Latest User Request: (none captured)`;
 
+        if (
+            taskSwitchDetected &&
+            !isIdleTask(previousActiveTask) &&
+            previousActiveTask !== workingState.active_task
+        ) {
+            sections.push(
+                [
+                    "## Priority Shift",
+                    `- NOW: ${workingState.active_task}`,
+                    `- PREVIOUS ACTIVE -> backlog: ${previousActiveTask}`,
+                    "- Obey NOW first. Do not keep executing the previous active task unless the user explicitly asks for it.",
+                ].join("\n")
+            );
+        }
+
+        if (isNewSession && !isIdleTask(workingState.active_task)) {
+            sections.push(
+                [
+                    "## Session Resume",
+                    `- Existing active task: ${workingState.active_task}`,
+                    "- If the user's first message means continue/resume, keep this active task.",
+                    "- If the user gives a new task, switch immediately and park the old task in backlog.",
+                ].join("\n")
+            );
+        }
+
         const workingRuleStr = `> 🧭 **Working Memory Rule:**\n> - The latest user message is authoritative for this turn.\n${latestUserLine}\n> - Treat the task ledger as resumable backlog only.\n> - If backlog conflicts with the latest user request, follow the user request first.\n> - Never copy this injected block, timestamps, or markdown labels back into \`memory_working\`. Store only short plain task titles.`;
+        const focusProtocolStr = [
+            "> **Focus Protocol:**",
+            "> - Keep a tiny private replan in this shape: `NOW / NEXT / DEFER`.",
+            "> - If the user changed direction, silently re-rank before answering.",
+            "> - If you update `memory_working`, use only short plain task titles.",
+            "> - If the tool rejects your write, retry once with shorter labels instead of storing paragraphs.",
+        ].join("\n");
 
         sections.push(workingRuleStr);
+        sections.push(focusProtocolStr);
 
         if (!isNewSession) {
             const ticks = sessionTickers.get(sid) || 0;
