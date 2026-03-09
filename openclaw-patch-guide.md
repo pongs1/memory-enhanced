@@ -204,3 +204,93 @@ What it does **not** automatically enable:
 - True mid-stream checkpoint steering still requires your fork to implement `liveInterrupt(...)`.
 
 `memory-enhanced` will automatically detect `ctx.liveInterrupt(...)` if your fork provides it. If absent, it will disable live interrupt behavior instead of pretending it works.
+
+## 6. OpenClaw 3.1 Landing Points
+
+If you are patching the older OpenClaw 3.1 codebase, the relevant control paths already exist, but they are split across several files:
+
+- `src/agents/pi-embedded-runner/runs.ts`
+  - `queueEmbeddedPiMessage(sessionId, text)`
+  - `abortEmbeddedPiRun(sessionId)`
+  - This is the public embedded-run registry, but it is **not** enough by itself for plugin-driven live stream interruption.
+
+- `src/auto-reply/reply/get-reply-run.ts`
+  - `messages.queue.mode = "interrupt"` clears the command lane and aborts the active embedded run.
+  - This proves OpenClaw already has an "abort current run, prefer newest work" control path.
+
+- `src/auto-reply/reply/commands-session-abort.ts`
+  - `/stop` composes queue cleanup plus `abortEmbeddedPiRun(...)` plus persisted cutoff metadata.
+
+- `src/auto-reply/reply/abort-cutoff.ts`
+  - Stores `abortCutoffMessageSid` / `abortCutoffTimestamp`.
+
+- `src/auto-reply/reply/get-reply-inline-actions.ts`
+  - Consumes that cutoff and skips stale queued messages at or before the cutoff boundary.
+
+These pieces are real and useful, but they do **not** automatically give plugins a clean `liveInterrupt(...)` API.
+
+### 3.1 Recommendation
+
+For OpenClaw 3.1, the best place to add a plugin-facing `liveInterrupt(...)` bridge is:
+
+- primary landing point: `src/agents/pi-embedded-runner/run/attempt.ts`
+- supporting public registry (optional): `src/agents/pi-embedded-runner/runs.ts`
+
+Why `attempt.ts` is the real landing point:
+
+- The plugin hook runs inside the active attempt and already has access to `activeSession`.
+- `queueEmbeddedPiMessage(...)` only queues work onto the current session.
+- `abortEmbeddedPiRun(...)` only stops the current run.
+- `activeSession.steer(...) + abort()` still does **not** automatically resume a new turn.
+
+In OpenClaw 3.1, true plugin-driven live interruption therefore needs a small attempt-local control loop:
+
+1. Plugin calls `ctx.liveInterrupt(text, meta?)`.
+2. Core stores a pending live-interrupt request for the current attempt.
+3. Core queues the steer text onto `activeSession`.
+4. Core aborts the current run.
+5. Before attempt finalization, core detects the pending live interrupt and immediately resumes the session using the queued steer instead of letting the attempt end.
+
+### Important Constraint in 3.1
+
+Do **not** implement plugin live interrupt by:
+
+- yielding fake stream events like `{ type: "steer" }`
+- calling `queueEmbeddedPiMessage(...)` alone
+- calling `activeSession.steer(...)` alone
+- calling `activeSession.steer(...) + abort()` without a resume branch
+
+Those paths either operate only at queue boundaries or abort the run without restarting it.
+
+### Minimal 3.1 Shape
+
+For a 3.1 fork, the bridge should look roughly like this:
+
+```typescript
+type PendingLiveInterrupt =
+  | { text: string; reason?: string }
+  | null;
+```
+
+Inside `attempt.ts`, maintain one pending interrupt for the active attempt and expose:
+
+```typescript
+liveInterrupt: async (text, meta) => {
+  pendingLiveInterrupt = { text, reason: meta?.reason };
+  await activeSession.steer(text);
+  abortRun(false);
+  return true;
+}
+```
+
+Then replace the one-shot prompt execution with an attempt-local loop that:
+
+- runs the initial prompt once
+- if the run was aborted because of a pending live interrupt, resumes immediately
+- only exits the attempt when no live interrupt is pending
+
+The key idea is:
+
+- `runs.ts` exposes global "abort / queue" primitives
+- `abort-cutoff.ts` and `/stop` already solve stale queued inbound work
+- but **plugin live interruption must be completed inside `attempt.ts`**, because only that layer can abort and then resume the same streaming attempt cleanly
