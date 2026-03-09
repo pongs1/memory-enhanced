@@ -64,25 +64,36 @@ export default function register(api: OpenClawPluginApi) {
         return "";
     };
 
+    const stripInjectedMemoryContext = (value: string) => {
+        return value
+            .replace(/<!-- Memory Context \(Live\) -->[\s\S]*?<!-- End Memory Context -->/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+    };
+
     const resolveIncomingUserRequest = (event: any, fallbackMessages?: any[]) => {
+        const lastUserMsg = [...(fallbackMessages || [])].reverse().find((m: any) => m.role === "user");
+        const lastUserText = normalizeUserRequest(extractText(lastUserMsg));
+        if (lastUserText) {
+            return lastUserText;
+        }
+
         const candidates = [
-            typeof event?.prompt === "string" ? event.prompt : "",
             typeof event?.text === "string" ? event.text : "",
             typeof event?.body === "string" ? event.body : "",
             typeof event?.content === "string" ? event.content : "",
             extractText(event?.message),
+            typeof event?.prompt === "string" ? stripInjectedMemoryContext(event.prompt) : "",
             extractText(event),
         ];
 
         for (const candidate of candidates) {
-            const normalized = normalizeUserRequest(candidate);
+            const normalized = normalizeUserRequest(stripInjectedMemoryContext(candidate));
             if (normalized) {
                 return normalized;
             }
         }
-
-        const lastUserMsg = [...(fallbackMessages || [])].reverse().find((m: any) => m.role === "user");
-        return normalizeUserRequest(extractText(lastUserMsg));
+        return "";
     };
 
     // OpenClaw runtime supplies a richer context object than the current plugin-sdk type exposes.
