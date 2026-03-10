@@ -28,10 +28,8 @@ import {
 } from "./tools/memory_working.js";
 
 import {
-    hasMeaningfulTaskOverlap,
     isSyntheticControlRequest,
     isIdleTask,
-    loadWorkingMemoryState,
     normalizeUserRequest,
     renderInjectedWorkingMemory,
     summarizeUserRequestForTask,
@@ -197,21 +195,10 @@ export default function register(api: OpenClawPluginApi) {
 
     // Cognitive Pulse Ticker to track continuous tool executions without memory updates
     const sessionTickers = new Map<string, number>();
-    const sessionPromptSnapshots = new Map<string, { activeTask: string; lastUserRequest: string }>();
-    const sessionOverrideInterrupts = new Map<string, number>();
-    const USER_OVERRIDE_INTERRUPT_COOLDOWN_MS = 15000;
-
-    const maybeLiveInterrupt = async (ctx: any, text: string, reason: string) => {
-        if (typeof ctx?.liveInterrupt !== "function") {
-            return false;
-        }
-        return !!(await ctx.liveInterrupt(text, { reason }));
-    };
 
     api.on("after_tool_call", async (event: any, ctx: any) => {
         const toolName = event.toolName || "";
         const sid = ctx?.sessionId || "default";
-        const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
 
         // If the agent uses a memory tool, it resets its cognitive pressure
         if (toolName.startsWith("memory_")) {
@@ -222,57 +209,6 @@ export default function register(api: OpenClawPluginApi) {
         // Otherwise, cognitive pressure increases
         const ticks = (sessionTickers.get(sid) || 0) + 1;
         sessionTickers.set(sid, ticks);
-
-        const snapshot = sessionPromptSnapshots.get(sid);
-        if (!snapshot) {
-            return;
-        }
-
-        const currentState = loadWorkingMemoryState(workspace);
-        const latestRequest = currentState.last_user_request;
-        const activeTask = currentState.active_task;
-        const staleRunTarget =
-            snapshot.activeTask &&
-            activeTask &&
-            snapshot.activeTask !== activeTask &&
-            !hasMeaningfulTaskOverlap(snapshot.activeTask, activeTask);
-        const newerRequestArrived =
-            latestRequest &&
-            snapshot.lastUserRequest &&
-            latestRequest !== snapshot.lastUserRequest;
-
-        if (!staleRunTarget && !newerRequestArrived) {
-            return;
-        }
-
-        const lastInterruptAt = sessionOverrideInterrupts.get(sid) || 0;
-        if (Date.now() - lastInterruptAt < USER_OVERRIDE_INTERRUPT_COOLDOWN_MS) {
-            return;
-        }
-
-        const interruptPrompt = [
-            "[USER OVERRIDE DETECTED]",
-            "A newer user request arrived during the current tool chain and working memory has already been updated.",
-            `- NOW: ${activeTask}`,
-            `- Newest user request: ${latestRequest || "(missing)"}`,
-            `- Previous run target: ${snapshot.activeTask || "(missing)"}`,
-            "",
-            "Mandatory actions:",
-            "1. Stop pursuing the previous run target.",
-            "2. If any partial results are still useful, summarize them briefly instead of continuing the stale branch.",
-            "3. Continue from NOW.",
-            "4. If you touch memory_working, use only short plain task titles.",
-            "5. Do not mention this interrupt to the user.",
-        ].join("\n");
-
-        const didInterrupt = await maybeLiveInterrupt(
-            ctx,
-            interruptPrompt,
-            "memory-enhanced user override"
-        );
-        if (didInterrupt) {
-            sessionOverrideInterrupts.set(sid, Date.now());
-        }
     });
 
     api.on("message_received", async (event: any, ctx: any) => {
@@ -315,10 +251,6 @@ export default function register(api: OpenClawPluginApi) {
         const taskSwitchDetected = authoritativeLatestUserRequest
             ? shouldSwitchToLatestUserRequest(currentState, authoritativeLatestUserRequest)
             : false;
-        sessionPromptSnapshots.set(sid, {
-            activeTask: workingState.active_task,
-            lastUserRequest: workingState.last_user_request,
-        });
         const latestUserTaskTitle = authoritativeLatestUserRequest
             ? summarizeUserRequestForTask(authoritativeLatestUserRequest, 220) || authoritativeLatestUserRequest
             : "";
@@ -384,10 +316,7 @@ export default function register(api: OpenClawPluginApi) {
     api.on("agent_end", async (event: any, ctx: { workspaceDir?: string }) => {
         // L2: Auto-record user intent & assistant reply
         const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
-        const sid = (ctx as any)?.sessionId || "default";
         const msgs = event?.messages || [];
-        sessionPromptSnapshots.delete(sid);
-        sessionOverrideInterrupts.delete(sid);
 
         // Find last user message
         const lastUser = [...msgs].reverse().find((m: any) => m.role === "user");

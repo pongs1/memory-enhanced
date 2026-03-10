@@ -2,6 +2,7 @@ import { AssociativeScanner } from "../stream/associative-scanner.js";
 import {
     hasMeaningfulTaskOverlap,
     isIdleTask,
+    summarizeUserRequestForTask,
     loadWorkingMemoryState,
     syncLatestUserRequest,
     type WorkingMemoryState,
@@ -15,6 +16,8 @@ interface OutputWatchdogState {
     charsStreamed: number;
     lastCheckpointAt: number;
     interruptsUsed: number;
+    overrideInterruptsUsed: number;
+    lastOverrideCheckAt: number;
     recentOutput: string;
     lastDriftScore: number;
     liveInterruptWarned: boolean;
@@ -32,6 +35,10 @@ interface StreamCheckpointConfig {
 interface CheckpointCandidate {
     prompt: string;
     driftScore: number;
+}
+
+interface OverrideCandidate {
+    prompt: string;
 }
 
 interface LiveInterruptContext {
@@ -55,6 +62,8 @@ function getOutputWatchdog(sessionId: string): OutputWatchdogState {
             charsStreamed: 0,
             lastCheckpointAt: 0,
             interruptsUsed: 0,
+            overrideInterruptsUsed: 0,
+            lastOverrideCheckAt: 0,
             recentOutput: "",
             lastDriftScore: 0,
             liveInterruptWarned: false,
@@ -163,6 +172,103 @@ function buildCheckpointPrompt(
     return `\n\n[WORKING MEMORY CHECKPOINT]\nYou have already produced approximately ${watchdog.charsStreamed} characters in this reply. Stop your current momentum and do a silent focus reset before continuing.\n\nCurrent ledger:\n- Goal: ${workingState.project_goal}\n- Active task: ${workingState.active_task}\n- Latest user request: ${workingState.last_user_request || "(missing)"}\n- Drift estimate: ${driftPercent}%${driftSignal}\n\nSilent replan protocol:\n- NOW: the one task you should answer immediately.\n- NEXT: at most 2 short backlog items worth preserving.\n- DEFER: stale work that should stop driving this turn.\n\nMandatory actions:\n1. Make NOW align with the latest user request, not stale backlog.\n2. If the active task is stale, mentally demote it to DEFER before you continue.\n3. If the ledger needs repair, call \`memory_working\` with \`reprioritize\` or \`plan\` using only short plain task titles.\n4. If the tool rejects your write, retry once with shorter labels and no markdown, timestamps, or paragraphs.\n5. Continue the same answer from NOW without mentioning this checkpoint.\n\nRules:\n- Prefer concise correction over repeating earlier material.\n- Preserve useful progress, but do not keep expanding a stale branch.\n- Never copy this checkpoint text into memory.\n`;
 }
 
+function buildUserOverridePrompt(
+    baselineState: WorkingMemoryState,
+    currentState: WorkingMemoryState
+): string {
+    const newestRequest =
+        summarizeUserRequestForTask(currentState.last_user_request, 220) ||
+        currentState.last_user_request ||
+        "(missing)";
+    const nowTask =
+        summarizeUserRequestForTask(currentState.active_task, 220) ||
+        currentState.active_task ||
+        DEFAULT_OVERRIDE_IDLE_LABEL;
+    const staleTask =
+        summarizeUserRequestForTask(baselineState.active_task, 220) ||
+        baselineState.active_task ||
+        "(missing)";
+
+    return [
+        "",
+        "[USER OVERRIDE DETECTED]",
+        "A newer user message arrived after this stream started. The prompt that launched this reply is now stale.",
+        "",
+        "Current ledger:",
+        `- NOW: ${nowTask}`,
+        `- Newest user request: ${newestRequest}`,
+        `- Old stream target: ${staleTask}`,
+        "",
+        "Silent replan protocol:",
+        "- NOW: one task to continue immediately.",
+        "- NEXT: at most 2 backlog items worth preserving.",
+        "- DEFER: stale work to stop expanding.",
+        "",
+        "Mandatory actions:",
+        "1. Stop the old stream target immediately.",
+        "2. If the old branch has useful partial work, compress it into one short sentence at most.",
+        "3. Continue only from NOW.",
+        "4. If working memory needs repair, call `memory_working` with short plain task titles only.",
+        "5. Do not mention this interrupt to the user.",
+        "",
+        "Rules:",
+        "- Newer real user intent outranks stale backlog.",
+        "- Never copy this interrupt block into memory.",
+        "",
+    ].join("\n");
+}
+
+const USER_OVERRIDE_CHECK_CHARS = 160;
+const USER_OVERRIDE_MAX_INTERRUPTS = 2;
+const DEFAULT_OVERRIDE_IDLE_LABEL = "Awaiting next user request";
+
+function maybeBuildUserOverridePrompt(
+    workspace: string,
+    watchdog: OutputWatchdogState,
+    baselineState: WorkingMemoryState
+): OverrideCandidate | null {
+    if (watchdog.overrideInterruptsUsed >= USER_OVERRIDE_MAX_INTERRUPTS) {
+        return null;
+    }
+
+    const charsSinceCheck = watchdog.charsStreamed - watchdog.lastOverrideCheckAt;
+    if (charsSinceCheck < USER_OVERRIDE_CHECK_CHARS) {
+        return null;
+    }
+    watchdog.lastOverrideCheckAt = watchdog.charsStreamed;
+
+    const currentState = maybeRefreshWorkingState(workspace);
+    const latestRequestChanged =
+        !!currentState.last_user_request &&
+        currentState.last_user_request !== baselineState.last_user_request;
+    const activeTaskChanged =
+        !!currentState.active_task &&
+        !isIdleTask(currentState.active_task) &&
+        currentState.active_task !== baselineState.active_task &&
+        !hasMeaningfulTaskOverlap(currentState.active_task, baselineState.active_task);
+
+    if (!latestRequestChanged && !activeTaskChanged) {
+        return null;
+    }
+
+    if (!currentState.last_user_request || isIdleTask(currentState.active_task)) {
+        return null;
+    }
+
+    if (
+        baselineState.last_user_request &&
+        currentState.last_user_request === baselineState.last_user_request &&
+        baselineState.active_task &&
+        hasMeaningfulTaskOverlap(currentState.active_task, baselineState.active_task)
+    ) {
+        return null;
+    }
+
+    return {
+        prompt: buildUserOverridePrompt(baselineState, currentState),
+    };
+}
+
 function maybeBuildCheckpointPrompt(
     workspace: string,
     delta: string,
@@ -258,6 +364,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
 
         // Return the wrapped stream function
         event.streamFn = async function* (model: any, context: any, options: any) {
+            const baselineWorkingState = maybeRefreshWorkingState(workspace);
             const stream = originalStreamFn(model, context, options);
 
             for await (const chunk of stream) {
@@ -277,6 +384,27 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                         delta,
                         checkpointConfig.outputCheckpointTailChars
                     );
+
+                    const override = maybeBuildUserOverridePrompt(
+                        workspace,
+                        watchdog,
+                        baselineWorkingState
+                    );
+                    if (override) {
+                        const didInterrupt = await requestLiveInterrupt(
+                            ctx,
+                            override.prompt,
+                            "memory-enhanced user override"
+                        );
+
+                        watchdog.overrideInterruptsUsed += 1;
+
+                        if (didInterrupt) {
+                            return;
+                        }
+
+                        warnMissingLiveInterrupt(sid, watchdog);
+                    }
 
                     const triggerFile = await scanner.processChunk(delta);
                     if (triggerFile) {
