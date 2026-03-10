@@ -354,6 +354,29 @@ function normalizeTaskTitle(value: string, maxChars = 120): string {
     return compact;
 }
 
+function shouldRefreshProjectGoal(projectGoal: string, latestUserRequest: string): boolean {
+    const normalizedGoal =
+        normalizeTaskTitle(projectGoal, 240) ||
+        normalizeUserRequest(projectGoal, 240);
+    const normalizedRequest =
+        summarizeUserRequestForTask(latestUserRequest, 240) ||
+        normalizeUserRequest(latestUserRequest, 240);
+
+    if (!normalizedRequest) {
+        return false;
+    }
+
+    if (!normalizedGoal || normalizedGoal === "Not set") {
+        return true;
+    }
+
+    if (isSyntheticControlRequest(normalizedGoal)) {
+        return true;
+    }
+
+    return !hasMeaningfulTaskOverlap(normalizedGoal, normalizedRequest);
+}
+
 function normalizeStringList(value: unknown): string[] {
     if (!Array.isArray(value)) return [];
 
@@ -626,9 +649,13 @@ export function syncLatestUserRequest(
         ],
         normalizedRequest
     );
+    const nextProjectGoal = shouldRefreshProjectGoal(current.project_goal, normalizedRequest)
+        ? normalizedRequest
+        : current.project_goal;
 
     return writeWorkingMemoryState(workspace, {
         ...current,
+        project_goal: nextProjectGoal,
         active_task: normalizedRequest,
         next_tasks: nextTasks,
         deferred_tasks: current.deferred_tasks.filter((task) => task !== normalizedRequest),
