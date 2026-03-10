@@ -41,7 +41,7 @@ interface OverrideCandidate {
     prompt: string;
 }
 
-type AssociativeRecallKind = "decision" | "background";
+type AssociativeRecallKind = "critical" | "decision" | "background";
 
 interface AssociativeRecallCandidate {
     prompt: string;
@@ -228,6 +228,52 @@ function buildUserOverridePrompt(
 const USER_OVERRIDE_CHECK_CHARS = 160;
 const USER_OVERRIDE_MAX_INTERRUPTS = 2;
 const DEFAULT_OVERRIDE_IDLE_LABEL = "Awaiting next user request";
+const CRITICAL_RECALL_PATTERNS = [
+    /\bbug\b/i,
+    /\bfix(?:ed|es|ing)?\b/i,
+    /\bworkaround\b/i,
+    /\broot cause\b/i,
+    /\bregression\b/i,
+    /\bfailure\b/i,
+    /\bbroken\b/i,
+    /\bincident\b/i,
+    /\bpostmortem\b/i,
+    /\bknown issue\b/i,
+    /\bverified workflow\b/i,
+    /\bplaybook\b/i,
+    /\brunbook\b/i,
+    /\bresume point\b/i,
+    /\bcheckpoint\b/i,
+    /\bhandoff\b/i,
+    /\brestart\b/i,
+    /\brecover(?:y|ed|ing)?\b/i,
+    /\bdo not\b/i,
+    /\bmust not\b/i,
+    /\brequired\b/i,
+    /\bimportant\b/i,
+    /\bcritical\b/i,
+    /修复/,
+    /bug/,
+    /错误/,
+    /报错/,
+    /故障/,
+    /问题原因/,
+    /根因/,
+    /回滚/,
+    /恢复点/,
+    /检查点/,
+    /工作流/,
+    /流程/,
+    /字幕/,
+    /交接/,
+    /重启进度/,
+    /不要改/,
+    /不能改/,
+    /必须/,
+    /关键/,
+    /重要/,
+    /已验证/,
+];
 const DECISION_RECALL_PATTERNS = [
     /\bdecid(?:e|ed|es|ing|ion)\b/i,
     /\bprefer(?:ence|red|s)?\b/i,
@@ -343,6 +389,9 @@ function summarizeAssociativeRecallContent(content: string, maxChars = 720): str
 
 function classifyAssociativeRecall(filePath: string, content: string): AssociativeRecallKind {
     const sample = `${filePath}\n${content.slice(0, 1400)}`;
+    if (CRITICAL_RECALL_PATTERNS.some((pattern) => pattern.test(sample))) {
+        return "critical";
+    }
     return DECISION_RECALL_PATTERNS.some((pattern) => pattern.test(sample))
         ? "decision"
         : "background";
@@ -363,6 +412,37 @@ function buildAssociativeRecallPrompt(
     const goal = workingState.project_goal || "(none)";
     const activeTask = workingState.active_task || DEFAULT_OVERRIDE_IDLE_LABEL;
     const latestUserRequest = workingState.last_user_request || "(missing)";
+
+    if (kind === "critical") {
+        return {
+            kind,
+            prompt: [
+                "",
+                "[CRITICAL MEMORY RECALL]",
+                "A previously learned high-value memory was re-activated.",
+                "Treat it as a proven fix, verified workflow, key user constraint, or restart checkpoint.",
+                "Current goal remains unchanged unless this memory directly proves the current branch is wrong.",
+                "",
+                "Current anchors:",
+                `- Goal: ${goal}`,
+                `- Active task: ${activeTask}`,
+                `- Latest user request: ${latestUserRequest}`,
+                `- Recall source: ${filePath}`,
+                `- Recall type: critical`,
+                "",
+                "Critical recall:",
+                summarizedContent,
+                "",
+                "Mandatory actions:",
+                "1. Pause the current branch and reconcile it against this recall.",
+                "2. If the recall exposes a bug, invalid plan, or a better verified workflow, switch to the corrected path immediately.",
+                "3. If the recall changes execution order or restart state, update `memory_working` with short plain task titles only.",
+                "4. Keep the latest user request authoritative. Do not ignore it unless this recall is directly about fulfilling it correctly.",
+                "5. Continue without mentioning this interrupt block.",
+                "",
+            ].join("\n"),
+        };
+    }
 
     if (kind === "decision") {
         return {
