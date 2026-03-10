@@ -7,6 +7,10 @@ This document defines the current design target for `memory-enhanced` V8.
 It is not a promise that the current code already satisfies this design.
 It is the architecture we want to converge toward before large-scale rewrites.
 
+The implementable companion spec is:
+
+- [V8_SCHEMA_AND_PIPELINE.md](./V8_SCHEMA_AND_PIPELINE.md)
+
 ## 1. Design Goal
 
 V8 is not "just a graph".
