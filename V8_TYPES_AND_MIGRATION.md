@@ -65,7 +65,10 @@ src/v8/
 - `annotation.ts`
   - offline annotator draft contracts and sanitization
 - `annotation-prompt.ts`
-  - sleep-phase LLM prompt builder for annotation drafts
+  - staged sleep-phase prompt builder:
+    - scene reconstruction
+    - relation scoring
+    - final bundle draft
 - `compiler.ts`
   - orchestrates bundle compilation
 - `compile-event.ts`
@@ -436,6 +439,10 @@ The sleep-phase prompt builder should:
 - require bilingual equivalent node names
 - forbid splitting zh/en labels into separate nodes
 - prefer sparse `2-6` node bundles
+- split the job into:
+  - scene reconstruction
+  - relation scoring
+  - final JSON draft
 - demand raw JSON only
 
 ### 11.4 Build graph pass
