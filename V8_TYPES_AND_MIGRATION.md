@@ -40,6 +40,7 @@ src/v8/
   manifest.ts
   annotation.ts
   annotation-prompt.ts
+  annotation-stage-parser.ts
   compiler.ts
   compile-event.ts
   compile-knowledge-md.ts
@@ -69,6 +70,8 @@ src/v8/
     - scene reconstruction
     - relation scoring
     - final bundle draft
+- `annotation-stage-parser.ts`
+  - parse staged markdown outputs into a draft bundle before final sanitization
 - `compiler.ts`
   - orchestrates bundle compilation
 - `compile-event.ts`

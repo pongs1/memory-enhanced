@@ -79,6 +79,17 @@ export interface V8AnnotationWorkflowStagePrompt {
     messages: V8AnnotationPromptMessages;
 }
 
+export interface V8InterMemoryPromptInput {
+    memories: Array<{
+        sourceRef: string;
+        title?: string;
+        summary?: string;
+        scene?: string;
+        nodeDraft?: string;
+    }>;
+    contextBlocks?: V8AnnotationContextBlock[];
+}
+
 export interface V8AnnotationStage2Input extends V8AnnotationPromptInput {
     sceneDraft: string;
 }
@@ -104,18 +115,16 @@ export function buildSceneReconstructionPrompt(
 
     return {
         system: [
-            "Job: reconstruct the scene around one source memory item and name only the few core nodes worth keeping.",
+            "Job: restore the local scene around one source memory item, then pull out only the few core nodes worth keeping.",
             "",
-            "Do this first, before trying to emit final graph JSON.",
-            "Focus on what was happening, why it mattered, and which 2-6 concepts should survive into long-term memory.",
+            "Focus on the concrete scene first: what was happening, which elements were present, what changed, what blocked progress, what should be recoverable later.",
             "",
             "Rules:",
             "- Do not invent facts outside the provided source and context.",
             "- Keep the node set sparse.",
             "- Each node should have one Chinese name and one English name for the same concept.",
             "- Do not split zh/en names into separate nodes.",
-            "- No JSON is required in this stage.",
-            "- Short markdown sections are enough.",
+            "- Use a short markdown template only.",
         ].join("\n"),
         user: [
             "Step 1: restore the original scene and extract the core nodes.",
@@ -133,13 +142,19 @@ export function buildSceneReconstructionPrompt(
             "",
             "Output only these short sections:",
             "",
-            "# Scene",
+            "# Scene Snapshot",
             "- what was happening",
-            "- what the task/problem was",
-            "- why this memory matters later",
+            "- current state / trigger / turning point",
+            "- explicit goal, subgoal, or blocking point",
+            "",
+            "# Elements",
+            "- actors / agents / roles",
+            "- objects / files / paths / APIs / tools / docs / models",
+            "- place / scope / module / repo / workspace / environment",
+            "- explicit emotion / stance / urgency / risk if present",
             "",
             "# Core Nodes",
-            "- zh name | en name | tentative role | why it matters",
+            "- zh name | en name | tentative role | what part of the scene it preserves",
             "",
             "Keep it sparse. Prefer 2-6 nodes. Skip decorative details.",
         ].join("\n"),
@@ -151,17 +166,26 @@ export function buildRelationScoringPrompt(
 ): V8AnnotationPromptMessages {
     return {
         system: [
-            "Job: connect the core nodes discovered in stage 1.",
+            "Job: connect the core nodes discovered in stage 1 using the deeper relations hidden in the same scene.",
             "",
-            "Only keep relations that are explicit in the source or strongly justified by the same local scene.",
-            "This stage is about relation meaning and initial weight, not final graph JSON.",
+            "Do not stop at plain semantic similarity.",
+            "Prefer relations such as:",
+            "- identity / same referent / alias / role equivalence",
+            "- temporal order or overlap",
+            "- causal or diagnostic relation",
+            "- subevent / part-whole / dependency",
+            "- participant role relation",
+            "- condition / prerequisite / valid-when",
+            "- evidence / support / contradiction",
+            "- spatial or scope relation",
+            "- stance / affect / urgency relation when explicit",
+            "- goal-support or plan-step relation",
             "",
             "Rules:",
-            `- Allowed edge types: ${allowedList(ALLOWED_EDGE_TYPES)}`,
             "- Give one initial weight between 0 and 1 for each relation.",
             "- If a relation is weak or speculative, omit it.",
             "- Keep the relation set sparse.",
-            "- No JSON is required in this stage.",
+            "- Use the relation template below.",
         ].join("\n"),
         user: [
             "Step 2: score the relations between the core nodes.",
@@ -178,10 +202,12 @@ export function buildRelationScoringPrompt(
             "",
             "Output only this short section:",
             "",
-            "# Relations",
-            "- src zh/en -> dst zh/en | edge type | initial weight 0-1 | short reason",
+            "# Relation Candidates",
+            "| src node | src role | dst node | dst role | relation family | relation label | initial weight | evidence from scene |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| 节点A / Node A | workflow | 节点B / Node B | evidence | causal | causes / triggered-by | 0.82 | short evidence |",
             "",
-            "Prefer only the few relations that would actually matter for future recall.",
+            "Only keep the few relations that would actually help later recovery.",
         ].join("\n"),
     };
 }
@@ -242,10 +268,9 @@ export function buildBundleDraftPrompt(
 
     return {
         system: [
-            "Job: compile the approved scene and relation analysis into one V8 annotation bundle draft.",
+            "Job: compile the approved scene and relation analysis into one final structured draft.",
             "",
-            "This is the first stage that must return strict JSON.",
-            "Do not rediscover the scene from scratch. Reuse the node set and relations already extracted.",
+            "Do not rediscover the scene from scratch. Reuse the nodes and relations already extracted.",
             "",
             "Rules:",
             "- Return exactly one JSON object.",
@@ -317,4 +342,55 @@ export function buildOfflineAnnotationWorkflow(
             }),
         },
     ];
+}
+
+export function buildInterMemoryRelationPrompt(
+    input: V8InterMemoryPromptInput
+): V8AnnotationPromptMessages {
+    const memoryList = input.memories.map((memory, index) => ({
+        id: `memory_${index + 1}`,
+        sourceRef: memory.sourceRef,
+        title: memory.title || null,
+        summary: memory.summary || null,
+        scene: memory.scene || null,
+        nodeDraft: memory.nodeDraft || null,
+    }));
+
+    return {
+        system: [
+            "Job: look across multiple memory items, restore the larger shared scene, and identify the important links between memories.",
+            "",
+            "Focus on cross-memory relations, not single-memory internal structure.",
+            "Prefer deeper links such as temporal chain, causal chain, shared checkpoint, conflicting policy, same actor/object, same workflow branch, supersession, or recovery dependency.",
+            "",
+            "Rules:",
+            "- Do not invent links that are not justified by the provided memory material.",
+            "- Keep the link set sparse.",
+            "- Use initial weights between 0 and 1.",
+            "- Use the markdown template below.",
+        ].join("\n"),
+        user: [
+            "Compare the following memory items and recover the important relations between them.",
+            "",
+            "Context blocks:",
+            renderContextBlocks(input.contextBlocks || []),
+            "",
+            "Memory items:",
+            formatJson(memoryList),
+            "",
+            "Output only these sections:",
+            "",
+            "# Shared Scene",
+            "- what larger situation these memories belong to",
+            "- what common actors / artifacts / goals / risks appear across them",
+            "",
+            "# Cross-Memory Links",
+            "| memory A | memory B | linked nodes or concepts | relation family | relation label | initial weight | reason |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+            "| memory_1 | memory_2 | 节点A <-> 节点B | temporal | before / after | 0.78 | short reason |",
+            "",
+            "# Candidate Shared Nodes",
+            "- zh name | en name | comes from which memories | why it should exist as a shared node or bridge",
+        ].join("\n"),
+    };
 }
