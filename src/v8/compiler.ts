@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
     ensureDir,
+    nowISO,
     readEvents,
     resolveWorkspace,
     type MemoryEvent,
@@ -17,7 +18,55 @@ import type {
     V8MemoryBundle,
     V8MemoryEdge,
     V8MemoryNode,
+    V8OfflineAnnotationRecord,
+    V8SanitizedAnnotationBundleDraft,
 } from "./types.js";
+
+function sanitizeText(text: string, maxChars = 220): string {
+    return (text || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, maxChars);
+}
+
+function detectLanguage(text: string): "zh" | "en" | "mixed" | "unknown" {
+    const zhCount = (text.match(/[\u4e00-\u9fff]/g) || []).length;
+    const enCount = (text.match(/[A-Za-z]/g) || []).length;
+    if (zhCount === 0 && enCount === 0) return "unknown";
+    if (zhCount > 0 && enCount > 0) return "mixed";
+    return zhCount > 0 ? "zh" : "en";
+}
+
+function extractKeywords(text: string, maxItems = 12): string[] {
+    const englishWords = text.toLowerCase().match(/[a-z0-9/_-]{3,}/g) || [];
+    const cjkChunks = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
+    const raw = [...englishWords, ...cjkChunks];
+    const seen = new Set<string>();
+    const output: string[] = [];
+
+    for (const item of raw) {
+        const normalized = sanitizeText(item, 48).toLowerCase();
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        output.push(normalized);
+        if (output.length >= maxItems) break;
+    }
+
+    return output;
+}
+
+function readJsonlRecords<T>(filePath: string): T[] {
+    try {
+        const content = fs.readFileSync(filePath, "utf-8").trim();
+        if (!content) return [];
+        return content
+            .split("\n")
+            .filter((line) => line.trim())
+            .map((line) => JSON.parse(line) as T);
+    } catch {
+        return [];
+    }
+}
 
 function collectJsonlFiles(dirPath: string): string[] {
     if (!fs.existsSync(dirPath)) {
@@ -74,6 +123,148 @@ function dedupeEdges(edges: V8MemoryEdge[]): V8MemoryEdge[] {
         seen.set(edge.id, edge);
     }
     return [...seen.values()];
+}
+
+function buildAnnotatedNodeId(bundleId: string, role: string, index: number): string {
+    return `mn_${bundleId}_ann_${role}_${index + 1}`;
+}
+
+function buildAnnotatedEdgeId(bundleId: string, type: string, index: number): string {
+    return `me_${bundleId}_ann_${type}_${index + 1}`;
+}
+
+function materializeAnnotatedDraft(
+    draft: V8SanitizedAnnotationBundleDraft,
+    existingBundle: V8MemoryBundle,
+    annotatedAt: string
+): { bundle: V8MemoryBundle; nodes: V8MemoryNode[]; edges: V8MemoryEdge[] } {
+    const nodes = draft.nodes.map((node, index) => {
+        const text = sanitizeText(node.text, 220);
+        return {
+            id: buildAnnotatedNodeId(existingBundle.bundleId, node.role, index),
+            bundleId: existingBundle.bundleId,
+            kind: node.kind,
+            role: node.role,
+            names: node.names,
+            aliases: node.aliases,
+            text,
+            summary: sanitizeText(node.summary, 120),
+            keywords: extractKeywords(`${node.names.zh} ${node.names.en} ${text}`),
+            language: detectLanguage(`${node.names.zh} ${node.names.en} ${text}`),
+            sourceRef: existingBundle.sourceRef,
+            canonicalRef: draft.canonicalRef,
+            confidence: node.confidence,
+            importance: node.importance,
+            hitCount: 0,
+            adoptCount: 0,
+            rejectCount: 0,
+            harmCount: 0,
+            lastUsedAt: null,
+            lastVerifiedAt: annotatedAt,
+            cooldownUntil: null,
+            dayKey: draft.dayKey,
+            episodeKey: draft.episodeKey,
+        } satisfies V8MemoryNode;
+    });
+
+    const firstByRole = new Map<string, string>();
+    for (const node of nodes) {
+        if (!firstByRole.has(node.role)) {
+            firstByRole.set(node.role, node.id);
+        }
+    }
+
+    const edges = draft.edges
+        .map((edge, index): V8MemoryEdge | null => {
+            const src = firstByRole.get(edge.srcRole);
+            const dst = firstByRole.get(edge.dstRole);
+            if (!src || !dst) {
+                return null;
+            }
+            return {
+                id: buildAnnotatedEdgeId(existingBundle.bundleId, edge.type, index),
+                type: edge.type,
+                src,
+                dst,
+                assocStrength: edge.assocStrength,
+                utility: edge.utility,
+                trust: edge.trust,
+                freshness: edge.freshness,
+                contextFit: edge.contextFit,
+                evidenceCount: edge.evidenceCount,
+                activationCount: 0,
+                adoptCount: 0,
+                rejectCount: 0,
+                lastUpdatedAt: annotatedAt,
+                lastVerifiedAt: annotatedAt,
+            };
+        })
+        .filter((edge): edge is V8MemoryEdge => Boolean(edge));
+
+    const bundle: V8MemoryBundle = {
+        ...existingBundle,
+        kind: draft.kind,
+        title: draft.title,
+        nodeIds: nodes.map((node) => node.id),
+        canonicalRef: draft.canonicalRef,
+        summaryRef: draft.summaryRef,
+        dayKey: draft.dayKey,
+        episodeKey: draft.episodeKey,
+        encodingContext: draft.encodingContext,
+        updatedAt: annotatedAt || nowISO(),
+    };
+
+    return { bundle, nodes, edges };
+}
+
+function applyOfflineAnnotationDrafts(
+    workspace: string,
+    bundles: V8MemoryBundle[],
+    nodes: V8MemoryNode[],
+    edges: V8MemoryEdge[]
+): { bundles: V8MemoryBundle[]; nodes: V8MemoryNode[]; edges: V8MemoryEdge[] } {
+    const gp = graphPaths(workspace);
+    const records = readJsonlRecords<V8OfflineAnnotationRecord>(gp.offlineAnnotationDrafts);
+    if (records.length === 0) {
+        return { bundles, nodes, edges };
+    }
+
+    const bundleMap = new Map(bundles.map((bundle) => [bundle.bundleId, bundle]));
+    const oldNodeIdsByBundle = new Map<string, Set<string>>();
+    for (const node of nodes) {
+        const set = oldNodeIdsByBundle.get(node.bundleId) || new Set<string>();
+        set.add(node.id);
+        oldNodeIdsByBundle.set(node.bundleId, set);
+    }
+
+    let nextNodes = [...nodes];
+    let nextEdges = [...edges];
+
+    for (const record of records) {
+        const existingBundle = bundleMap.get(record.bundleId);
+        if (!existingBundle) {
+            continue;
+        }
+
+        const oldNodeIds = oldNodeIdsByBundle.get(record.bundleId) || new Set<string>();
+        nextNodes = nextNodes.filter((node) => node.bundleId !== record.bundleId);
+        nextEdges = nextEdges.filter((edge) => !oldNodeIds.has(edge.src) && !oldNodeIds.has(edge.dst));
+
+        const materialized = materializeAnnotatedDraft(
+            record.sanitizedDraft,
+            existingBundle,
+            record.createdAt
+        );
+        bundleMap.set(record.bundleId, materialized.bundle);
+        nextNodes.push(...materialized.nodes);
+        nextEdges.push(...materialized.edges);
+    }
+
+    return {
+        bundles: [...bundleMap.values()],
+        nodes: nextNodes,
+        edges: nextEdges,
+    };
 }
 
 function persistGraph(output: BuildGraphOutput, workspace: string) {
@@ -175,9 +366,10 @@ export async function buildV8Graph(
         }
     }
 
-    const finalBundles = dedupeBundles(bundles);
-    const finalNodes = dedupeNodes(nodes);
-    const finalEdges = dedupeEdges(edges);
+    const withAnnotations = applyOfflineAnnotationDrafts(workspace, bundles, nodes, edges);
+    const finalBundles = dedupeBundles(withAnnotations.bundles);
+    const finalNodes = dedupeNodes(withAnnotations.nodes);
+    const finalEdges = dedupeEdges(withAnnotations.edges);
     const triggerLexicon = buildTriggerLexicon(finalNodes);
     const dayIndex = buildDayIndex(finalNodes);
     const sourceIndex = buildSourceIndex(finalBundles);
