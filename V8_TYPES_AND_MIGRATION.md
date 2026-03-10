@@ -187,6 +187,11 @@ export interface V8MemoryNode {
   bundleId: string;
   kind: V8NodeKind;
   role: V8NodeRole;
+  names: {
+    zh: string;
+    en: string;
+  };
+  aliases: string[];
   text: string;
   summary: string;
   keywords: string[];
@@ -209,6 +214,8 @@ export interface V8MemoryNode {
 
 ### Validation rules
 
+- `names.zh` and `names.en` should be non-empty equivalent labels for the same node when reliable annotation exists
+- `aliases` should be deduplicated and may include old labels or bilingual shorthand
 - `text` must be non-empty and short enough for fast retrieval
 - `keywords` should be deduplicated
 - `confidence` and `importance` must be clamped to `[0, 1]`
@@ -372,6 +379,18 @@ export interface CompileKnowledgeMdOutput {
 export function compileKnowledgeMdToBundles(
   input: CompileKnowledgeMdInput
 ): CompileKnowledgeMdOutput;
+```
+
+Structured MD blocks should support optional bilingual naming metadata:
+
+```md
+<!-- memory-node
+name_zh: 网关断连恢复
+name_en: gateway recovery
+aliases: [网关恢复, gateway disconnected recovery]
+-->
+...
+<!-- /memory-node -->
 ```
 
 ### 11.3 Build graph pass
@@ -557,6 +576,10 @@ At this phase, event nodes should exist even if online scanner still uses legacy
 ### Phase 8: Sleep integration
 
 - switch `memory_consolidate` to update new graph layout
+- include offline bilingual naming refresh:
+  - propose `name_zh`
+  - propose `name_en`
+  - normalize `aliases`
 - keep legacy graph output during compatibility window if needed
 
 ### Phase 9: Cutover

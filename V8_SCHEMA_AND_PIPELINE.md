@@ -137,6 +137,11 @@ Base node shape:
   "bundle_id": "mb_20260310_001",
   "kind": "episodic|semantic|procedural",
   "role": "topic|workflow|constraint|condition|evidence|checkpoint",
+  "names": {
+    "zh": "网关断连恢复",
+    "en": "gateway recovery"
+  },
+  "aliases": ["网关恢复", "gateway disconnected recovery"],
   "text": "overlay update should restore clean core before patch reapply",
   "summary": "short normalized summary for retrieval",
   "keywords": ["overlay", "update", "clean core", "patch"],
@@ -168,6 +173,8 @@ Base node shape:
 
 ### Notes
 
+- `names.zh` and `names.en` point to the same node identity and should both be indexed for trigger matching
+- `aliases` are optional equivalent labels, shorthand, or bilingual variants
 - `text` is optimized for fast matching, not full recall insertion
 - `canonical_ref` is where assembled recall should ultimately read from
 - `cooldown_until` prevents short-term repeated firing
@@ -329,12 +336,16 @@ role: workflow
 confidence: 0.88
 importance: 0.83
 source_refs: [evt_20260310_003]
+name_zh: 网关断连恢复
+name_en: gateway recovery
+aliases: [网关恢复, gateway disconnected recovery]
 -->
 OpenClaw overlay update should restore clean core before patch reapply.
 <!-- /memory-node -->
 ```
 
 The compiler may also fall back to heuristic extraction from headings and short sections, but explicit blocks are preferred.
+The offline annotator should fill `name_zh`, `name_en`, and optional `aliases` whenever it can do so reliably.
 
 ### 8.4 Node bundle sizing
 
@@ -581,6 +592,10 @@ Sleep should keep three jobs separate:
 ### 13.2 Graph consolidation
 
 - rebuild or incrementally update bundles
+- refresh bilingual node identity:
+  - backfill `name_zh`
+  - backfill `name_en`
+  - normalize `aliases`
 - refresh indexes
 - recompute or revise edge scores
 - materialize new `supersedes` and condition edges

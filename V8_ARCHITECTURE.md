@@ -254,6 +254,11 @@ Minimal node shape:
   "id": "mn_...",
   "kind": "episodic|semantic|procedural",
   "role": "topic|workflow|constraint|condition|evidence|checkpoint",
+  "names": {
+    "zh": "短中文名",
+    "en": "short english name"
+  },
+  "aliases": ["旧称呼", "alt label"],
   "text": "short normalized content",
   "source_ref": "evt_... or memory/knowledge/foo.md#node_...",
   "confidence": 0.0,
@@ -267,6 +272,8 @@ Minimal node shape:
 
 Notes:
 
+- `names.zh` and `names.en` are equivalent handles for the same node, not separate nodes
+- `aliases` may preserve old labels, shorthand, bilingual variants, and handoff terms
 - `text` must be short enough for fast matching, not a paragraph dump
 - `source_ref` is mandatory so the graph can rehydrate back to MD or event content
 - `confidence` and `importance` are not the same
@@ -492,9 +499,16 @@ Preferred flow:
 
 1. read raw event / MD source
 2. emit structured MD blocks or JSONL candidates
-3. sanitize
-4. compile into nodes and edges
-5. update indexes
+3. annotate node-local bilingual identity:
+   - `name_zh`
+   - `name_en`
+   - optional `aliases`
+4. sanitize
+5. compile into nodes and edges
+6. update indexes
+
+The offline annotator should own high-quality bilingual naming.
+Online heuristics may bootstrap equivalent names, but sleep-time consolidation should refresh and standardize them.
 
 Preferred storage target:
 
