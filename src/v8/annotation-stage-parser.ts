@@ -7,6 +7,7 @@ import type {
     V8NodeKind,
     V8NodeRole,
 } from "./types.js";
+import type { MemoryEncodingContext } from "../utils.js";
 
 function sanitizeText(text: string, maxChars = 220): string {
     return (text || "")
@@ -134,6 +135,7 @@ export interface BuildDraftFromStageMarkdownInput {
     summaryRef?: string;
     dayKey?: string | null;
     episodeKey?: string | null;
+    encodingContext?: MemoryEncodingContext | null;
     sceneDraft: string;
     relationDraft: string;
 }
@@ -172,6 +174,7 @@ export function buildDraftFromStageMarkdown(
         summaryRef: sanitizeText(input.summaryRef || input.sourceRef, 220),
         dayKey: input.dayKey ?? null,
         episodeKey: input.episodeKey ?? null,
+        encodingContext: input.encodingContext ?? null,
         nodes,
         edges,
         notes: [

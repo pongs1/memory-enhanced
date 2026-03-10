@@ -9,6 +9,7 @@ import type {
     V8SanitizedAnnotationEdgeDraft,
     V8SanitizedAnnotationNodeDraft,
 } from "./types.js";
+import type { MemoryEncodingContext } from "../utils.js";
 
 function clamp01(value: number, fallback: number): number {
     if (!Number.isFinite(value)) {
@@ -68,6 +69,33 @@ function normalizeKind(value: string | undefined, fallback: V8NodeKind = "semant
         return value;
     }
     return fallback;
+}
+
+function sanitizeEncodingContext(
+    context: MemoryEncodingContext | null | undefined
+): MemoryEncodingContext | null {
+    if (!context) {
+        return null;
+    }
+
+    const goal = sanitizeText(context.goal || "", 180);
+    const activeTask = sanitizeText(context.activeTask || "", 160);
+    const lastUserRequest = sanitizeText(context.lastUserRequest || "", 180);
+    const topNextTasks = dedupeStrings(context.topNextTasks || [], 2, 120);
+    const scopeHints = dedupeStrings(context.scopeHints || [], 4, 96);
+
+    if (!goal && !activeTask && !lastUserRequest && topNextTasks.length === 0 && scopeHints.length === 0) {
+        return null;
+    }
+
+    return {
+        goal,
+        activeTask,
+        lastUserRequest,
+        topNextTasks,
+        scopeHints,
+        recordedAt: sanitizeText(context.recordedAt || "", 48) || new Date().toISOString(),
+    };
 }
 
 function sanitizeNodeDraft(
@@ -199,6 +227,7 @@ export function sanitizeAnnotationBundleDraft(
         summaryRef,
         dayKey: draft.dayKey ?? null,
         episodeKey: draft.episodeKey ?? null,
+        encodingContext: sanitizeEncodingContext(draft.encodingContext),
         nodes: normalizedNodes,
         edges: edges.length > 0 ? edges : fallbackEdges(normalizedNodes),
         notes: dedupeStrings(draft.notes || [], 8, 180),

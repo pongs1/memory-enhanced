@@ -9,6 +9,7 @@ import {
     appendLine,
     ensureDir,
     touchWorkingMemoryState,
+    captureEncodingContext,
     type MemoryEvent,
 } from "../utils.js";
 
@@ -80,6 +81,7 @@ export async function executeMemoryRecord(
         associations: params.associations ?? [],
         consolidated: false,
         decay_score: 1.0,
+        encoding_context: captureEncodingContext(workspace),
     };
 
     // --- Write JSONL (structured data, .memory/events/) ---

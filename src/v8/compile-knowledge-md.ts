@@ -381,6 +381,7 @@ export function compileKnowledgeMdToBundles(
             summaryRef: relativePath,
             dayKey: null,
             episodeKey: block.sourceRefs[0] || null,
+            encodingContext: null,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
         };

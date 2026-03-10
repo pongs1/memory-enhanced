@@ -2,6 +2,7 @@ import type {
     V8BundleSourceType,
     V8NodeKind,
 } from "./types.js";
+import type { MemoryEncodingContext } from "../utils.js";
 
 const ALLOWED_NODE_KINDS = ["episodic", "semantic", "procedural"] as const;
 const ALLOWED_NODE_ROLES = [
@@ -64,6 +65,7 @@ export interface V8AnnotationPromptInput {
     summaryRef?: string;
     dayKey?: string | null;
     episodeKeyHint?: string | null;
+    encodingContext?: MemoryEncodingContext | null;
     targetNodeBudget?: number;
     contextBlocks?: V8AnnotationContextBlock[];
 }
@@ -99,6 +101,32 @@ export interface V8AnnotationStage3Input extends V8AnnotationPromptInput {
     relationDraft: string;
 }
 
+function renderEncodingContextCue(context: MemoryEncodingContext | null | undefined): string {
+    if (!context) {
+        return "(none)";
+    }
+
+    const lines = [
+        `- goal: ${sanitizeText(context.goal || "", 180) || "(unknown)"}`,
+        `- active task: ${sanitizeText(context.activeTask || "", 160) || "(unknown)"}`,
+        `- last user request: ${sanitizeText(context.lastUserRequest || "", 180) || "(unknown)"}`,
+    ];
+
+    if ((context.topNextTasks || []).length > 0) {
+        lines.push(`- next tasks: ${(context.topNextTasks || []).map((item) => sanitizeText(item, 120)).filter(Boolean).join(" ; ")}`);
+    }
+
+    if ((context.scopeHints || []).length > 0) {
+        lines.push(`- scope hints: ${(context.scopeHints || []).map((item) => sanitizeText(item, 96)).filter(Boolean).join(" ; ")}`);
+    }
+
+    if (context.recordedAt) {
+        lines.push(`- recorded at: ${sanitizeText(context.recordedAt, 48)}`);
+    }
+
+    return lines.join("\n");
+}
+
 export function buildSceneReconstructionPrompt(
     input: V8AnnotationPromptInput
 ): V8AnnotationPromptMessages {
@@ -124,6 +152,7 @@ export function buildSceneReconstructionPrompt(
             "- Keep the node set sparse.",
             "- Each node should have one Chinese name and one English name for the same concept.",
             "- Do not split zh/en names into separate nodes.",
+            "- Historical task cues are only scene hints. Do not copy them as hard limits on what the memory can generalize to.",
             "- Use a short markdown template only.",
         ].join("\n"),
         user: [
@@ -131,6 +160,9 @@ export function buildSceneReconstructionPrompt(
             "",
             "Metadata hints:",
             formatJson(metadata),
+            "",
+            "Historical task cue from record time:",
+            renderEncodingContextCue(input.encodingContext),
             "",
             "Context blocks:",
             renderContextBlocks(input.contextBlocks || []),
@@ -146,6 +178,7 @@ export function buildSceneReconstructionPrompt(
             "- what was happening",
             "- current state / trigger / turning point",
             "- explicit goal, subgoal, or blocking point",
+            "- why it mattered",
             "",
             "# Elements",
             "- actors / agents / roles",

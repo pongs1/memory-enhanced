@@ -233,6 +233,15 @@ export function findKnowledgeEntry(
 }
 
 /** Memory event type definition. */
+export interface MemoryEncodingContext {
+    goal: string;
+    activeTask: string;
+    lastUserRequest: string;
+    topNextTasks: string[];
+    scopeHints: string[];
+    recordedAt: string;
+}
+
 export interface MemoryEvent {
     id: string;
     timestamp: string;
@@ -243,6 +252,7 @@ export interface MemoryEvent {
     associations: string[];
     consolidated: boolean;
     decay_score: number;
+    encoding_context?: MemoryEncodingContext | null;
 }
 
 /** Focus stack structure. */
@@ -516,6 +526,45 @@ export function normalizeWorkingMemoryState(raw: unknown): WorkingMemoryState {
 export function loadWorkingMemoryState(workspace: string): WorkingMemoryState {
     const p = paths(workspace);
     return normalizeWorkingMemoryState(readJson(p.focusStack, createDefaultWorkingMemoryState()));
+}
+
+export function captureEncodingContextFromWorkingMemory(
+    state: WorkingMemoryState
+): MemoryEncodingContext | null {
+    const goal = normalizeUserRequest(state.project_goal, 180);
+    const activeTask = normalizeTaskTitle(state.active_task, 160);
+    const lastUserRequest = normalizeUserRequest(state.last_user_request, 180);
+    const topNextTasks = state.next_tasks
+        .map((task) => normalizeTaskTitle(task, 120))
+        .filter(Boolean)
+        .slice(0, 2);
+    const scopeHints = dedupeWorkingTasks(
+        [
+            ...state.context_path.map((part) => normalizeUserRequest(part, 80)),
+            ...state.context_path
+                .join(" ")
+                .split(/[\\/]/)
+                .map((part) => normalizeUserRequest(part, 80)),
+        ].filter(Boolean),
+        undefined
+    ).slice(0, 4);
+
+    if (!goal && !activeTask && !lastUserRequest && topNextTasks.length === 0 && scopeHints.length === 0) {
+        return null;
+    }
+
+    return {
+        goal,
+        activeTask,
+        lastUserRequest,
+        topNextTasks,
+        scopeHints,
+        recordedAt: nowISO(),
+    };
+}
+
+export function captureEncodingContext(workspace: string): MemoryEncodingContext | null {
+    return captureEncodingContextFromWorkingMemory(loadWorkingMemoryState(workspace));
 }
 
 export function renderWorkingMemory(state: WorkingMemoryState): string {

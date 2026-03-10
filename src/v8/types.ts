@@ -1,4 +1,4 @@
-import type { MemoryEvent } from "../utils.js";
+import type { MemoryEncodingContext, MemoryEvent } from "../utils.js";
 
 export type V8NodeKind = "episodic" | "semantic" | "procedural";
 
@@ -59,6 +59,7 @@ export interface V8MemoryBundle {
     summaryRef: string;
     dayKey: string | null;
     episodeKey: string | null;
+    encodingContext: MemoryEncodingContext | null;
     createdAt: string;
     updatedAt: string;
 }
@@ -325,6 +326,7 @@ export interface V8AnnotationBundleDraft {
     summaryRef?: string;
     dayKey?: string | null;
     episodeKey?: string | null;
+    encodingContext?: MemoryEncodingContext | null;
     nodes: V8AnnotationNodeDraft[];
     edges?: V8AnnotationEdgeDraft[];
     notes?: string[];
@@ -366,6 +368,7 @@ export interface V8SanitizedAnnotationBundleDraft {
     summaryRef: string;
     dayKey: string | null;
     episodeKey: string | null;
+    encodingContext: MemoryEncodingContext | null;
     nodes: V8SanitizedAnnotationNodeDraft[];
     edges: V8SanitizedAnnotationEdgeDraft[];
     notes: string[];

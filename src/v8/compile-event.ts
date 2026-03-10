@@ -366,6 +366,7 @@ export function compileEventToBundle(
         summaryRef,
         dayKey,
         episodeKey,
+        encodingContext: event.encoding_context ?? null,
         createdAt: now,
         updatedAt: now,
     };

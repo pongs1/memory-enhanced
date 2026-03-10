@@ -70,8 +70,10 @@ src/v8/
     - scene reconstruction
     - relation scoring
     - final bundle draft
+  - pass compact historical `encodingContext` into stage 1 as a weak scene cue, not as hard task boundaries
 - `annotation-stage-parser.ts`
   - parse staged markdown outputs into a draft bundle before final sanitization
+  - preserve code-owned `encodingContext` instead of asking the model to rewrite it
 - `compiler.ts`
   - orchestrates bundle compilation
 - `compile-event.ts`
@@ -180,6 +182,7 @@ export interface V8MemoryBundle {
   summaryRef: string;
   dayKey: string | null;
   episodeKey: string | null;
+  encodingContext: MemoryEncodingContext | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -190,6 +193,8 @@ export interface V8MemoryBundle {
 - one source memory normally maps to one bundle
 - one bundle may contain multiple nodes with different roles
 - bundle is the minimum unit for recall assembly
+- `encodingContext` is a compact side-channel snapshot of the task stack at record time
+- `encodingContext` is for scene reconstruction and context-fit, not for node text inflation
 
 ## 6. Node Contract
 

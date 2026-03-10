@@ -116,6 +116,14 @@ Bundle shape:
   "summary_ref": "memory/knowledge/openclaw.md",
   "day_key": "2026-03-10",
   "episode_key": "openclaw-update-incident",
+  "encoding_context": {
+    "goal": "恢复插件更新后的运行环境",
+    "activeTask": "排查网关断连原因",
+    "lastUserRequest": "先排查为什么更新插件后网关断连",
+    "topNextTasks": ["梳理部署手册安装步骤"],
+    "scopeHints": ["workspace-neuro", "openclaw", "memory-enhanced"],
+    "recordedAt": "2026-03-10T08:41:22.000Z"
+  },
   "created_at": "2026-03-10T08:41:22.000Z",
   "updated_at": "2026-03-10T08:41:22.000Z"
 }
@@ -126,6 +134,21 @@ Bundle shape:
 - recall should not inject isolated nodes blindly
 - online matching works on nodes, but insertion often needs the local bundle
 - bundle is the bridge from fast graph math back to human-readable source memory
+- `encoding_context` is a side-channel summary of the task stack at record time, not part of node text
+
+### Encoding context rule
+
+`encoding_context` should stay compact and side-channel only.
+
+Use it for:
+
+- scene reconstruction
+- context-fit scoring
+- detecting when current scene drift is too far from the original encoding scene
+- stage-1 offline annotation as a weak historical cue
+
+Do not use it as the main memory content.
+Do not dump the full historical stack into node text.
 
 ## 5. Node Schema
 
