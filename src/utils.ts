@@ -107,6 +107,29 @@ const TASK_TRAILING_REPLY_RULES = [
     /[，,。.!?]\s*(?:先别解释|先不要解释|不必解释).*/u,
     /[.,;:]\s*(?:do not explain|don't explain|reply only|just reply|only reply|do not do anything else).*/i,
 ];
+const TASK_SHELL_PATTERNS = [
+    /^(?:优先)?处理$/u,
+    /^梳理$/u,
+    /^排查$/u,
+    /^分析$/u,
+    /^设计$/u,
+    /^实现$/u,
+    /^查看$/u,
+    /^接下来优先处理$/u,
+    /^现在停止$/u,
+    /^现在只回复$/u,
+    /^只回复$/u,
+    /^等待用户(?:下一步)?指示$/u,
+    /^等待用户新指令$/u,
+    /^reply$/i,
+    /^respond$/i,
+    /^continue$/i,
+    /^resume$/i,
+    /^ok$/i,
+    /^ready$/i,
+    /^收到$/,
+    /^好的?$/,
+];
 
 /** Standard workspace paths. */
 export function paths(workspace: string) {
@@ -297,6 +320,26 @@ export function summarizeUserRequestForTask(value: string, maxChars = 120): stri
     return normalizeUserRequest(text, maxChars);
 }
 
+function normalizeTaskTitle(value: string, maxChars = 120): string {
+    const normalized =
+        summarizeUserRequestForTask(value, maxChars) ||
+        normalizeUserRequest(value, maxChars);
+
+    const compact = normalized
+        .replace(/^(?:先|接下来)\s*/u, "")
+        .trim();
+
+    if (!compact) {
+        return "";
+    }
+
+    if (TASK_SHELL_PATTERNS.some((pattern) => pattern.test(compact))) {
+        return "";
+    }
+
+    return compact;
+}
+
 function normalizeStringList(value: unknown): string[] {
     if (!Array.isArray(value)) return [];
 
@@ -320,7 +363,7 @@ function normalizeTaskList(value: unknown): string[] {
     const items: string[] = [];
 
     for (const entry of value) {
-        const text = typeof entry === "string" ? normalizeUserRequest(entry) : "";
+        const text = typeof entry === "string" ? normalizeTaskTitle(entry) : "";
         if (!text || seen.has(text)) continue;
         seen.add(text);
         items.push(text);
