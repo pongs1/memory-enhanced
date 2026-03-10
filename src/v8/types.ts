@@ -290,3 +290,83 @@ export interface V8HardeningDecision {
     targetNodeIds: string[];
     group: V8HardCoreGroup;
 }
+
+export interface V8AnnotationNodeDraft {
+    kind?: V8NodeKind;
+    role: V8NodeRole;
+    text: string;
+    summary?: string;
+    nameZh?: string;
+    nameEn?: string;
+    aliases?: string[];
+    sourceRefs?: string[];
+    confidence?: number;
+    importance?: number;
+}
+
+export interface V8AnnotationEdgeDraft {
+    type: V8EdgeType;
+    srcRole: V8NodeRole;
+    dstRole: V8NodeRole;
+    assocStrength?: number;
+    utility?: number;
+    trust?: number;
+    freshness?: number;
+    contextFit?: number;
+    evidenceCount?: number;
+}
+
+export interface V8AnnotationBundleDraft {
+    sourceType: V8BundleSourceType;
+    sourceRef: string;
+    kind?: V8NodeKind;
+    title?: string;
+    canonicalRef?: string;
+    summaryRef?: string;
+    dayKey?: string | null;
+    episodeKey?: string | null;
+    nodes: V8AnnotationNodeDraft[];
+    edges?: V8AnnotationEdgeDraft[];
+    notes?: string[];
+}
+
+export interface V8SanitizedAnnotationNodeDraft {
+    kind: V8NodeKind;
+    role: V8NodeRole;
+    text: string;
+    summary: string;
+    names: {
+        zh: string;
+        en: string;
+    };
+    aliases: string[];
+    sourceRefs: string[];
+    confidence: number;
+    importance: number;
+}
+
+export interface V8SanitizedAnnotationEdgeDraft {
+    type: V8EdgeType;
+    srcRole: V8NodeRole;
+    dstRole: V8NodeRole;
+    assocStrength: number;
+    utility: number;
+    trust: number;
+    freshness: number;
+    contextFit: number;
+    evidenceCount: number;
+}
+
+export interface V8SanitizedAnnotationBundleDraft {
+    sourceType: V8BundleSourceType;
+    sourceRef: string;
+    kind: V8NodeKind;
+    title: string;
+    canonicalRef: string;
+    summaryRef: string;
+    dayKey: string | null;
+    episodeKey: string | null;
+    nodes: V8SanitizedAnnotationNodeDraft[];
+    edges: V8SanitizedAnnotationEdgeDraft[];
+    notes: string[];
+}

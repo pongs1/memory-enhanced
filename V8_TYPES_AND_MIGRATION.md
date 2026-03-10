@@ -38,6 +38,7 @@ src/v8/
   paths.ts
   ids.ts
   manifest.ts
+  annotation.ts
   compiler.ts
   compile-event.ts
   compile-knowledge-md.ts
@@ -60,6 +61,8 @@ src/v8/
   - id generation and parsing helpers
 - `manifest.ts`
   - read/write/validate manifest
+- `annotation.ts`
+  - offline annotator draft contracts and sanitization
 - `compiler.ts`
   - orchestrates bundle compilation
 - `compile-event.ts`
@@ -393,7 +396,39 @@ aliases: [网关恢复, gateway disconnected recovery]
 <!-- /memory-node -->
 ```
 
-### 11.3 Build graph pass
+### 11.3 Offline annotation draft contracts
+
+The offline annotator should emit a draft bundle, not final graph rows.
+The compiler owns final acceptance.
+
+Recommended contract shape:
+
+```ts
+export interface V8AnnotationBundleDraft {
+  sourceType: V8BundleSourceType;
+  sourceRef: string;
+  kind?: V8NodeKind;
+  title?: string;
+  canonicalRef?: string;
+  summaryRef?: string;
+  dayKey?: string | null;
+  episodeKey?: string | null;
+  nodes: V8AnnotationNodeDraft[];
+  edges?: V8AnnotationEdgeDraft[];
+  notes?: string[];
+}
+```
+
+The runtime should sanitize:
+
+- bilingual names
+- aliases
+- confidence / importance ranges
+- edge score ranges
+- missing topic nodes
+- empty or overlong text
+
+### 11.4 Build graph pass
 
 ```ts
 export interface BuildGraphInput {
