@@ -5,6 +5,7 @@ import type { V8NodeKind } from "./types.js";
 export interface V8GraphPaths {
     graphDir: string;
     manifest: string;
+    offlineAnnotationDrafts: string;
     nodesEpisodic: string;
     nodesSemantic: string;
     nodesProcedural: string;
@@ -31,6 +32,7 @@ export function graphPaths(workspace: string): V8GraphPaths {
     return {
         graphDir,
         manifest: path.join(graphDir, "manifest.json"),
+        offlineAnnotationDrafts: path.join(graphDir, "offline_annotation_drafts.jsonl"),
         nodesEpisodic: path.join(graphDir, "nodes_episodic.jsonl"),
         nodesSemantic: path.join(graphDir, "nodes_semantic.jsonl"),
         nodesProcedural: path.join(graphDir, "nodes_procedural.jsonl"),

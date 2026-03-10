@@ -44,6 +44,7 @@ Proposed graph directory:
   edges_structural.jsonl
   edges_supersession.jsonl
   bundles.jsonl
+  offline_annotation_drafts.jsonl
   update_queue.jsonl
   trigger_lexicon.json
   day_index.json
@@ -68,6 +69,8 @@ Proposed graph directory:
   - sparse edges split by role
 - `bundles.jsonl`
   - maps source memory -> bundle members
+- `offline_annotation_drafts.jsonl`
+  - staged sleep-phase outputs preserved for review before any future merge into the main graph
 - `update_queue.jsonl`
   - staleness suspicion, contradiction, or review candidates
 - `trigger_lexicon.json`
@@ -149,6 +152,17 @@ Use it for:
 
 Do not use it as the main memory content.
 Do not dump the full historical stack into node text.
+
+Offline sleep-phase annotation drafts should be stored separately from the main graph payload:
+
+- `.memory/graph/offline_annotation_drafts.jsonl`
+
+Each line should preserve:
+
+- the source bundle id and refs
+- stage-1 scene reconstruction markdown
+- stage-2 relation scoring markdown
+- the sanitized draft produced by code
 
 ## 5. Node Schema
 

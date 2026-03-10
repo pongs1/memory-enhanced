@@ -48,6 +48,19 @@ export interface V8GraphManifest {
     legacyGraphMigrated: boolean;
 }
 
+export interface V8OfflineAnnotationRecord {
+    bundleId: string;
+    sourceType: V8BundleSourceType;
+    sourceRef: string;
+    title: string;
+    stage1SceneDraft: string;
+    stage2RelationDraft: string;
+    sanitizedDraft: V8SanitizedAnnotationBundleDraft;
+    model: string;
+    createdAt: string;
+    bundleUpdatedAt: string;
+}
+
 export interface V8MemoryBundle {
     bundleId: string;
     sourceType: V8BundleSourceType;
@@ -372,4 +385,16 @@ export interface V8SanitizedAnnotationBundleDraft {
     nodes: V8SanitizedAnnotationNodeDraft[];
     edges: V8SanitizedAnnotationEdgeDraft[];
     notes: string[];
+}
+
+export interface V8OfflineAnnotationRunInput {
+    workspace: string;
+    bundles: V8MemoryBundle[];
+    maxBundles?: number;
+}
+
+export interface V8OfflineAnnotationRunOutput {
+    records: V8OfflineAnnotationRecord[];
+    skipped: number;
+    model: string | null;
 }

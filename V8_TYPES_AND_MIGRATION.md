@@ -41,6 +41,7 @@ src/v8/
   annotation.ts
   annotation-prompt.ts
   annotation-stage-parser.ts
+  offline-annotator.ts
   compiler.ts
   compile-event.ts
   compile-knowledge-md.ts
@@ -74,6 +75,10 @@ src/v8/
 - `annotation-stage-parser.ts`
   - parse staged markdown outputs into a draft bundle before final sanitization
   - preserve code-owned `encodingContext` instead of asking the model to rewrite it
+- `offline-annotator.ts`
+  - run stage-1 scene reconstruction and stage-2 relation scoring with an OpenAI-compatible model
+  - convert staged markdown directly into a sanitized draft
+  - persist reviewable drafts under `.memory/graph/offline_annotation_drafts.jsonl`
 - `compiler.ts`
   - orchestrates bundle compilation
 - `compile-event.ts`

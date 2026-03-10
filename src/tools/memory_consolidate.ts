@@ -14,6 +14,7 @@ import {
 } from "../utils.js";
 import { applyDecay, ageInDays } from "../decay.js";
 import { buildV8Graph } from "../v8/compiler.js";
+import { runOfflineBundleAnnotation } from "../v8/offline-annotator.js";
 
 /** Parameter schema for memory_consolidate tool. */
 export const MemoryConsolidateParams = Type.Object({
@@ -54,6 +55,9 @@ interface ConsolidationReport {
     v8GraphBundles: number;
     v8GraphNodes: number;
     v8GraphEdges: number;
+    offlineAnnotatedBundles: number;
+    offlineAnnotationSkipped: number;
+    offlineAnnotationModel: string | null;
 }
 
 /**
@@ -110,6 +114,9 @@ export async function executeMemoryConsolidate(
         v8GraphBundles: 0,
         v8GraphNodes: 0,
         v8GraphEdges: 0,
+        offlineAnnotatedBundles: 0,
+        offlineAnnotationSkipped: 0,
+        offlineAnnotationModel: null,
     };
 
     // --- 1. Collect event files based on scope ---
@@ -208,6 +215,14 @@ export async function executeMemoryConsolidate(
         report.v8GraphBundles = v8Graph.bundles.length;
         report.v8GraphNodes = v8Graph.nodes.length;
         report.v8GraphEdges = v8Graph.edges.length;
+
+        const annotationRun = await runOfflineBundleAnnotation({
+            workspace,
+            bundles: v8Graph.bundles,
+        });
+        report.offlineAnnotatedBundles = annotationRun.records.length;
+        report.offlineAnnotationSkipped = annotationRun.skipped;
+        report.offlineAnnotationModel = annotationRun.model;
     }
 
     // --- Format report ---
@@ -222,6 +237,7 @@ export async function executeMemoryConsolidate(
         `  Semantic Corpus: ${report.semanticCorpusEntries} events compiled for offline LLM annotation`,
         `  Associative Graph: ${report.associativeGraphNodes} fast nodes, ${report.associativeGraphEdges} structural edges`,
         `  V8 Graph: ${report.v8GraphBundles} bundles, ${report.v8GraphNodes} nodes, ${report.v8GraphEdges} edges`,
+        `  Offline Annotation Drafts: ${report.offlineAnnotatedBundles} new, ${report.offlineAnnotationSkipped} skipped${report.offlineAnnotationModel ? ` (${report.offlineAnnotationModel})` : " (no model configured)"}`,
     ];
 
     if (report.unconsolidated > 0) {
@@ -456,7 +472,10 @@ async function annotateEdgesWithLLM(corpus: SemanticCorpusEntry[]): Promise<Asso
     const apiKey = process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY;
     const baseUrl = process.env.OPENAI_BASE_URL || "https://api.siliconflow.cn/v1";
     // Defaulting to a strong reasoning model suitable for topology generation
-    const model = process.env.MEMORY_ANNOTATION_MODEL || "deepseek-ai/DeepSeek-V3";
+    const model =
+        process.env.MEMORY_ANNOTATION_MODEL ||
+        process.env.OPENAI_MODEL ||
+        "MiniMaxAI/MiniMax-M2.5";
 
     if (!apiKey) {
         console.warn("[Memory V8] No OPENAI_API_KEY or SILICONFLOW_API_KEY found. Skipping offline semantic wiring.");
