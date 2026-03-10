@@ -9,6 +9,7 @@ import {
     resolveWorkspace,
     type MemoryEvent,
 } from "../utils.js";
+import { postJson } from "../http-client.js";
 import { sanitizeAnnotationBundleDraft } from "./annotation.js";
 import { buildDraftFromStageMarkdown } from "./annotation-stage-parser.js";
 import {
@@ -93,24 +94,17 @@ async function callChat(
     config: AnnotationApiConfig,
     messages: Array<{ role: "system" | "user"; content: string }>
 ): Promise<string> {
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
-        method: "POST",
+    const payload = await postJson({
+        url: `${config.baseUrl}/chat/completions`,
         headers: {
-            "Content-Type": "application/json",
             Authorization: `Bearer ${config.apiKey}`,
         },
-        body: JSON.stringify({
+        body: {
             model: config.model,
             messages,
             temperature: 0.2,
-        }),
+        },
     });
-
-    if (!response.ok) {
-        throw new Error(`annotation request failed: ${response.status}`);
-    }
-
-    const payload = await response.json();
     return extractMessageText(payload);
 }
 

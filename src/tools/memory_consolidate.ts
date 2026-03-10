@@ -13,6 +13,7 @@ import {
     type MemoryEvent,
 } from "../utils.js";
 import { applyDecay, ageInDays } from "../decay.js";
+import { postJson } from "../http-client.js";
 import { buildV8Graph } from "../v8/compiler.js";
 import { runOfflineBundleAnnotation } from "../v8/offline-annotator.js";
 
@@ -511,13 +512,12 @@ Format requirement:
 
     try {
         console.log(`[Memory V8] Sending ${corpus.length} nodes to ${model} for deep semantic wiring...`);
-        const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-            method: "POST",
+        const data = await postJson({
+            url: `${baseUrl.replace(/\/$/, "")}/chat/completions`,
             headers: {
-                "Content-Type": "application/json",
                 "Authorization": `Bearer ${apiKey}`
             },
-            body: JSON.stringify({
+            body: {
                 model: model,
                 messages: [
                     { role: "system", content: systemPrompt },
@@ -525,15 +525,8 @@ Format requirement:
                 ],
                 temperature: 0.1,
                 response_format: { type: "json_object" } // if supported, else rely on prompt
-            })
+            },
         });
-
-        if (!response.ok) {
-            console.warn(`[Memory V8] LLM Annotation failed with status: ${response.status}`);
-            return [];
-        }
-
-        const data = await response.json();
         let rawContent = data.choices[0].message.content.trim();
 
         // Strip markdown blocks if the LLM ignored instructions

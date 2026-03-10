@@ -22,6 +22,15 @@ function takeLeadingClause(text: string, maxChars = 120): string {
     return sanitizeText(matched, maxChars);
 }
 
+function isLikelyGarbledTitle(text: string): boolean {
+    const value = sanitizeText(text, 160);
+    if (!value) return true;
+    const questionCount = (value.match(/\?/g) || []).length;
+    const replacementCount = (value.match(/\uFFFD/g) || []).length;
+    const suspicious = questionCount + replacementCount;
+    return suspicious >= Math.max(3, Math.floor(value.length * 0.2));
+}
+
 function parseSection(text: string, heading: string): string {
     const lines = text.replace(/\r/g, "").split("\n");
     const startIndex = lines.findIndex((line) => line.trim() === `# ${heading}`);
@@ -67,6 +76,36 @@ function parseNodeBullet(line: string, fallbackKind: V8NodeKind): V8AnnotationNo
     if (parts.length < 2) return null;
 
     const [nameZh, nameEn, roleRaw = "topic", why = ""] = parts;
+    const text = why || `${nameZh} / ${nameEn}`;
+    return {
+        kind: fallbackKind,
+        role: normalizeRole(roleRaw),
+        text,
+        summary: takeLeadingClause(text, 96),
+        nameZh,
+        nameEn,
+        aliases: [nameZh, nameEn],
+    };
+}
+
+function parseNodeTableRow(line: string, fallbackKind: V8NodeKind): V8AnnotationNodeDraft | null {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("|")) return null;
+    if (/^\|\s*-+/.test(trimmed)) return null;
+
+    const cells = trimmed
+        .split("|")
+        .slice(1, -1)
+        .map((cell) => sanitizeText(cell, 180));
+
+    if (cells.length < 4) return null;
+
+    const [nameZh, nameEn, roleRaw, why] = cells;
+    const headerJoined = `${nameZh} ${nameEn} ${roleRaw}`.toLowerCase();
+    if (/zh name|en name|tentative role|what part/.test(headerJoined)) {
+        return null;
+    }
+
     const text = why || `${nameZh} / ${nameEn}`;
     return {
         kind: fallbackKind,
@@ -151,7 +190,13 @@ export function buildDraftFromStageMarkdown(
 
     const nodes = coreNodesSection
         .split(/\r?\n/)
-        .map((line) => parseNodeBullet(line, fallbackKind))
+        .map((line) => {
+            const trimmed = line.trim();
+            if (trimmed.startsWith("|")) {
+                return parseNodeTableRow(trimmed, fallbackKind);
+            }
+            return parseNodeBullet(line, fallbackKind);
+        })
         .filter((node): node is V8AnnotationNodeDraft => Boolean(node));
 
     const edges = relationSection
@@ -159,8 +204,9 @@ export function buildDraftFromStageMarkdown(
         .map((line) => parseRelationRow(line))
         .filter((edge): edge is V8AnnotationEdgeDraft => Boolean(edge));
 
+    const titleHint = sanitizeText(input.titleHint || "", 120);
     const title =
-        sanitizeText(input.titleHint || "", 120) ||
+        (!isLikelyGarbledTitle(titleHint) ? titleHint : "") ||
         takeLeadingClause(sceneSection, 120) ||
         nodes[0]?.nameZh ||
         input.sourceRef;
