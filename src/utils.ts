@@ -324,6 +324,7 @@ export function summarizeUserRequestForTask(value: string, maxChars = 120): stri
 
     text = text
         .replace(/^(?:请|请你)\s*/u, "")
+        .replace(/^(?:继续|接着)\s*/u, "")
         .replace(/^(?:优先|先)\s*/u, "")
         .trim();
     return normalizeUserRequest(text, maxChars);
@@ -339,6 +340,10 @@ function normalizeTaskTitle(value: string, maxChars = 120): string {
         .trim();
 
     if (!compact) {
+        return "";
+    }
+
+    if (isSyntheticControlRequest(compact)) {
         return "";
     }
 
