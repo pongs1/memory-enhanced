@@ -39,6 +39,7 @@ src/v8/
   ids.ts
   manifest.ts
   annotation.ts
+  annotation-prompt.ts
   compiler.ts
   compile-event.ts
   compile-knowledge-md.ts
@@ -63,6 +64,8 @@ src/v8/
   - read/write/validate manifest
 - `annotation.ts`
   - offline annotator draft contracts and sanitization
+- `annotation-prompt.ts`
+  - sleep-phase LLM prompt builder for annotation drafts
 - `compiler.ts`
   - orchestrates bundle compilation
 - `compile-event.ts`
@@ -427,6 +430,13 @@ The runtime should sanitize:
 - edge score ranges
 - missing topic nodes
 - empty or overlong text
+
+The sleep-phase prompt builder should:
+
+- require bilingual equivalent node names
+- forbid splitting zh/en labels into separate nodes
+- prefer sparse `2-6` node bundles
+- demand raw JSON only
 
 ### 11.4 Build graph pass
 
