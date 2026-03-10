@@ -14,6 +14,7 @@ import type {
     V8MemoryNode,
     V8ScanResult,
     V8ScannerConfig,
+    V8SceneSignal,
     V8SourceIndex,
     V8TriggerLexicon,
 } from "./types.js";
@@ -61,7 +62,24 @@ function isBoundary(text: string): boolean {
 function tokenize(text: string): string[] {
     const englishWords = text.toLowerCase().match(/[a-z0-9_-]{3,}/g) || [];
     const cjkChunks = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
-    return [...englishWords, ...cjkChunks.map((chunk) => chunk.trim())];
+    const cjkNgrams: string[] = [];
+
+    for (const chunk of cjkChunks) {
+        const trimmed = chunk.trim();
+        if (!trimmed) continue;
+        if (trimmed.length <= 4) {
+            cjkNgrams.push(trimmed);
+            continue;
+        }
+
+        for (let size = 2; size <= Math.min(4, trimmed.length); size++) {
+            for (let i = 0; i <= trimmed.length - size; i++) {
+                cjkNgrams.push(trimmed.slice(i, i + size));
+            }
+        }
+    }
+
+    return [...englishWords, ...cjkNgrams];
 }
 
 function overlapScore(sourceText: string, referenceText: string): number {
@@ -142,6 +160,32 @@ function bundleTier(
     return "background";
 }
 
+function scoreNodeSceneOverlap(node: V8MemoryNode, text: string): number {
+    return overlapScore(
+        text,
+        `${node.text} ${node.summary} ${node.keywords.join(" ")}`
+    );
+}
+
+function sceneSourceWeight(signal: V8SceneSignal): number {
+    if (typeof signal.weight === "number") {
+        return signal.weight;
+    }
+
+    switch (signal.source) {
+        case "control":
+            return 1.15;
+        case "prompt":
+            return 1.0;
+        case "tool":
+            return 1.05;
+        case "event":
+            return 0.9;
+        default:
+            return 0.85;
+    }
+}
+
 export const DEFAULT_V8_SCANNER_CONFIG: V8ScannerConfig = {
     microCharsZh: 20,
     microCharsEn: 40,
@@ -162,6 +206,12 @@ export const DEFAULT_V8_SCANNER_CONFIG: V8ScannerConfig = {
     decisionThreshold: 0.74,
     backgroundThreshold: 0.68,
     secondWaveThreshold: 0.78,
+    sceneSignalGain: 0.8,
+    sceneCarryGain: 0.22,
+    sceneBundleBiasGain: 1,
+    sceneDecayLambda: 0.985,
+    sceneTopKNodes: 10,
+    sceneOverlapThreshold: 0.12,
 };
 
 export class V8GraphScanner {
@@ -172,6 +222,7 @@ export class V8GraphScanner {
     private readonly nodeCooldowns = new Map<string, number>();
     private readonly bundleCooldowns = new Map<string, number>();
     private readonly activeDayKeys = new Set<string>();
+    private readonly sceneBiases = new Map<string, number>();
     private recentWindow = "";
     private charsSinceLastScan = 0;
 
@@ -228,6 +279,30 @@ export class V8GraphScanner {
         this.spreadActivation();
     }
 
+    public refreshScene(
+        signals: V8SceneSignal[],
+        anchors: V8ControlAnchors
+    ): void {
+        const usableSignals = signals
+            .map((signal) => ({
+                ...signal,
+                text: normalizeTrigger(signal.text || ""),
+            }))
+            .filter((signal) => signal.text);
+        if (usableSignals.length === 0) {
+            return;
+        }
+
+        this.decaySceneBiases();
+
+        for (const signal of usableSignals) {
+            this.injectSceneSignal(signal, anchors);
+        }
+
+        this.applySceneField();
+        this.spreadActivation();
+    }
+
     public processChunk(delta: string, anchors: V8ControlAnchors): V8ScanResult {
         if (!delta) {
             return { activatedBundles: [], recentWindow: this.recentWindow };
@@ -247,7 +322,9 @@ export class V8GraphScanner {
 
         this.charsSinceLastScan = 0;
         this.applyDecay();
+        this.decaySceneBiases();
         this.injectFromText(this.recentWindow, anchors, false);
+        this.applySceneField();
         this.spreadActivation();
 
         const activatedBundles = this.collectActivatedBundles();
@@ -289,9 +366,24 @@ export class V8GraphScanner {
             }
         }
 
+        const overlappingNodes = topK(
+            [...this.graph.nodes.values()]
+                .map((node) => ({
+                    node,
+                    overlap: scoreNodeSceneOverlap(node, normalizedText),
+                }))
+                .filter((entry) => entry.overlap >= this.config.sceneOverlapThreshold),
+            this.config.sceneTopKNodes,
+            (entry) => entry.overlap
+        );
+        const candidateNodeIds = new Set<string>(lexicalHits);
+        for (const entry of overlappingNodes) {
+            candidateNodeIds.add(entry.node.id);
+        }
+
         const now = Date.now();
 
-        for (const nodeId of lexicalHits) {
+        for (const nodeId of candidateNodeIds) {
             const node = this.graph.nodes.get(nodeId);
             if (!node) continue;
 
@@ -302,7 +394,8 @@ export class V8GraphScanner {
                 this.activeDayKeys.add(node.dayKey);
             }
 
-            const gLex = 1;
+            const gLex = lexicalHits.has(nodeId) ? 1 : 0;
+            const gOverlap = scoreNodeSceneOverlap(node, normalizedText);
             const gCtrl = maxAnchorOverlap(
                 `${node.text} ${node.summary}`,
                 anchors
@@ -314,13 +407,100 @@ export class V8GraphScanner {
                         ? 1
                         : 0.2;
             const baseGain = isInitialPrompt ? 1.4 : 1;
-            const energy = baseGain * (0.6 * gLex + 0.25 * gCtrl + 0.15 * gTime);
+            const energy =
+                baseGain *
+                (0.45 * gLex + 0.35 * Math.max(gOverlap, gCtrl) + 0.2 * gTime);
             this.activate(nodeId, energy);
+        }
+    }
+
+    private injectSceneSignal(
+        signal: V8SceneSignal & { text: string },
+        anchors: V8ControlAnchors
+    ): void {
+        const lexicalHits = new Set<string>();
+        for (const [trigger, nodeIds] of Object.entries(this.graph.triggerLexicon)) {
+            if (!trigger || !signal.text.includes(trigger)) continue;
+            for (const nodeId of nodeIds) {
+                lexicalHits.add(nodeId);
+            }
+        }
+
+        const overlappingNodes = topK(
+            [...this.graph.nodes.values()]
+                .map((node) => ({
+                    node,
+                    overlap: scoreNodeSceneOverlap(node, signal.text),
+                }))
+                .filter((entry) => entry.overlap >= this.config.sceneOverlapThreshold),
+            this.config.sceneTopKNodes,
+            (entry) => entry.overlap
+        );
+
+        const candidateNodeIds = new Set<string>(lexicalHits);
+        for (const entry of overlappingNodes) {
+            candidateNodeIds.add(entry.node.id);
+        }
+
+        for (const nodeId of candidateNodeIds) {
+            const node = this.graph.nodes.get(nodeId);
+            if (!node) continue;
+
+            const lexicalScore = lexicalHits.has(nodeId) ? 1 : 0;
+            const overlap = scoreNodeSceneOverlap(node, signal.text);
+            const gCtrl = maxAnchorOverlap(
+                `${node.text} ${node.summary}`,
+                anchors
+            );
+            const gTime =
+                node.kind !== "episodic"
+                    ? 0.72
+                    : node.dayKey && this.activeDayKeys.has(node.dayKey)
+                        ? 1
+                        : 0.3;
+            const sourceWeight = sceneSourceWeight(signal);
+            const bias =
+                sourceWeight *
+                this.config.sceneSignalGain *
+                (0.6 * lexicalScore + 0.25 * Math.max(overlap, gCtrl) + 0.15 * gTime);
+
+            if (bias <= 0.03) continue;
+
+            if (node.kind === "episodic" && node.dayKey) {
+                this.activeDayKeys.add(node.dayKey);
+            }
+
+            this.sceneBiases.set(
+                nodeId,
+                Math.min(1.25, (this.sceneBiases.get(nodeId) || 0) + bias)
+            );
         }
     }
 
     private activate(nodeId: string, energy: number): void {
         this.activations.set(nodeId, (this.activations.get(nodeId) || 0) + energy);
+    }
+
+    private applySceneField(): void {
+        const topSceneNodes = topK(
+            [...this.sceneBiases.entries()],
+            this.config.sceneTopKNodes,
+            ([, energy]) => energy
+        );
+
+        for (const [nodeId, energy] of topSceneNodes) {
+            const node = this.graph.nodes.get(nodeId);
+            if (!node) continue;
+            if (
+                node.kind === "episodic" &&
+                node.dayKey &&
+                !this.activeDayKeys.has(node.dayKey)
+            ) {
+                continue;
+            }
+
+            this.activate(nodeId, energy * this.config.sceneCarryGain);
+        }
     }
 
     private spreadActivation(): void {
@@ -405,14 +585,36 @@ export class V8GraphScanner {
         }
     }
 
+    private decaySceneBiases(): void {
+        for (const [nodeId, energy] of this.sceneBiases.entries()) {
+            const decayed = energy * this.config.sceneDecayLambda;
+            if (decayed < 0.03) {
+                this.sceneBiases.delete(nodeId);
+            } else {
+                this.sceneBiases.set(nodeId, decayed);
+            }
+        }
+    }
+
     private collectActivatedBundles(): V8ActivatedBundle[] {
         const bundleEnergy = new Map<string, number>();
         const bundleNodeIds = new Map<string, Set<string>>();
         const now = Date.now();
 
-        for (const [nodeId, energy] of this.activations.entries()) {
+        const candidateNodeIds = new Set<string>([
+            ...this.activations.keys(),
+            ...this.sceneBiases.keys(),
+        ]);
+
+        for (const nodeId of candidateNodeIds) {
             const node = this.graph.nodes.get(nodeId);
-            if (!node || energy <= 0) continue;
+            if (!node) continue;
+
+            const activationEnergy = this.activations.get(nodeId) || 0;
+            const sceneEnergy =
+                (this.sceneBiases.get(nodeId) || 0) * this.config.sceneBundleBiasGain;
+            const energy = activationEnergy + sceneEnergy;
+            if (energy <= 0) continue;
 
             const bundle = this.graph.bundles.get(node.bundleId);
             if (!bundle) continue;

@@ -11,7 +11,7 @@ import {
 import { graphPaths } from "../v8/paths.js";
 import { assembleRecallPrompts, loadRecallAssemblyContext } from "../v8/recall.js";
 import { V8GraphScanner } from "../v8/scanner.js";
-import type { V8ControlAnchors } from "../v8/types.js";
+import type { V8ControlAnchors, V8SceneSignal } from "../v8/types.js";
 
 // A global registry for active scanners per session
 const scanners = new Map<string, AssociativeScanner>();
@@ -72,6 +72,87 @@ function buildControlAnchors(workingState: WorkingMemoryState): V8ControlAnchors
         activeTask: workingState.active_task || "",
         latestUserRequest: workingState.last_user_request || "",
     };
+}
+
+function pushSceneSignal(
+    signals: V8SceneSignal[],
+    source: V8SceneSignal["source"],
+    text: string,
+    weight?: number
+) {
+    const normalized = text.trim();
+    if (!normalized) {
+        return;
+    }
+    signals.push({ source, text: normalized, weight });
+}
+
+function buildSceneSignals(
+    workingState: WorkingMemoryState,
+    extras: V8SceneSignal[] = []
+): V8SceneSignal[] {
+    const signals: V8SceneSignal[] = [];
+    pushSceneSignal(signals, "control", workingState.project_goal || "", 1.05);
+    pushSceneSignal(signals, "control", workingState.active_task || "", 1.15);
+    pushSceneSignal(signals, "control", workingState.last_user_request || "", 1.2);
+    return [...signals, ...extras];
+}
+
+function summarizeObservationValue(value: any, maxChars = 320): string {
+    if (!value) {
+        return "";
+    }
+
+    if (typeof value === "string") {
+        return value.replace(/\s+/g, " ").trim().slice(0, maxChars);
+    }
+
+    if (Array.isArray(value)) {
+        return value
+            .map((item) => summarizeObservationValue(item, Math.max(60, Math.floor(maxChars / 3))))
+            .filter(Boolean)
+            .join(" ")
+            .slice(0, maxChars);
+    }
+
+    if (typeof value === "object") {
+        if (typeof value.text === "string") {
+            return summarizeObservationValue(value.text, maxChars);
+        }
+        if (typeof value.content === "string") {
+            return summarizeObservationValue(value.content, maxChars);
+        }
+        try {
+            return JSON.stringify(value).replace(/\s+/g, " ").slice(0, maxChars);
+        } catch {
+            return "";
+        }
+    }
+
+    return String(value).slice(0, maxChars);
+}
+
+function extractToolSceneSignals(event: any): V8SceneSignal[] {
+    const signals: V8SceneSignal[] = [];
+    const toolName = typeof event?.toolName === "string" ? event.toolName : "";
+    if (toolName && toolName !== "memory_working") {
+        pushSceneSignal(signals, "tool", `tool:${toolName}`, 0.82);
+    }
+
+    const observation = summarizeObservationValue(
+        event?.output ||
+        event?.result ||
+        event?.response ||
+        event?.content ||
+        event?.text ||
+        event?.body,
+        360
+    );
+    if (observation) {
+        pushSceneSignal(signals, "tool", observation, 0.92);
+    }
+
+    return signals;
 }
 
 function getLegacyScanner(sessionId: string, workspace: string): AssociativeScanner {
@@ -141,7 +222,24 @@ function updateRecentOutput(
 function tokenizeOverlap(text: string): string[] {
     const englishWords = text.toLowerCase().match(/[a-z0-9_-]{3,}/g) || [];
     const cjkChunks = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
-    return [...englishWords, ...cjkChunks.map((chunk) => chunk.trim())];
+    const cjkNgrams: string[] = [];
+
+    for (const chunk of cjkChunks) {
+        const trimmed = chunk.trim();
+        if (!trimmed) continue;
+        if (trimmed.length <= 4) {
+            cjkNgrams.push(trimmed);
+            continue;
+        }
+
+        for (let size = 2; size <= Math.min(4, trimmed.length); size++) {
+            for (let i = 0; i <= trimmed.length - size; i++) {
+                cjkNgrams.push(trimmed.slice(i, i + size));
+            }
+        }
+    }
+
+    return [...englishWords, ...cjkNgrams];
 }
 
 function calculateTokenOverlap(sourceText: string, referenceText: string): number {
@@ -637,6 +735,10 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
             const baselineWorkingState = maybeRefreshWorkingState(workspace);
             const currentAnchors = buildControlAnchors(baselineWorkingState);
             if (useV8GraphRecall && v8Scanner) {
+                v8Scanner.refreshScene(
+                    buildSceneSignals(baselineWorkingState),
+                    currentAnchors
+                );
                 v8Scanner.preExcite(
                     [
                         baselineWorkingState.project_goal,
@@ -793,12 +895,42 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
             if (useV8GraphRecall) {
                 const workingState = maybeRefreshWorkingState(workspace);
                 const scanner = getV8Scanner(sid, workspace);
+                scanner.refreshScene(
+                    buildSceneSignals(workingState, [
+                        {
+                            source: "prompt",
+                            text: promptText,
+                            weight: 1.0,
+                        },
+                    ]),
+                    buildControlAnchors(workingState)
+                );
                 scanner.preExcite(promptText, buildControlAnchors(workingState));
             } else {
                 const scanner = getLegacyScanner(sid, workspace);
                 await scanner.preExcite(promptText);
             }
         }
+    });
+
+    api.on("after_tool_call", async (event: any, ctx: any) => {
+        const sid = ctx?.sessionId || "default";
+        const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
+        if (!isV8GraphRecallEnabled(pluginConfig, workspace)) {
+            return;
+        }
+
+        const scanner = getV8Scanner(sid, workspace);
+        const workingState = maybeRefreshWorkingState(workspace);
+        const toolSignals = extractToolSceneSignals(event);
+        if (toolSignals.length === 0) {
+            return;
+        }
+
+        scanner.refreshScene(
+            buildSceneSignals(workingState, toolSignals),
+            buildControlAnchors(workingState)
+        );
     });
 
     api.on("agent_end", async (_event: any, ctx: any) => {

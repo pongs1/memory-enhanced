@@ -160,12 +160,31 @@ export interface V8ScannerConfig {
     decisionThreshold: number;
     backgroundThreshold: number;
     secondWaveThreshold: number;
+    sceneSignalGain: number;
+    sceneCarryGain: number;
+    sceneBundleBiasGain: number;
+    sceneDecayLambda: number;
+    sceneTopKNodes: number;
+    sceneOverlapThreshold: number;
 }
 
 export interface V8ControlAnchors {
     goal: string;
     activeTask: string;
     latestUserRequest: string;
+}
+
+export type V8SceneSignalSource =
+    | "control"
+    | "prompt"
+    | "tool"
+    | "event"
+    | "observation";
+
+export interface V8SceneSignal {
+    source: V8SceneSignalSource;
+    text: string;
+    weight?: number;
 }
 
 export interface CompileEventInput {
