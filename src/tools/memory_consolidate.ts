@@ -39,6 +39,17 @@ export const MemoryConsolidateParams = Type.Object({
             description: "Preview changes without writing",
         })
     ),
+    annotation_force: Type.Optional(
+        Type.Boolean({
+            default: false,
+            description: "Force rerunning offline annotation even if a bundle already has an up-to-date draft",
+        })
+    ),
+    annotation_source_refs: Type.Optional(
+        Type.Array(Type.String(), {
+            description: "Optional list of source refs to annotate, e.g. evt_20260310_028 or memory/knowledge/openclaw.md",
+        })
+    ),
 });
 
 export type MemoryConsolidateInput = Static<typeof MemoryConsolidateParams>;
@@ -90,6 +101,8 @@ export async function executeMemoryConsolidate(
     const archiveThresh = pluginConfig?.archiveThreshold ?? 0.2;
     const scope = params.scope ?? "session";
     const dryRun = params.dry_run ?? false;
+    const annotationForce = params.annotation_force ?? false;
+    const annotationSourceRefs = params.annotation_source_refs ?? [];
     const todayStr = today();
     const now = new Date();
 
@@ -220,6 +233,8 @@ export async function executeMemoryConsolidate(
         const annotationRun = await runOfflineBundleAnnotation({
             workspace,
             bundles: v8Graph.bundles,
+            force: annotationForce,
+            sourceRefs: annotationSourceRefs,
         });
         report.offlineAnnotatedBundles = annotationRun.records.length;
         report.offlineAnnotationSkipped = annotationRun.skipped;

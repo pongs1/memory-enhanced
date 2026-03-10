@@ -61,6 +61,31 @@ function normalizeRole(value: string): V8NodeRole {
     return "topic";
 }
 
+function inferRoleFromMeaning(
+    nameZh: string,
+    nameEn: string,
+    text: string
+): V8NodeRole {
+    const joined = `${nameZh} ${nameEn} ${text}`.toLowerCase();
+
+    if (/流程|步骤|顺序|工作流|策略|decision|workflow|process|retrieval|summary|恢复顺序|update strategy/.test(joined)) {
+        return "workflow";
+    }
+    if (/条件|前提|适用|范围|路径|目录|scope|path|directory|valid|only when|format requirement/.test(joined)) {
+        return "condition";
+    }
+    if (/证据|线索|清单|列表|枚举|数量|文件数|响应内容|显示|列出|evidence|list|enumeration|count|response content/.test(joined)) {
+        return /检查点|checkpoint|count/.test(joined) ? "checkpoint" : "evidence";
+    }
+    if (/检查点|恢复点|交接|checkpoint|resume point|handoff/.test(joined)) {
+        return "checkpoint";
+    }
+    if (/约束|规则|禁止|必须|constraint|rule|must not|must/.test(joined)) {
+        return "constraint";
+    }
+    return "topic";
+}
+
 function normalizeKind(value: string | undefined, fallback: V8NodeKind): V8NodeKind {
     if (value === "episodic" || value === "semantic" || value === "procedural") {
         return value;
@@ -77,9 +102,12 @@ function parseNodeBullet(line: string, fallbackKind: V8NodeKind): V8AnnotationNo
 
     const [nameZh, nameEn, roleRaw = "topic", why = ""] = parts;
     const text = why || `${nameZh} / ${nameEn}`;
+    const normalizedRole = normalizeRole(roleRaw);
     return {
         kind: fallbackKind,
-        role: normalizeRole(roleRaw),
+        role: normalizedRole === "topic"
+            ? inferRoleFromMeaning(nameZh, nameEn, text)
+            : normalizedRole,
         text,
         summary: takeLeadingClause(text, 96),
         nameZh,
@@ -107,9 +135,12 @@ function parseNodeTableRow(line: string, fallbackKind: V8NodeKind): V8Annotation
     }
 
     const text = why || `${nameZh} / ${nameEn}`;
+    const normalizedRole = normalizeRole(roleRaw);
     return {
         kind: fallbackKind,
-        role: normalizeRole(roleRaw),
+        role: normalizedRole === "topic"
+            ? inferRoleFromMeaning(nameZh, nameEn, text)
+            : normalizedRole,
         text,
         summary: takeLeadingClause(text, 96),
         nameZh,

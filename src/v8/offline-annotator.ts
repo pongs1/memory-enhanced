@@ -194,6 +194,13 @@ function rankBundlesForAnnotation(bundles: V8MemoryBundle[], maxBundles: number)
         .slice(0, maxBundles);
 }
 
+function normalizeSourceRefFilter(values: string[] | undefined): Set<string> | null {
+    const cleaned = (values || [])
+        .map((value) => sanitizeText(value, 220))
+        .filter(Boolean);
+    return cleaned.length > 0 ? new Set(cleaned) : null;
+}
+
 async function annotateBundle(
     workspace: string,
     bundle: V8MemoryBundle,
@@ -290,15 +297,29 @@ export async function runOfflineBundleAnnotation(
         1,
         Number(process.env.MEMORY_ANNOTATION_MAX_BUNDLES || input.maxBundles || 8)
     );
+    const force =
+        input.force === true ||
+        /^(1|true|yes)$/i.test(process.env.MEMORY_ANNOTATION_FORCE || "");
+    const sourceRefFilter = normalizeSourceRefFilter(
+        input.sourceRefs && input.sourceRefs.length > 0
+            ? input.sourceRefs
+            : (process.env.MEMORY_ANNOTATION_SOURCE_REFS || "")
+                .split(",")
+                .map((value) => value.trim())
+                .filter(Boolean)
+    );
 
-    const selected = rankBundlesForAnnotation(input.bundles, maxBundles);
+    const candidateBundles = sourceRefFilter
+        ? input.bundles.filter((bundle) => sourceRefFilter.has(bundle.sourceRef))
+        : input.bundles;
+    const selected = rankBundlesForAnnotation(candidateBundles, maxBundles);
     const nextRecords = [...previous];
     const newRecords: V8OfflineAnnotationRecord[] = [];
-    let skipped = Math.max(0, input.bundles.length - selected.length);
+    let skipped = Math.max(0, candidateBundles.length - selected.length);
 
     for (const bundle of selected) {
         const previousRecord = previousByBundle.get(bundle.bundleId);
-        if (previousRecord && previousRecord.bundleUpdatedAt === bundle.updatedAt) {
+        if (!force && previousRecord && previousRecord.bundleUpdatedAt === bundle.updatedAt) {
             skipped += 1;
             continue;
         }

@@ -391,6 +391,8 @@ export interface V8OfflineAnnotationRunInput {
     workspace: string;
     bundles: V8MemoryBundle[];
     maxBundles?: number;
+    force?: boolean;
+    sourceRefs?: string[];
 }
 
 export interface V8OfflineAnnotationRunOutput {
