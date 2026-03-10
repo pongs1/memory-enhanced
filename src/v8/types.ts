@@ -162,6 +162,12 @@ export interface V8ScannerConfig {
     secondWaveThreshold: number;
 }
 
+export interface V8ControlAnchors {
+    goal: string;
+    activeTask: string;
+    latestUserRequest: string;
+}
+
 export interface CompileEventInput {
     event: MemoryEvent;
     workspace: string;
@@ -213,6 +219,11 @@ export interface V8ActivatedBundle {
     energy: number;
     tier: V8DeliveryTier;
     nodeIds: string[];
+}
+
+export interface V8ScanResult {
+    activatedBundles: V8ActivatedBundle[];
+    recentWindow: string;
 }
 
 export interface AssembleRecallInput {
