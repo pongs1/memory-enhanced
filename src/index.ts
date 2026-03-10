@@ -56,6 +56,13 @@ export default function register(api: OpenClawPluginApi) {
             outputCheckpointDriftThreshold?: number;
             outputCheckpointTailChars?: number;
             enableV8GraphRecall?: boolean;
+            enableV8ExplorationNoise?: boolean;
+            v8ExplorationNewEdgeProbability?: number;
+            v8ExplorationWeightJitterProbability?: number;
+            v8ExplorationWeightJitterDelta?: number;
+            v8ExplorationMaxNewEdges?: number;
+            v8ExplorationMinNewEdgeWeight?: number;
+            v8ExplorationMaxNewEdgeWeight?: number;
         }
         | undefined;
 

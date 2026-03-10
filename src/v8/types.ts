@@ -48,6 +48,16 @@ export interface V8GraphManifest {
     legacyGraphMigrated: boolean;
 }
 
+export interface V8ExplorationConfig {
+    enabled: boolean;
+    newEdgeProbability: number;
+    weightJitterProbability: number;
+    weightJitterDelta: number;
+    maxNewEdges: number;
+    minNewEdgeWeight: number;
+    maxNewEdgeWeight: number;
+}
+
 export interface V8OfflineAnnotationRecord {
     bundleId: string;
     sourceType: V8BundleSourceType;
@@ -234,6 +244,7 @@ export interface BuildGraphInput {
     includeKnowledgeMd?: boolean;
     includeSkillMd?: boolean;
     writeToDisk?: boolean;
+    exploration?: Partial<V8ExplorationConfig>;
 }
 
 export interface BuildGraphOutput {
@@ -245,6 +256,10 @@ export interface BuildGraphOutput {
     dayIndex: V8DayIndex;
     sourceIndex: V8SourceIndex;
     hardCoreIndex: V8HardCoreIndex;
+    explorationStats?: {
+        addedEdges: number;
+        jitteredEdges: number;
+    };
 }
 
 export interface V8ActivatedNode {

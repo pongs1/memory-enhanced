@@ -70,6 +70,8 @@ interface ConsolidationReport {
     offlineAnnotatedBundles: number;
     offlineAnnotationSkipped: number;
     offlineAnnotationModel: string | null;
+    explorationAddedEdges: number;
+    explorationJitteredEdges: number;
 }
 
 /**
@@ -131,6 +133,8 @@ export async function executeMemoryConsolidate(
         offlineAnnotatedBundles: 0,
         offlineAnnotationSkipped: 0,
         offlineAnnotationModel: null,
+        explorationAddedEdges: 0,
+        explorationJitteredEdges: 0,
     };
 
     // --- 1. Collect event files based on scope ---
@@ -225,10 +229,21 @@ export async function executeMemoryConsolidate(
             includeKnowledgeMd: true,
             includeSkillMd: false,
             writeToDisk: true,
+            exploration: {
+                enabled: pluginConfig?.enableV8ExplorationNoise ?? false,
+                newEdgeProbability: pluginConfig?.v8ExplorationNewEdgeProbability,
+                weightJitterProbability: pluginConfig?.v8ExplorationWeightJitterProbability,
+                weightJitterDelta: pluginConfig?.v8ExplorationWeightJitterDelta,
+                maxNewEdges: pluginConfig?.v8ExplorationMaxNewEdges,
+                minNewEdgeWeight: pluginConfig?.v8ExplorationMinNewEdgeWeight,
+                maxNewEdgeWeight: pluginConfig?.v8ExplorationMaxNewEdgeWeight,
+            },
         });
         report.v8GraphBundles = v8Graph.bundles.length;
         report.v8GraphNodes = v8Graph.nodes.length;
         report.v8GraphEdges = v8Graph.edges.length;
+        report.explorationAddedEdges = v8Graph.explorationStats?.addedEdges ?? 0;
+        report.explorationJitteredEdges = v8Graph.explorationStats?.jitteredEdges ?? 0;
 
         const annotationRun = await runOfflineBundleAnnotation({
             workspace,
@@ -253,6 +268,7 @@ export async function executeMemoryConsolidate(
         `  Semantic Corpus: ${report.semanticCorpusEntries} events compiled for offline LLM annotation`,
         `  Associative Graph: ${report.associativeGraphNodes} fast nodes, ${report.associativeGraphEdges} structural edges`,
         `  V8 Graph: ${report.v8GraphBundles} bundles, ${report.v8GraphNodes} nodes, ${report.v8GraphEdges} edges`,
+        `  V8 Exploration Noise: +${report.explorationAddedEdges} weak edges, ${report.explorationJitteredEdges} jittered associative edges`,
         `  Offline Annotation Drafts: ${report.offlineAnnotatedBundles} new, ${report.offlineAnnotationSkipped} skipped${report.offlineAnnotationModel ? ` (${report.offlineAnnotationModel})` : " (no model configured)"}`,
     ];
 

@@ -18,9 +18,20 @@ import type {
     V8MemoryBundle,
     V8MemoryEdge,
     V8MemoryNode,
+    V8ExplorationConfig,
     V8OfflineAnnotationRecord,
     V8SanitizedAnnotationBundleDraft,
 } from "./types.js";
+
+export const DEFAULT_V8_EXPLORATION_CONFIG: V8ExplorationConfig = {
+    enabled: false,
+    newEdgeProbability: 0.004,
+    weightJitterProbability: 0.015,
+    weightJitterDelta: 0.03,
+    maxNewEdges: 4,
+    minNewEdgeWeight: 0.04,
+    maxNewEdgeWeight: 0.12,
+};
 
 function sanitizeText(text: string, maxChars = 220): string {
     return (text || "")
@@ -123,6 +134,10 @@ function dedupeEdges(edges: V8MemoryEdge[]): V8MemoryEdge[] {
         seen.set(edge.id, edge);
     }
     return [...seen.values()];
+}
+
+function clamp01(value: number): number {
+    return Math.max(0, Math.min(1, value));
 }
 
 function buildAnnotatedNodeId(bundleId: string, role: string, index: number): string {
@@ -267,6 +282,106 @@ function applyOfflineAnnotationDrafts(
     };
 }
 
+function buildEdgeKey(src: string, dst: string, type: string): string {
+    return `${src}->${dst}:${type}`;
+}
+
+function randomBetween(min: number, max: number): number {
+    return min + Math.random() * (max - min);
+}
+
+function applyExplorationPerturbation(
+    bundles: V8MemoryBundle[],
+    nodes: V8MemoryNode[],
+    edges: V8MemoryEdge[],
+    config: V8ExplorationConfig
+): { edges: V8MemoryEdge[]; stats: { addedEdges: number; jitteredEdges: number } } {
+    if (!config.enabled) {
+        return { edges, stats: { addedEdges: 0, jitteredEdges: 0 } };
+    }
+
+    let jitteredEdges = 0;
+    const nextEdges = edges.map((edge) => {
+        if (edge.type !== "associative") {
+            return edge;
+        }
+        if (Math.random() > config.weightJitterProbability) {
+            return edge;
+        }
+
+        const delta = randomBetween(-config.weightJitterDelta, config.weightJitterDelta);
+        jitteredEdges += 1;
+        return {
+            ...edge,
+            assocStrength: clamp01(edge.assocStrength + delta),
+            utility: clamp01(edge.utility + delta * 0.8),
+            contextFit: clamp01(edge.contextFit + delta * 0.6),
+            lastUpdatedAt: nowISO(),
+        };
+    });
+
+    const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+    const existingKeys = new Set(nextEdges.map((edge) => buildEdgeKey(edge.src, edge.dst, edge.type)));
+    const eligibleNodes = nodes.filter((node) =>
+        node.importance >= 0.55 &&
+        node.confidence >= 0.55 &&
+        Boolean(node.text)
+    );
+    const addedEdges: V8MemoryEdge[] = [];
+    const maxAttempts = Math.max(config.maxNewEdges * 20, eligibleNodes.length * 2);
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (addedEdges.length >= config.maxNewEdges) {
+            break;
+        }
+        if (Math.random() > config.newEdgeProbability) {
+            continue;
+        }
+        if (eligibleNodes.length < 2) {
+            break;
+        }
+
+        const src = eligibleNodes[Math.floor(Math.random() * eligibleNodes.length)];
+        const dst = eligibleNodes[Math.floor(Math.random() * eligibleNodes.length)];
+        if (!src || !dst || src.id === dst.id) continue;
+        if (src.bundleId === dst.bundleId) continue;
+        const srcBundle = bundles.find((bundle) => bundle.bundleId === src.bundleId);
+        const dstBundle = bundles.find((bundle) => bundle.bundleId === dst.bundleId);
+        if (srcBundle?.sourceRef === dstBundle?.sourceRef) continue;
+
+        const key = buildEdgeKey(src.id, dst.id, "associative");
+        if (existingKeys.has(key)) continue;
+        existingKeys.add(key);
+
+        const baseWeight = randomBetween(config.minNewEdgeWeight, config.maxNewEdgeWeight);
+        addedEdges.push({
+            id: `me_explore_${src.id}_${dst.id}_${attempt + 1}`,
+            type: "associative",
+            src: src.id,
+            dst: dst.id,
+            assocStrength: baseWeight,
+            utility: clamp01(baseWeight * 0.9),
+            trust: clamp01(baseWeight * 0.8),
+            freshness: 0.72,
+            contextFit: clamp01(baseWeight * 0.85),
+            evidenceCount: 1,
+            activationCount: 0,
+            adoptCount: 0,
+            rejectCount: 0,
+            lastUpdatedAt: nowISO(),
+            lastVerifiedAt: null,
+        });
+    }
+
+    return {
+        edges: [...nextEdges, ...addedEdges],
+        stats: {
+            addedEdges: addedEdges.length,
+            jitteredEdges,
+        },
+    };
+}
+
 function persistGraph(output: BuildGraphOutput, workspace: string) {
     const gp = ensureGraphDirs(workspace);
     const episodicNodes = output.nodes.filter((node) => node.kind === "episodic");
@@ -308,6 +423,10 @@ export async function buildV8Graph(
     const includeKnowledgeMd = input.includeKnowledgeMd ?? true;
     const includeSkillMd = input.includeSkillMd ?? false;
     const writeToDisk = input.writeToDisk ?? false;
+    const exploration = {
+        ...DEFAULT_V8_EXPLORATION_CONFIG,
+        ...(input.exploration || {}),
+    };
 
     const basePaths = graphPaths(workspace);
     ensureDir(basePaths.graphDir);
@@ -367,9 +486,15 @@ export async function buildV8Graph(
     }
 
     const withAnnotations = applyOfflineAnnotationDrafts(workspace, bundles, nodes, edges);
+    const withExploration = applyExplorationPerturbation(
+        withAnnotations.bundles,
+        withAnnotations.nodes,
+        withAnnotations.edges,
+        exploration
+    );
     const finalBundles = dedupeBundles(withAnnotations.bundles);
     const finalNodes = dedupeNodes(withAnnotations.nodes);
-    const finalEdges = dedupeEdges(withAnnotations.edges);
+    const finalEdges = dedupeEdges(withExploration.edges);
     const triggerLexicon = buildTriggerLexicon(finalNodes);
     const dayIndex = buildDayIndex(finalNodes);
     const sourceIndex = buildSourceIndex(finalBundles);
@@ -385,6 +510,7 @@ export async function buildV8Graph(
         dayIndex,
         sourceIndex,
         hardCoreIndex,
+        explorationStats: withExploration.stats,
     };
 
     if (writeToDisk) {

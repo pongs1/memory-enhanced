@@ -56,6 +56,41 @@
         "type": "boolean",
         "default": false,
         "description": "Enable the experimental V8 graph-based recall path when .memory/graph/manifest.json exists"
+      },
+      "enableV8ExplorationNoise": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable very low-frequency exploration noise in the V8 graph: tiny associative edge jitter plus a few weak random associative links"
+      },
+      "v8ExplorationNewEdgeProbability": {
+        "type": "number",
+        "default": 0.004,
+        "description": "Per-attempt probability for adding a tiny random associative link during V8 graph build"
+      },
+      "v8ExplorationWeightJitterProbability": {
+        "type": "number",
+        "default": 0.015,
+        "description": "Per-edge probability of applying a very small random weight jitter to existing associative edges"
+      },
+      "v8ExplorationWeightJitterDelta": {
+        "type": "number",
+        "default": 0.03,
+        "description": "Maximum absolute delta for exploration jitter applied to associative edge weights"
+      },
+      "v8ExplorationMaxNewEdges": {
+        "type": "number",
+        "default": 4,
+        "description": "Maximum number of weak random associative links added in one V8 graph build"
+      },
+      "v8ExplorationMinNewEdgeWeight": {
+        "type": "number",
+        "default": 0.04,
+        "description": "Minimum initial weight for exploration-added weak associative links"
+      },
+      "v8ExplorationMaxNewEdgeWeight": {
+        "type": "number",
+        "default": 0.12,
+        "description": "Maximum initial weight for exploration-added weak associative links"
       }
     }
   },
