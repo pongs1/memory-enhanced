@@ -232,23 +232,31 @@ export async function executeMemoryWorking(
             };
 
         case "reprioritize":
-            if (!sanitizeTaskText(params.focus)) {
+            {
+                const sanitizedFocus = sanitizeTaskText(params.focus);
+                if (!sanitizedFocus) {
+                    return {
+                        content: [
+                            {
+                                type: "text" as const,
+                                text:
+                                    "Error: Action 'reprioritize' requires a concise plain-text 'focus'. " +
+                                    "Do not pass timestamps, injected prompt blocks, or markdown labels.",
+                            },
+                        ],
+                    };
+                }
+
+                state = reprioritizeTasks(workspace, state, sanitizedFocus, params.siblings);
                 return {
                     content: [
                         {
                             type: "text" as const,
-                            text:
-                                "Error: Action 'reprioritize' requires a concise plain-text 'focus'. " +
-                                "Do not pass timestamps, injected prompt blocks, or markdown labels.",
+                            text: withPrefix("Reprioritized task ledger.", state),
                         },
                     ],
                 };
             }
-
-            state = reprioritizeTasks(workspace, state, params.focus, params.siblings);
-            return {
-                content: [{ type: "text" as const, text: withPrefix("Reprioritized task ledger.", state) }],
-            };
 
         case "scratchpad_append":
             if (!params.section || !params.content) {

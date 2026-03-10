@@ -30,6 +30,7 @@ import {
 import {
     isSyntheticControlRequest,
     isIdleTask,
+    loadWorkingMemoryState,
     normalizeUserRequest,
     renderInjectedWorkingMemory,
     summarizeUserRequestForTask,
@@ -72,6 +73,31 @@ export default function register(api: OpenClawPluginApi) {
             .replace(/\s+/g, " ")
             .trim();
     };
+    const extractCurrentPromptUserText = (value: string) => {
+        const withoutInjected = value
+            .replace(/<!-- Memory Context \(Live\) -->[\s\S]*?<!-- End Memory Context -->\s*/g, "")
+            .trim();
+        if (!withoutInjected) {
+            return "";
+        }
+
+        const timestampTail =
+            withoutInjected.match(/\[[^\]]+\]\s*([\s\S]+)$/)?.[1]?.trim() ||
+            withoutInjected;
+        const lastLine =
+            timestampTail
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .pop() || timestampTail;
+
+        const normalizedTail = normalizeUserRequest(lastLine);
+        if (normalizedTail) {
+            return normalizedTail;
+        }
+
+        return normalizeUserRequest(timestampTail);
+    };
     const semanticSignalPatterns = [
         /\bdecid(?:e|ed|ing|es)\b/i,
         /\bdecision\b/i,
@@ -105,18 +131,12 @@ export default function register(api: OpenClawPluginApi) {
     ];
 
     const resolveIncomingUserRequest = (event: any, fallbackMessages?: any[]) => {
-        const lastUserMsg = [...(fallbackMessages || [])].reverse().find((m: any) => m.role === "user");
-        const lastUserText = normalizeUserRequest(extractText(lastUserMsg));
-        if (lastUserText) {
-            return lastUserText;
-        }
-
         const candidates = [
+            typeof event?.prompt === "string" ? extractCurrentPromptUserText(event.prompt) : "",
+            extractText(event?.message),
             typeof event?.text === "string" ? event.text : "",
             typeof event?.body === "string" ? event.body : "",
             typeof event?.content === "string" ? event.content : "",
-            extractText(event?.message),
-            typeof event?.prompt === "string" ? stripInjectedMemoryContext(event.prompt) : "",
             extractText(event),
         ];
 
@@ -125,6 +145,12 @@ export default function register(api: OpenClawPluginApi) {
             if (normalized && !isSyntheticControlRequest(normalized)) {
                 return normalized;
             }
+        }
+
+        const lastUserMsg = [...(fallbackMessages || [])].reverse().find((m: any) => m.role === "user");
+        const lastUserText = normalizeUserRequest(extractText(lastUserMsg));
+        if (lastUserText && !isSyntheticControlRequest(lastUserText)) {
+            return lastUserText;
         }
         return "";
     };
@@ -324,9 +350,15 @@ export default function register(api: OpenClawPluginApi) {
 
         if (!lastUser && !lastAssistant) return;
 
-        const userText = extractText(lastUser);
+        const userText = lastUser ? extractCurrentPromptUserText(extractText(lastUser)) : "";
         const asstText = extractText(lastAssistant);
         const combined = `${userText}\n${asstText}`;
+
+        if (userText && !isSyntheticControlRequest(userText)) {
+            try {
+                syncLatestUserRequest(workspace, userText);
+            } catch (e) { }
+        }
 
         // Heuristics for auto-recording
         const shouldRecord = semanticSignalPatterns.some((pattern) => pattern.test(combined));
