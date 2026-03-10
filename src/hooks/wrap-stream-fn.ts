@@ -41,6 +41,13 @@ interface OverrideCandidate {
     prompt: string;
 }
 
+type AssociativeRecallKind = "decision" | "background";
+
+interface AssociativeRecallCandidate {
+    prompt: string;
+    kind: AssociativeRecallKind;
+}
+
 interface LiveInterruptContext {
     liveInterrupt?: (text: string, meta?: { reason?: string }) => Promise<boolean> | boolean;
 }
@@ -221,6 +228,34 @@ function buildUserOverridePrompt(
 const USER_OVERRIDE_CHECK_CHARS = 160;
 const USER_OVERRIDE_MAX_INTERRUPTS = 2;
 const DEFAULT_OVERRIDE_IDLE_LABEL = "Awaiting next user request";
+const DECISION_RECALL_PATTERNS = [
+    /\bdecid(?:e|ed|es|ing|ion)\b/i,
+    /\bprefer(?:ence|red|s)?\b/i,
+    /\bconstraint\b/i,
+    /\bpolicy\b/i,
+    /\brule\b/i,
+    /\bpriority\b/i,
+    /\bdefault\b/i,
+    /\badopt(?:ed|ing)?\b/i,
+    /\bdeprecat(?:e|ed|ing)\b/i,
+    /\bavoid\b/i,
+    /\bmust\b/i,
+    /\bshould\b/i,
+    /\bnever\b/i,
+    /\balways\b/i,
+    /决定/,
+    /偏好/,
+    /约束/,
+    /规则/,
+    /优先/,
+    /默认/,
+    /采用/,
+    /弃用/,
+    /避免/,
+    /不要/,
+    /必须/,
+    /应该/,
+];
 
 function maybeBuildUserOverridePrompt(
     workspace: string,
@@ -266,6 +301,121 @@ function maybeBuildUserOverridePrompt(
 
     return {
         prompt: buildUserOverridePrompt(baselineState, currentState),
+    };
+}
+
+function summarizeAssociativeRecallContent(content: string, maxChars = 720): string {
+    const lines = content
+        .replace(/<!--[\s\S]*?-->/g, " ")
+        .replace(/\r/g, "")
+        .split("\n")
+        .map((line) => line.replace(/^[-*]\s*/, "").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+
+    if (lines.length === 0) {
+        return "";
+    }
+
+    const collected: string[] = [];
+    let usedChars = 0;
+
+    for (const line of lines) {
+        const nextLine = line.slice(0, Math.max(0, maxChars - usedChars));
+        if (!nextLine) {
+            break;
+        }
+
+        const cost = nextLine.length + 3;
+        if (usedChars + cost > maxChars && collected.length > 0) {
+            break;
+        }
+
+        collected.push(`- ${nextLine}`);
+        usedChars += cost;
+
+        if (collected.length >= 6 || usedChars >= maxChars) {
+            break;
+        }
+    }
+
+    return collected.join("\n");
+}
+
+function classifyAssociativeRecall(filePath: string, content: string): AssociativeRecallKind {
+    const sample = `${filePath}\n${content.slice(0, 1400)}`;
+    return DECISION_RECALL_PATTERNS.some((pattern) => pattern.test(sample))
+        ? "decision"
+        : "background";
+}
+
+function buildAssociativeRecallPrompt(
+    workspace: string,
+    filePath: string,
+    memoryContent: string
+): AssociativeRecallCandidate | null {
+    const summarizedContent = summarizeAssociativeRecallContent(memoryContent);
+    if (!summarizedContent) {
+        return null;
+    }
+
+    const workingState = maybeRefreshWorkingState(workspace);
+    const kind = classifyAssociativeRecall(filePath, memoryContent);
+    const goal = workingState.project_goal || "(none)";
+    const activeTask = workingState.active_task || DEFAULT_OVERRIDE_IDLE_LABEL;
+    const latestUserRequest = workingState.last_user_request || "(missing)";
+
+    if (kind === "decision") {
+        return {
+            kind,
+            prompt: [
+                "",
+                "[MEMORY RECALL CANDIDATE]",
+                "Current goal remains unchanged.",
+                "Treat this as a possible prior decision or constraint, not as a new task.",
+                "Use it only if it directly constrains the active task or the latest user request.",
+                "Ignore it if it conflicts with the latest user request.",
+                "Do not change task priority or rewrite working memory because of this note alone.",
+                "",
+                "Current anchors:",
+                `- Goal: ${goal}`,
+                `- Active task: ${activeTask}`,
+                `- Latest user request: ${latestUserRequest}`,
+                `- Recall source: ${filePath}`,
+                `- Recall type: decision`,
+                "",
+                "Candidate recall:",
+                summarizedContent,
+                "",
+                "Continue the same answer. Only apply this recall if it is directly relevant.",
+                "",
+            ].join("\n"),
+        };
+    }
+
+    return {
+        kind,
+        prompt: [
+            "",
+            "[MEMORY RECALL CANDIDATE]",
+            "Current goal remains unchanged.",
+            "Treat this as optional background context only.",
+            "Use it only if it directly helps the active task or the latest user request.",
+            "Ignore it if it is weakly related or distracting.",
+            "Do not change task priority, spawn replanning, or rewrite working memory because of this note alone.",
+            "",
+            "Current anchors:",
+            `- Goal: ${goal}`,
+            `- Active task: ${activeTask}`,
+            `- Latest user request: ${latestUserRequest}`,
+            `- Recall source: ${filePath}`,
+            `- Recall type: background`,
+            "",
+            "Candidate recall:",
+            summarizedContent,
+            "",
+            "Continue the same answer and keep the current objective primary.",
+            "",
+        ].join("\n"),
     };
 }
 
@@ -409,12 +559,19 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                     const triggerFile = await scanner.processChunk(delta);
                     if (triggerFile) {
                         const memoryContent = scanner.getMemoryContent(triggerFile);
-                        const interruptPrompt = `\n\n[SUBCONSCIOUS RECALL TRIGGERED] Your recent thoughts strongly activated a latent memory regarding "${triggerFile}".\n\nMemory contents:\n${memoryContent}\n\nPlease immediately integrate this into your current thought process and continue.\n`;
+                        const recall = buildAssociativeRecallPrompt(
+                            workspace,
+                            triggerFile,
+                            memoryContent
+                        );
+                        if (!recall) {
+                            continue;
+                        }
 
                         const didInterrupt = await requestLiveInterrupt(
                             ctx,
-                            interruptPrompt,
-                            "memory-enhanced associative recall"
+                            recall.prompt,
+                            `memory-enhanced associative ${recall.kind} recall`
                         );
                         if (didInterrupt) {
                             return;
