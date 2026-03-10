@@ -55,6 +55,7 @@ export default function register(api: OpenClawPluginApi) {
             outputCheckpointMaxInterrupts?: number;
             outputCheckpointDriftThreshold?: number;
             outputCheckpointTailChars?: number;
+            enableV8GraphRecall?: boolean;
         }
         | undefined;
 

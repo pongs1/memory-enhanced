@@ -51,6 +51,11 @@
         "type": "number",
         "default": 1400,
         "description": "Recent output tail length retained for drift scoring"
+      },
+      "enableV8GraphRecall": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the experimental V8 graph-based recall path when .memory/graph/manifest.json exists"
       }
     }
   },

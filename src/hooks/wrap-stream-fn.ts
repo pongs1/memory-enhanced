@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import { AssociativeScanner } from "../stream/associative-scanner.js";
 import {
     hasMeaningfulTaskOverlap,
@@ -7,9 +8,14 @@ import {
     syncLatestUserRequest,
     type WorkingMemoryState,
 } from "../utils.js";
+import { graphPaths } from "../v8/paths.js";
+import { assembleRecallPrompts, loadRecallAssemblyContext } from "../v8/recall.js";
+import { V8GraphScanner } from "../v8/scanner.js";
+import type { V8ControlAnchors } from "../v8/types.js";
 
 // A global registry for active scanners per session
 const scanners = new Map<string, AssociativeScanner>();
+const v8Scanners = new Map<string, V8GraphScanner>();
 const outputWatchdogs = new Map<string, OutputWatchdogState>();
 
 interface OutputWatchdogState {
@@ -50,6 +56,43 @@ interface AssociativeRecallCandidate {
 
 interface LiveInterruptContext {
     liveInterrupt?: (text: string, meta?: { reason?: string }) => Promise<boolean> | boolean;
+}
+
+function isV8GraphRecallEnabled(pluginConfig: any, workspace: string): boolean {
+    if (!pluginConfig?.enableV8GraphRecall) {
+        return false;
+    }
+
+    return fs.existsSync(graphPaths(workspace).manifest);
+}
+
+function buildControlAnchors(workingState: WorkingMemoryState): V8ControlAnchors {
+    return {
+        goal: workingState.project_goal || "",
+        activeTask: workingState.active_task || "",
+        latestUserRequest: workingState.last_user_request || "",
+    };
+}
+
+function getLegacyScanner(sessionId: string, workspace: string): AssociativeScanner {
+    if (!scanners.has(sessionId)) {
+        scanners.set(sessionId, new AssociativeScanner(workspace));
+    }
+    return scanners.get(sessionId)!;
+}
+
+function getV8Scanner(sessionId: string, workspace: string): V8GraphScanner {
+    if (!v8Scanners.has(sessionId)) {
+        v8Scanners.set(sessionId, new V8GraphScanner(workspace));
+    }
+    return v8Scanners.get(sessionId)!;
+}
+
+function combineRecallPrompts(prompts: Array<{ prompt: string }>): string {
+    return prompts
+        .map((item) => item.prompt.trim())
+        .filter(Boolean)
+        .join("\n\n");
 }
 
 function getCheckpointConfig(pluginConfig: any): StreamCheckpointConfig {
@@ -582,19 +625,29 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
         const sid = ctx?.sessionId || "default";
         const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
         const checkpointConfig = getCheckpointConfig(pluginConfig);
-
-        // Ensure a scanner exists for this session
-        if (!scanners.has(sid)) {
-            scanners.set(sid, new AssociativeScanner(workspace));
-        }
-        const scanner = scanners.get(sid)!;
         const watchdog = getOutputWatchdog(sid);
+        const useV8GraphRecall = isV8GraphRecallEnabled(pluginConfig, workspace);
+        const legacyScanner = useV8GraphRecall ? null : getLegacyScanner(sid, workspace);
+        const v8Scanner = useV8GraphRecall ? getV8Scanner(sid, workspace) : null;
 
         const originalStreamFn = event.streamFn;
 
         // Return the wrapped stream function
         event.streamFn = async function* (model: any, context: any, options: any) {
             const baselineWorkingState = maybeRefreshWorkingState(workspace);
+            const currentAnchors = buildControlAnchors(baselineWorkingState);
+            if (useV8GraphRecall && v8Scanner) {
+                v8Scanner.preExcite(
+                    [
+                        baselineWorkingState.project_goal,
+                        baselineWorkingState.active_task,
+                        baselineWorkingState.last_user_request,
+                    ]
+                        .filter(Boolean)
+                        .join(" "),
+                    currentAnchors
+                );
+            }
             const stream = originalStreamFn(model, context, options);
 
             for await (const chunk of stream) {
@@ -636,28 +689,59 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                         warnMissingLiveInterrupt(sid, watchdog);
                     }
 
-                    const triggerFile = await scanner.processChunk(delta);
-                    if (triggerFile) {
-                        const memoryContent = scanner.getMemoryContent(triggerFile);
-                        const recall = buildAssociativeRecallPrompt(
-                            workspace,
-                            triggerFile,
-                            memoryContent
-                        );
-                        if (!recall) {
-                            continue;
-                        }
+                    if (useV8GraphRecall && v8Scanner) {
+                        const anchors = buildControlAnchors(maybeRefreshWorkingState(workspace));
+                        const v8Result = v8Scanner.processChunk(delta, anchors);
+                        if (v8Result.activatedBundles.length > 0) {
+                            const prompts = assembleRecallPrompts(
+                                {
+                                    workspace,
+                                    bundles: v8Result.activatedBundles,
+                                    goal: anchors.goal,
+                                    activeTask: anchors.activeTask,
+                                    latestUserRequest: anchors.latestUserRequest,
+                                },
+                                loadRecallAssemblyContext(workspace)
+                            );
 
-                        const didInterrupt = await requestLiveInterrupt(
-                            ctx,
-                            recall.prompt,
-                            `memory-enhanced associative ${recall.kind} recall`
-                        );
-                        if (didInterrupt) {
-                            return;
-                        }
+                            const combinedPrompt = combineRecallPrompts(prompts);
+                            if (combinedPrompt) {
+                                const didInterrupt = await requestLiveInterrupt(
+                                    ctx,
+                                    combinedPrompt,
+                                    "memory-enhanced v8 graph recall"
+                                );
+                                if (didInterrupt) {
+                                    return;
+                                }
 
-                        warnMissingLiveInterrupt(sid, watchdog);
+                                warnMissingLiveInterrupt(sid, watchdog);
+                            }
+                        }
+                    } else if (legacyScanner) {
+                        const triggerFile = await legacyScanner.processChunk(delta);
+                        if (triggerFile) {
+                            const memoryContent = legacyScanner.getMemoryContent(triggerFile);
+                            const recall = buildAssociativeRecallPrompt(
+                                workspace,
+                                triggerFile,
+                                memoryContent
+                            );
+                            if (!recall) {
+                                continue;
+                            }
+
+                            const didInterrupt = await requestLiveInterrupt(
+                                ctx,
+                                recall.prompt,
+                                `memory-enhanced associative ${recall.kind} recall`
+                            );
+                            if (didInterrupt) {
+                                return;
+                            }
+
+                            warnMissingLiveInterrupt(sid, watchdog);
+                        }
                     }
 
                     const checkpoint = maybeBuildCheckpointPrompt(
@@ -690,11 +774,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
     api.on("llm_input", async (event: any, ctx: any) => {
         const sid = ctx?.sessionId || "default";
         const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
-
-        if (!scanners.has(sid)) {
-            scanners.set(sid, new AssociativeScanner(workspace));
-        }
-        const scanner = scanners.get(sid)!;
+        const useV8GraphRecall = isV8GraphRecallEnabled(pluginConfig, workspace);
 
         // Extract the latest user message
         const messages = event.historyMessages || [];
@@ -710,13 +790,21 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
         }
 
         if (promptText) {
-            // Pre-excite the network with the user's stimulus!
-            await scanner.preExcite(promptText);
+            if (useV8GraphRecall) {
+                const workingState = maybeRefreshWorkingState(workspace);
+                const scanner = getV8Scanner(sid, workspace);
+                scanner.preExcite(promptText, buildControlAnchors(workingState));
+            } else {
+                const scanner = getLegacyScanner(sid, workspace);
+                await scanner.preExcite(promptText);
+            }
         }
     });
 
     api.on("agent_end", async (_event: any, ctx: any) => {
         const sid = ctx?.sessionId || "default";
         outputWatchdogs.delete(sid);
+        scanners.delete(sid);
+        v8Scanners.delete(sid);
     });
 }
