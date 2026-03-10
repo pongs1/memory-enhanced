@@ -173,6 +173,36 @@ export interface CompileEventOutput {
     edges: V8MemoryEdge[];
 }
 
+export interface CompileKnowledgeMdInput {
+    filePath: string;
+    workspace: string;
+}
+
+export interface CompileKnowledgeMdOutput {
+    bundles: V8MemoryBundle[];
+    nodes: V8MemoryNode[];
+    edges: V8MemoryEdge[];
+}
+
+export interface BuildGraphInput {
+    workspace: string;
+    includeEvents?: boolean;
+    includeKnowledgeMd?: boolean;
+    includeSkillMd?: boolean;
+    writeToDisk?: boolean;
+}
+
+export interface BuildGraphOutput {
+    manifest: V8GraphManifest;
+    bundles: V8MemoryBundle[];
+    nodes: V8MemoryNode[];
+    edges: V8MemoryEdge[];
+    triggerLexicon: V8TriggerLexicon;
+    dayIndex: V8DayIndex;
+    sourceIndex: V8SourceIndex;
+    hardCoreIndex: V8HardCoreIndex;
+}
+
 export interface V8ActivatedNode {
     nodeId: string;
     energy: number;

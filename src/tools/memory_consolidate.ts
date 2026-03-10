@@ -13,6 +13,7 @@ import {
     type MemoryEvent,
 } from "../utils.js";
 import { applyDecay, ageInDays } from "../decay.js";
+import { buildV8Graph } from "../v8/compiler.js";
 
 /** Parameter schema for memory_consolidate tool. */
 export const MemoryConsolidateParams = Type.Object({
@@ -50,6 +51,9 @@ interface ConsolidationReport {
     semanticCorpusEntries: number;
     associativeGraphNodes: number;
     associativeGraphEdges: number;
+    v8GraphBundles: number;
+    v8GraphNodes: number;
+    v8GraphEdges: number;
 }
 
 /**
@@ -103,6 +107,9 @@ export async function executeMemoryConsolidate(
         semanticCorpusEntries: 0,
         associativeGraphNodes: 0,
         associativeGraphEdges: 0,
+        v8GraphBundles: 0,
+        v8GraphNodes: 0,
+        v8GraphEdges: 0,
     };
 
     // --- 1. Collect event files based on scope ---
@@ -190,6 +197,17 @@ export async function executeMemoryConsolidate(
     if (!dryRun) {
         fs.writeFileSync(p.semanticCorpus, JSON.stringify(semanticCorpus, null, 2), "utf-8");
         fs.writeFileSync(p.associativeGraph, JSON.stringify({ nodes, edges }, null, 2), "utf-8");
+
+        const v8Graph = await buildV8Graph({
+            workspace,
+            includeEvents: true,
+            includeKnowledgeMd: true,
+            includeSkillMd: false,
+            writeToDisk: true,
+        });
+        report.v8GraphBundles = v8Graph.bundles.length;
+        report.v8GraphNodes = v8Graph.nodes.length;
+        report.v8GraphEdges = v8Graph.edges.length;
     }
 
     // --- Format report ---
@@ -203,6 +221,7 @@ export async function executeMemoryConsolidate(
         `  MEMORY_INDEX.md: ${report.memoryIndexChars} chars ${report.memoryIndexRegenerated ? "(regenerated)" : "(preview)"}`,
         `  Semantic Corpus: ${report.semanticCorpusEntries} events compiled for offline LLM annotation`,
         `  Associative Graph: ${report.associativeGraphNodes} fast nodes, ${report.associativeGraphEdges} structural edges`,
+        `  V8 Graph: ${report.v8GraphBundles} bundles, ${report.v8GraphNodes} nodes, ${report.v8GraphEdges} edges`,
     ];
 
     if (report.unconsolidated > 0) {
