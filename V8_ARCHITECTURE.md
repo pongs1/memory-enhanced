@@ -452,7 +452,108 @@ This means feedback should do one of three things:
 
 Do not blindly slash a whole workflow because one invocation failed under one condition.
 
-## 13. Sleep and Decay
+## 13. Cluster Hygiene and Rebuild
+
+High activation is not automatically a bug, and it is not automatically proof that a memory cluster should dominate context forever.
+
+V8 should distinguish:
+
+- `healthy memory cluster`
+  - repeatedly activated by real external cues
+  - high adoption rate
+  - low harm rate
+  - worth preserving, and eventually compressing into a more stable reusable structure
+- `pathological resonance cluster`
+  - stays active mostly by internal mutual excitation
+  - often injects too much, or carries hitchhiker nodes
+  - high hit count but poor real utility
+  - should enter rebuild, not just receive small weight decay
+
+### 13.1 Three stability zones
+
+The graph should evolve under three structural zones:
+
+- `stable core`
+  - long-validated structures
+  - may receive small score updates
+  - should not be structurally rewritten during normal build cycles
+- `plastic zone`
+  - ordinary active memory
+  - may grow, split, weaken, or gain new condition edges
+- `rebuild queue`
+  - cluster-level candidates for true restructuring
+  - triggered by resonance, hitchhiker survival, contradiction, or long-term distribution shift
+
+### 13.2 Cluster diagnosis signals
+
+Cluster diagnosis should examine at least:
+
+- adoption rate relative to hit count
+- harm rate relative to hit count
+- internal associative density
+- bundle purity
+- hitchhiker score
+- change in trigger distribution over time
+- ratio of external cue ignition to internal propagation sustain
+
+Not all of these are fully implemented yet.
+But the architecture should reserve them as first-class diagnosis signals.
+
+### 13.3 Hitchhiker nodes
+
+A node may survive inside a strong cluster even if it contributes little.
+
+Examples:
+
+- it rarely receives direct external ignition
+- it is almost never part of the adopted part of the recall
+- it survives because one or two neighboring nodes keep the cluster hot
+
+These are not necessarily false memories.
+But they should not inherit stability just by coexisting with a useful cluster.
+
+### 13.4 Rebuild versus build
+
+`build` means:
+
+- compile events and md into bundles
+- refresh indexes
+- preserve stable learned statistics
+- avoid unnecessary structural edits to validated memory
+
+`rebuild` means:
+
+- isolate a suspicious cluster
+- restore the local scene, evidence, and recent conflicts
+- ask an offline LLM to split, merge, re-role, or reconnect nodes
+- preserve stable core members
+- emit a new cluster draft instead of mutating the whole graph blindly
+
+So rebuild is a cognitive restructuring pass, not just a file rewrite.
+
+### 13.5 Stable core protection
+
+Stable memory structures should be harder to rewrite than ordinary memory.
+
+Default rule:
+
+- normal build may preserve scores and lightweight counters
+- feedback may adjust edge strength locally
+- true structural rebuild should skip or explicitly preserve stable core nodes unless the user or a stronger contradiction overrides them
+
+### 13.6 Cluster compilation after success
+
+If a memory cluster is repeatedly useful, the right answer is not always "keep injecting the whole cluster".
+
+Often the correct next step is:
+
+- preserve the fine-grained nodes in storage
+- compile a cleaner higher-level summary or macro-structure for delivery
+- keep the raw internal cluster for later reasoning and repair
+
+This prevents useful clusters from becoming context spam.
+
+## 14. Sleep and Decay
 
 Sleep should stay in the system.
 It should not be replaced by graph-only updates.
@@ -491,7 +592,7 @@ A memory should enter the update queue when multiple signals align, for example:
 
 This should create a review candidate, not immediate deletion.
 
-## 14. Offline Consolidation
+## 15. Offline Consolidation
 
 Offline LLM consolidation should write structured output that is easy to sanitize and compile.
 
@@ -517,7 +618,15 @@ Preferred storage target:
 
 The compiler, not the LLM, should own final acceptance.
 
-## 15. Benchmark Plan
+Offline consolidation should eventually include a dedicated rebuild job:
+
+1. diagnose suspicious clusters
+2. gather the cluster's source bundles, encoding context, recent feedback, and conflicting evidence
+3. ask the LLM to rebuild only that local structure
+4. preserve stable-core members and explicit supersession links
+5. stage the rebuilt cluster for review before cutover
+
+## 16. Benchmark Plan
 
 First benchmark target:
 
@@ -553,7 +662,7 @@ Reference benchmark source:
 - Qasper (NAACL 2021)  
   https://aclanthology.org/2021.naacl-main.365/
 
-## 16. Gap Between Current Code and Target V8
+## 17. Gap Between Current Code and Target V8
 
 Current repo status:
 
@@ -563,10 +672,11 @@ Current repo status:
 - the current scanner is still whitespace-biased and therefore not ready for Chinese-heavy streams
 - offline compilation into multi-node bundles does not exist yet
 - hardening into agent identity / inter-agent protocol cores does not exist yet
+- cluster diagnosis and true rebuild of resonance groups does not exist yet
 
 This means the current code is V8-inspired, not the final V8 architecture.
 
-## 17. Proposed Implementation Order
+## 18. Proposed Implementation Order
 
 1. replace the current scanner's whitespace windowing with char- and boundary-aware windows
 2. define the JSONL graph schema and migration path from the single-file graph
@@ -574,9 +684,10 @@ This means the current code is V8-inspired, not the final V8 architecture.
 4. split scalar edge weight into multi-factor edge scores
 5. add staleness suspicion queue and offline review pipeline
 6. add hardening logic for identity and inter-agent protocol cores
-7. build the first no-context long-document benchmark
+7. add cluster diagnosis, rebuild queue, and stable-core protection
+8. build the first no-context long-document benchmark
 
-## 18. Open Questions
+## 19. Open Questions
 
 - what is the best adaptive node-bundle rule for different memory lengths and structures?
 - should procedural memories be compiled from MD only, or may high-confidence events become procedural nodes directly?
@@ -584,5 +695,6 @@ This means the current code is V8-inspired, not the final V8 architecture.
 - how should the episodic date window expand or contract under different workloads?
 - how much reverse propagation is useful before it becomes noise in practice?
 - when should a memory become "hard core" versus merely "high confidence"?
+- which cluster diagnosis signals are robust enough for automatic rebuild, and which still require human or LLM review?
 
 These are the key design questions still open.

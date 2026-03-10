@@ -37,6 +37,11 @@ export type V8HardCoreGroup =
     | "agent_identity_core"
     | "inter_agent_protocol_core";
 
+export type V8StabilityZone =
+    | "stable_core"
+    | "plastic_zone"
+    | "rebuild_queue";
+
 export interface V8GraphManifest {
     schemaVersion: number;
     compilerVersion: string;
@@ -158,13 +163,16 @@ export type V8HardCoreIndex = Record<V8HardCoreGroup, string[]>;
 
 export interface V8UpdateQueueItem {
     id: string;
-    targetType: "node" | "edge" | "bundle";
+    targetType: "node" | "edge" | "bundle" | "cluster";
     targetId: string;
     reason:
         | "staleness_suspected"
         | "contradicted"
         | "high_harm"
-        | "distribution_shift";
+        | "distribution_shift"
+        | "cluster_resonance"
+        | "hitchhiker"
+        | "needs_rebuild";
     evidence: string[];
     createdAt: string;
     status: "pending" | "reviewed" | "resolved";
@@ -308,6 +316,28 @@ export interface V8FeedbackUpdate {
     nodeUpdates: Partial<V8MemoryNode>[];
     edgeUpdates: Partial<V8MemoryEdge>[];
     queueItems: V8UpdateQueueItem[];
+}
+
+export interface V8ClusterDiagnosis {
+    clusterId: string;
+    nodeIds: string[];
+    bundleIds: string[];
+    zone: V8StabilityZone;
+    avgHitCount: number;
+    avgAdoptRate: number;
+    avgHarmRate: number;
+    internalAssociativeDensity: number;
+    hitchhikerNodeIds: string[];
+    reasons: string[];
+}
+
+export interface V8ClusterRebuildDraft {
+    clusterId: string;
+    preservedNodeIds: string[];
+    droppedNodeIds: string[];
+    rebuiltNodes: V8AnnotationNodeDraft[];
+    rebuiltEdges: V8AnnotationEdgeDraft[];
+    rationale: string[];
 }
 
 export interface V8HardeningConfig {

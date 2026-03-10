@@ -561,7 +561,54 @@ export function applyRecallFeedback(
 - `superseded` should often emit queue items or supersession edges
 - `harmful` is the strongest penalty path
 
-## 14. Hardening Contracts
+## 14. Cluster Diagnosis and Rebuild Contracts
+
+```ts
+export type V8StabilityZone =
+  | "stable_core"
+  | "plastic_zone"
+  | "rebuild_queue";
+
+export interface V8ClusterDiagnosis {
+  clusterId: string;
+  nodeIds: string[];
+  bundleIds: string[];
+  zone: V8StabilityZone;
+  avgHitCount: number;
+  avgAdoptRate: number;
+  avgHarmRate: number;
+  internalAssociativeDensity: number;
+  hitchhikerNodeIds: string[];
+  reasons: string[];
+}
+
+export interface V8ClusterRebuildDraft {
+  clusterId: string;
+  preservedNodeIds: string[];
+  droppedNodeIds: string[];
+  rebuiltNodes: V8AnnotationNodeDraft[];
+  rebuiltEdges: V8AnnotationEdgeDraft[];
+  rationale: string[];
+}
+
+export function diagnoseAssociativeClusters(graph: {
+  nodes: V8MemoryNode[];
+  edges: V8MemoryEdge[];
+}): V8ClusterDiagnosis[];
+
+export function selectRebuildCandidates(
+  diagnoses: V8ClusterDiagnosis[]
+): V8ClusterDiagnosis[];
+```
+
+### Rules
+
+- stable core clusters should not be structurally rebuilt during ordinary build cycles
+- rebuild should operate on local clusters, not the whole graph
+- high hit count alone is not sufficient evidence that a cluster is healthy
+- hitchhiker nodes should not inherit durability from nearby strong nodes
+
+## 15. Hardening Contracts
 
 ```ts
 export interface V8HardeningConfig {
@@ -583,7 +630,7 @@ export function evaluateHardeningCandidates(
 ): V8HardeningDecision[];
 ```
 
-## 15. Migration Phases
+## 16. Migration Phases
 
 Migration should be staged, not atomic.
 
@@ -647,13 +694,20 @@ At this phase, event nodes should exist even if online scanner still uses legacy
   - normalize `aliases`
 - keep legacy graph output during compatibility window if needed
 
-### Phase 9: Cutover
+### Phase 9: Cluster diagnosis and rebuild
+
+- add cluster diagnosis over associative subgraphs
+- materialize rebuild candidates in `update_queue.jsonl`
+- protect stable core structures from ordinary rebuild
+- stage local cluster rebuild drafts before cutover
+
+### Phase 10: Cutover
 
 - default to new graph
 - retain one release worth of fallback read support
 - then remove legacy graph writer
 
-## 16. Compatibility Rules
+## 17. Compatibility Rules
 
 During migration:
 
@@ -665,7 +719,7 @@ Recommended rule:
 
 - legacy graph remains read-only once the new compiler is stable
 
-## 17. Acceptance Criteria Before Coding the Scanner Rewrite
+## 18. Acceptance Criteria Before Coding the Scanner Rewrite
 
 These should be true first:
 
@@ -677,7 +731,7 @@ These should be true first:
 
 Only then should the online scanner switch to the new graph by default.
 
-## 18. Immediate Next Coding Entry Points
+## 19. Immediate Next Coding Entry Points
 
 When coding starts, recommended first files:
 

@@ -14,6 +14,7 @@ It defines:
 - the compilation pipeline from `event` and `md` into graph bundles
 - the online scanner and recall assembly flow
 - the feedback, sleep, and hardening pipeline
+- cluster diagnosis and true local rebuild
 - a migration path from the current prototype
 
 This is still a design document, not a claim that the current code already implements it.
@@ -72,7 +73,7 @@ Proposed graph directory:
 - `offline_annotation_drafts.jsonl`
   - staged sleep-phase outputs preserved for review before any future merge into the main graph
 - `update_queue.jsonl`
-  - staleness suspicion, contradiction, or review candidates
+  - staleness suspicion, contradiction, resonance, or rebuild candidates
 - `trigger_lexicon.json`
   - compact lexical trigger index for online use
 - `day_index.json`
@@ -596,7 +597,7 @@ Example item:
   "id": "mq_20260310_004",
   "target_type": "node|edge|bundle",
   "target_id": "mb_20260310_001",
-  "reason": "staleness_suspected|contradicted|high_harm|distribution_shift",
+  "reason": "staleness_suspected|contradicted|high_harm|distribution_shift|cluster_resonance|hitchhiker|needs_rebuild",
   "evidence": [
     "recalled 5 times in 2 days",
     "adopted once",
@@ -617,7 +618,80 @@ Recommended queue trigger when multiple signals co-occur:
 - newer evidence repeatedly conflicts with it
 - nearby bundles capture most of its former activations
 
-## 13. Sleep Pipeline
+### Resonance and rebuild signals
+
+Recommended additional queue triggers:
+
+- a cluster stays active mainly by internal mutual excitation
+- a cluster has high hit count but poor adoption rate
+- high-energy clusters repeatedly inject irrelevant hitchhiker nodes
+- a useful cluster appears too large and should be split into cleaner reusable parts
+
+These should not be solved by blind deletion.
+They should enter a true rebuild path.
+
+## 13. Cluster Diagnosis and Rebuild
+
+V8 should support diagnosis of associative clusters before rebuild.
+
+### 13.1 Three stability zones
+
+- `stable_core`
+  - validated long-term structures
+  - allow only score updates by default
+- `plastic_zone`
+  - normal evolving memory
+  - may gain or lose edges and conditions
+- `rebuild_queue`
+  - suspicious or overgrown clusters that need LLM-assisted restructuring
+
+### 13.2 Diagnosis metrics
+
+Recommended metrics:
+
+- average hit count
+- average adopt rate
+- average harm rate
+- internal associative density
+- external-trigger ratio
+- hitchhiker score
+- cluster purity
+
+Some of these can be approximated early and refined later.
+
+### 13.3 Rebuild input
+
+A rebuild job should gather:
+
+- bundle ids and node ids in the target cluster
+- recent feedback outcomes
+- relevant source refs
+- compact encoding context
+- conflicting or superseding evidence
+- stable core members that must be preserved
+
+### 13.4 Rebuild output
+
+The LLM rebuild job should not edit the whole graph.
+
+It should emit a local cluster draft that can:
+
+- preserve some existing nodes
+- split or drop hitchhiker nodes
+- rewrite relation types and initial weights
+- create new `valid_when`, `invalid_when`, or `supersedes` edges
+- leave stable core members untouched unless explicitly overridden
+
+### 13.5 Important rule
+
+If a cluster is repeatedly useful, prefer:
+
+- keeping the internal structure in storage
+- compiling a smaller reusable summary for insertion
+
+Do not inject the whole cluster just because it is important.
+
+## 14. Sleep Pipeline
 
 Sleep should keep three jobs separate:
 
@@ -636,8 +710,19 @@ Sleep should keep three jobs separate:
 - refresh indexes
 - recompute or revise edge scores
 - materialize new `supersedes` and condition edges
+- diagnose suspicious clusters and enqueue rebuild jobs when needed
 
-### 13.3 Hardening
+### 14.3 Cluster rebuild
+
+Sleep-phase rebuild should:
+
+1. select cluster candidates from the update queue
+2. reconstruct the local scene and evidence
+3. run local LLM rebuild only for that cluster
+4. stage the rebuilt cluster draft
+5. preserve stable-core members by default
+
+### 14.4 Hardening
 
 Promote some memories into durable cores.
 
@@ -669,7 +754,7 @@ Minimum conditions:
 - stable across multiple sessions
 - consistent with declared agent identity or protocol role
 
-## 14. Configuration Surface
+## 15. Configuration Surface
 
 V8 should expose scanner and graph config explicitly.
 
@@ -729,7 +814,7 @@ Recommended config groups:
 }
 ```
 
-## 15. Migration from Current Prototype
+## 16. Migration from Current Prototype
 
 Current prototype:
 
@@ -760,7 +845,7 @@ Migration path:
 
 This is only a bootstrap heuristic.
 
-## 16. Implementation Order
+## 17. Implementation Order
 
 Recommended coding order:
 
@@ -771,10 +856,11 @@ Recommended coding order:
 5. rewrite scanner to char-based windows and bundle scoring
 6. implement cooldown, top-k, and second-wave recall
 7. implement feedback logging and update queue
-8. move sleep/consolidate to incremental graph updates
-9. add hard-core promotion
+8. add cluster diagnosis and rebuild queue
+9. move sleep/consolidate to incremental graph updates
+10. add hard-core promotion
 
-## 17. Benchmark Mapping
+## 18. Benchmark Mapping
 
 First benchmark should measure:
 
