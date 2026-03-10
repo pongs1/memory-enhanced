@@ -114,7 +114,8 @@ Not every memory needs all roles. Most should compile to a sparse subset.
 
 ### Why `3-6` nodes
 
-This is an engineering prior, not a theorem.
+This is a default prior, not a theorem.
+The final bundle size should depend on memory length and structural complexity.
 
 The justification is:
 
@@ -136,6 +137,15 @@ Inference:
 - local recall should target short spans first
 - memory compilation should preserve local substructure
 - stale conditions should be isolated to specific nodes or edges instead of collapsing the whole memory
+
+Practical rule:
+
+- short, structurally simple memories may compile to `2-3` nodes
+- medium memories should usually compile to `3-6` nodes
+- long or highly structured memories may compile to more nodes if the split preserves clear local roles
+
+So the real design target is not a fixed count.
+It is adaptive node bundling with a sparse upper bound.
 
 ## 5. Trigger Windows
 
@@ -209,6 +219,26 @@ Why MD still matters:
 - the graph is optimized for fast computation
 - the MD files remain optimized for human review, audit, and handoff
 - recalled node bundles should resolve back to the relevant MD source when constructing the injected recall block
+
+## 6.1 Event Graph Window
+
+Events should be compiled into graph nodes by default.
+
+Reason:
+
+- event memory has already been filtered once compared with the raw log
+- many useful recalls start from concrete discoveries, failures, restart points, and recent project turns
+- keeping events out of the graph would weaken the "A + B -> sudden recall" behavior
+
+But episodic activation should stay local.
+
+Proposed rule:
+
+- maintain a rolling episodic subgraph over a bounded date window
+- if the current task and stream cues do not activate a day or episode cluster, that day's event nodes stay silent
+- semantic/procedural nodes remain globally available, while episodic nodes are selectively activated
+
+This keeps the event graph small enough for fast online use without throwing away recent concrete memory.
 
 ## 7. Node Schema
 
@@ -307,12 +337,24 @@ To prevent activation storms:
 
 - top-k propagation per node
 - hub penalty
-- refractory period after a node fires
+- cooldown / refractory period for recently fired nodes
 - typed edge multipliers
 - bounded reverse propagation
 
+### Recall selection policy
+
+When multiple memories cross threshold:
+
+- first emit only the top few highest-energy candidates
+- if lower-ranked candidates remain high across later checkpoints, they may be injected afterward
+- do not dump every threshold-crossing memory at once
+
+This preserves the possibility of delayed "second-wave" recall without overwhelming the model.
+
 Reverse propagation is useful, but it is not backpropagation in the gradient-descent sense.
 It is local credit / blame propagation used for "multi-clue convergence" and retrospective association.
+
+Its exact strength should remain configurable and be tuned by smoke tests rather than fixed by theory alone.
 
 ## 10. Recall Output Strategy
 
@@ -413,6 +455,9 @@ But decay should not be uniform.
 - `episodic graph edges`
   - medium decay
   - goal: reduce stale local situation bindings
+- `episodic node availability`
+  - bounded by rolling date window and activation silence rules
+  - old event nodes do not need to fire unless the current stream reactivates that episode cluster
 - `semantic/procedural graph core`
   - no blind global half-life
   - instead update by:
@@ -514,10 +559,11 @@ This means the current code is V8-inspired, not the final V8 architecture.
 
 ## 18. Open Questions
 
-- what is the best default node-bundle size for code-heavy tasks versus document-heavy tasks?
+- what is the best adaptive node-bundle rule for different memory lengths and structures?
 - should procedural memories be compiled from MD only, or may high-confidence events become procedural nodes directly?
 - should episodic nodes ever be directly injected, or only after graph-mediated summarization?
-- how much reverse propagation is useful before it becomes noise?
+- how should the episodic date window expand or contract under different workloads?
+- how much reverse propagation is useful before it becomes noise in practice?
 - when should a memory become "hard core" versus merely "high confidence"?
 
 These are the key design questions still open.
