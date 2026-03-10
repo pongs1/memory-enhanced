@@ -283,6 +283,63 @@ function applyOfflineAnnotationDrafts(
     };
 }
 
+function mergePersistedGraphMetrics(
+    workspace: string,
+    nodes: V8MemoryNode[],
+    edges: V8MemoryEdge[]
+): { nodes: V8MemoryNode[]; edges: V8MemoryEdge[] } {
+    const gp = graphPaths(workspace);
+    const persistedNodes = [
+        ...readJsonlRecords<V8MemoryNode>(gp.nodesEpisodic),
+        ...readJsonlRecords<V8MemoryNode>(gp.nodesSemantic),
+        ...readJsonlRecords<V8MemoryNode>(gp.nodesProcedural),
+    ];
+    const persistedEdges = [
+        ...readJsonlRecords<V8MemoryEdge>(gp.edgesAssociative),
+        ...readJsonlRecords<V8MemoryEdge>(gp.edgesStructural),
+        ...readJsonlRecords<V8MemoryEdge>(gp.edgesSupersession),
+    ];
+
+    const nodeMap = new Map(persistedNodes.map((node) => [node.id, node]));
+    const edgeMap = new Map(persistedEdges.map((edge) => [edge.id, edge]));
+
+    return {
+        nodes: nodes.map((node) => {
+            const persisted = nodeMap.get(node.id);
+            if (!persisted) return node;
+            return {
+                ...node,
+                confidence: persisted.confidence,
+                importance: persisted.importance,
+                hitCount: persisted.hitCount,
+                adoptCount: persisted.adoptCount,
+                rejectCount: persisted.rejectCount,
+                harmCount: persisted.harmCount,
+                lastUsedAt: persisted.lastUsedAt,
+                lastVerifiedAt: persisted.lastVerifiedAt,
+            };
+        }),
+        edges: edges.map((edge) => {
+            const persisted = edgeMap.get(edge.id);
+            if (!persisted) return edge;
+            return {
+                ...edge,
+                assocStrength: persisted.assocStrength,
+                utility: persisted.utility,
+                trust: persisted.trust,
+                freshness: persisted.freshness,
+                contextFit: persisted.contextFit,
+                evidenceCount: persisted.evidenceCount,
+                activationCount: persisted.activationCount,
+                adoptCount: persisted.adoptCount,
+                rejectCount: persisted.rejectCount,
+                lastUpdatedAt: persisted.lastUpdatedAt,
+                lastVerifiedAt: persisted.lastVerifiedAt,
+            };
+        }),
+    };
+}
+
 function buildEdgeKey(src: string, dst: string, type: string): string {
     return `${src}->${dst}:${type}`;
 }
@@ -686,14 +743,19 @@ export async function buildV8Graph(
     }
 
     const withAnnotations = applyOfflineAnnotationDrafts(workspace, bundles, nodes, edges);
+    const withPersistedMetrics = mergePersistedGraphMetrics(
+        workspace,
+        withAnnotations.nodes,
+        withAnnotations.edges
+    );
     const withExploration = applyExplorationPerturbation(
         withAnnotations.bundles,
-        withAnnotations.nodes,
-        withAnnotations.edges,
+        withPersistedMetrics.nodes,
+        withPersistedMetrics.edges,
         exploration
     );
     const finalBundles = dedupeBundles(withAnnotations.bundles);
-    const finalNodes = dedupeNodes(withAnnotations.nodes);
+    const finalNodes = dedupeNodes(withPersistedMetrics.nodes);
     const finalEdges = dedupeEdges(withExploration.edges);
     const triggerLexicon = buildTriggerLexicon(finalNodes);
     const dayIndex = buildDayIndex(finalNodes);

@@ -181,6 +181,8 @@ function buildPrompt(
 
     if (tier === "critical") {
         return {
+            bundleId: bundle.bundleId,
+            nodeIds: nodes.map((node) => node.id),
             tier,
             sourceRefs,
             prompt: [
@@ -210,6 +212,8 @@ function buildPrompt(
 
     if (tier === "decision") {
         return {
+            bundleId: bundle.bundleId,
+            nodeIds: nodes.map((node) => node.id),
             tier,
             sourceRefs,
             prompt: [
@@ -229,6 +233,8 @@ function buildPrompt(
     }
 
     return {
+        bundleId: bundle.bundleId,
+        nodeIds: nodes.map((node) => node.id),
         tier,
         sourceRefs,
         prompt: [

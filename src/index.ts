@@ -1,11 +1,12 @@
 /**
  * memory-enhanced — OpenClaw plugin entry point.
  *
- * Registers 4 agent tools:
+ * Registers 5 agent tools:
  *   - memory_record:      Write structured events (dual-format JSONL + MD)
  *   - memory_explore:     Traverse association chains
  *   - memory_consolidate: Decay, archive, MEMORY_INDEX.md regeneration
  *   - memory_working:     Passive working-memory ledger & scratchpad
+ *   - memory_feedback:    Score recalled V8 bundles after use
  *
  * These complement (not replace) the built-in memory_search and memory_get tools.
  */
@@ -26,6 +27,10 @@ import {
     executeMemoryWorking,
     MemoryWorkingParams,
 } from "./tools/memory_working.js";
+import {
+    executeMemoryFeedback,
+    MemoryFeedbackParams,
+} from "./tools/memory_feedback.js";
 
 import {
     isSyntheticControlRequest,
@@ -223,6 +228,18 @@ export default function register(api: OpenClawPluginApi) {
             "Use 'scratchpad_append' for rough notes and 'scratchpad_refill' to recover parked tasks.",
         parameters: MemoryWorkingParams,
         execute: toolExecute(executeMemoryWorking),
+    });
+
+    // --- memory_feedback ---
+    api.registerTool({
+        name: "memory_feedback",
+        label: "Memory Feedback",
+        description:
+            "Score recently recalled V8 graph memory bundles after execution. " +
+            "Use this when a recalled memory proved useful, stale, wrong, superseded, or harmful. " +
+            "By default it targets the latest V8 recalls from this session; you can also pass explicit bundle IDs.",
+        parameters: MemoryFeedbackParams,
+        execute: toolExecute(executeMemoryFeedback),
     });
 
     // --- HOOKS ---

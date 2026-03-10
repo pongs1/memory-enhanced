@@ -289,6 +289,8 @@ export interface AssembleRecallInput {
 }
 
 export interface AssembleRecallOutput {
+    bundleId: string;
+    nodeIds: string[];
     tier: V8DeliveryTier;
     prompt: string;
     sourceRefs: string[];

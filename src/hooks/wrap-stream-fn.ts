@@ -1,6 +1,10 @@
 import * as fs from "node:fs";
 import { AssociativeScanner } from "../stream/associative-scanner.js";
 import {
+    clearPendingSessionRecalls,
+    registerDeliveredRecalls,
+} from "../v8/feedback.js";
+import {
     hasMeaningfulTaskOverlap,
     isIdleTask,
     summarizeUserRequestForTask,
@@ -814,6 +818,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                                     "memory-enhanced v8 graph recall"
                                 );
                                 if (didInterrupt) {
+                                    registerDeliveredRecalls(workspace, sid, prompts);
                                     return;
                                 }
 
@@ -938,5 +943,6 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
         outputWatchdogs.delete(sid);
         scanners.delete(sid);
         v8Scanners.delete(sid);
+        clearPendingSessionRecalls(sid);
     });
 }
