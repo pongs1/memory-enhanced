@@ -163,7 +163,7 @@ function bundleTier(
 function scoreNodeSceneOverlap(node: V8MemoryNode, text: string): number {
     return overlapScore(
         text,
-        `${node.text} ${node.summary} ${node.keywords.join(" ")}`
+        `${node.names.zh} ${node.names.en} ${node.aliases.join(" ")} ${node.text} ${node.summary} ${node.keywords.join(" ")}`
     );
 }
 
@@ -397,7 +397,7 @@ export class V8GraphScanner {
             const gLex = lexicalHits.has(nodeId) ? 1 : 0;
             const gOverlap = scoreNodeSceneOverlap(node, normalizedText);
             const gCtrl = maxAnchorOverlap(
-                `${node.text} ${node.summary}`,
+                `${node.names.zh} ${node.names.en} ${node.aliases.join(" ")} ${node.text} ${node.summary}`,
                 anchors
             );
             const gTime =
@@ -449,7 +449,7 @@ export class V8GraphScanner {
             const lexicalScore = lexicalHits.has(nodeId) ? 1 : 0;
             const overlap = scoreNodeSceneOverlap(node, signal.text);
             const gCtrl = maxAnchorOverlap(
-                `${node.text} ${node.summary}`,
+                `${node.names.zh} ${node.names.en} ${node.aliases.join(" ")} ${node.text} ${node.summary}`,
                 anchors
             );
             const gTime =

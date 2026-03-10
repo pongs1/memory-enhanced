@@ -12,6 +12,7 @@ import type {
     V8MemoryNode,
     V8NodeRole,
 } from "./types.js";
+import { deriveBilingualNodeNames } from "./names.js";
 
 const WORKFLOW_PATTERNS = [
     /\bworkflow\b/i,
@@ -274,12 +275,20 @@ function buildNode(
         checkpoint: 0.78,
     };
     const normalizedText = sanitizeMemoryText(text, role === "evidence" ? 220 : 180);
+    const bilingual = deriveBilingualNodeNames(normalizedText, [
+        bundle.title,
+        event.content,
+        ...event.tags,
+        ...event.associations,
+    ]);
 
     return {
         id: createNodeId(event.id, role),
         bundleId: bundle.bundleId,
         kind: bundle.kind,
         role,
+        names: bilingual.names,
+        aliases: bilingual.aliases,
         text: normalizedText,
         summary: takeLeadingClause(normalizedText, 96) || normalizedText,
         keywords: extractKeywords(

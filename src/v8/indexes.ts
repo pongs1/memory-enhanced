@@ -27,6 +27,17 @@ export function buildTriggerLexicon(nodes: V8MemoryNode[]): V8TriggerLexicon {
             }
         }
 
+        for (const alias of [
+            node.names.zh,
+            node.names.en,
+            ...node.aliases,
+        ]) {
+            const normalized = normalizeTrigger(alias);
+            if (normalized.length >= 2) {
+                candidates.add(normalized);
+            }
+        }
+
         const summary = normalizeTrigger(node.summary);
         if (summary.length >= 2 && summary.length <= 80) {
             candidates.add(summary);

@@ -10,6 +10,7 @@ import type {
     V8NodeKind,
     V8NodeRole,
 } from "./types.js";
+import { deriveBilingualNodeNames } from "./names.js";
 
 interface MemoryNodeBlock {
     id: string;
@@ -18,6 +19,9 @@ interface MemoryNodeBlock {
     confidence: number;
     importance: number;
     sourceRefs: string[];
+    nameZh?: string;
+    nameEn?: string;
+    aliases: string[];
     text: string;
 }
 
@@ -207,6 +211,9 @@ function parseStructuredBlocks(content: string, fileBase: string): MemoryNodeBlo
             confidence: clamp01(Number(metadata.confidence) || 0.72),
             importance: clamp01(Number(metadata.importance) || 0.7),
             sourceRefs: parseSourceRefs(metadata.source_refs || metadata.sourceRefs || ""),
+            nameZh: sanitizeText(metadata.name_zh || metadata.nameZh || "", 72),
+            nameEn: sanitizeText(metadata.name_en || metadata.nameEn || "", 72),
+            aliases: parseSourceRefs(metadata.aliases || ""),
             text,
         });
     }
@@ -236,6 +243,7 @@ function parseFallbackSections(content: string, fileBase: string): MemoryNodeBlo
             confidence: 0.62,
             importance: 0.64,
             sourceRefs: [],
+            aliases: [],
             text: clean,
         });
         return blocks;
@@ -258,6 +266,7 @@ function parseFallbackSections(content: string, fileBase: string): MemoryNodeBlo
             confidence: 0.58,
             importance: 0.62,
             sourceRefs: [],
+            aliases: [],
             text,
         });
     }
@@ -271,11 +280,22 @@ function buildNode(
     dayKey: string | null
 ): V8MemoryNode {
     const text = sanitizeText(block.text, 220);
+    const bilingual = deriveBilingualNodeNames(
+        text,
+        [bundle.title, bundle.sourceRef, ...block.sourceRefs],
+        {
+            explicitZh: block.nameZh,
+            explicitEn: block.nameEn,
+            explicitAliases: block.aliases,
+        }
+    );
     return {
         id: `mn_${block.id}_${block.role}`,
         bundleId: bundle.bundleId,
         kind: bundle.kind,
         role: block.role,
+        names: bilingual.names,
+        aliases: bilingual.aliases,
         text,
         summary: takeLeadingClause(text, 96) || text,
         keywords: extractKeywords(text),

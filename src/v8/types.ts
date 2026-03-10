@@ -68,6 +68,11 @@ export interface V8MemoryNode {
     bundleId: string;
     kind: V8NodeKind;
     role: V8NodeRole;
+    names: {
+        zh: string;
+        en: string;
+    };
+    aliases: string[];
     text: string;
     summary: string;
     keywords: string[];
