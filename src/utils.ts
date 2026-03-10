@@ -130,6 +130,10 @@ const TASK_SHELL_PATTERNS = [
     /^收到$/,
     /^好的?$/,
 ];
+const SYNTHETIC_CONTROL_PATTERNS = [
+    /^Read HEARTBEAT\.md if it exists/i,
+    /^HEARTBEAT_OK$/i,
+];
 
 /** Standard workspace paths. */
 export function paths(workspace: string) {
@@ -298,6 +302,11 @@ export function normalizeUserRequest(value: string, maxChars = 240): string {
         .slice(0, maxChars);
 }
 
+export function isSyntheticControlRequest(value: string): boolean {
+    const normalized = normalizeUserRequest(value, Math.max(240, value.length || 0));
+    return SYNTHETIC_CONTROL_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 export function summarizeUserRequestForTask(value: string, maxChars = 120): string {
     let text = normalizeUserRequest(value, Math.max(maxChars * 2, 240));
 
@@ -413,7 +422,7 @@ export function shouldSwitchToLatestUserRequest(
     latestUserRequest: string
 ): boolean {
     const normalizedRequest = summarizeUserRequestForTask(latestUserRequest) || normalizeUserRequest(latestUserRequest);
-    if (!normalizedRequest || isContinuationRequest(normalizedRequest)) {
+    if (!normalizedRequest || isContinuationRequest(normalizedRequest) || isSyntheticControlRequest(normalizedRequest)) {
         return false;
     }
 
@@ -572,7 +581,7 @@ export function syncLatestUserRequest(
         summarizeUserRequestForTask(latestUserRequest) || normalizeUserRequest(latestUserRequest);
     const current = loadWorkingMemoryState(workspace);
 
-    if (!normalizedRequest) {
+    if (!normalizedRequest || isSyntheticControlRequest(normalizedRequest)) {
         return current;
     }
 

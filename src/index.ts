@@ -28,6 +28,7 @@ import {
 } from "./tools/memory_working.js";
 
 import {
+    isSyntheticControlRequest,
     isIdleTask,
     loadWorkingMemoryState,
     normalizeUserRequest,
@@ -122,7 +123,7 @@ export default function register(api: OpenClawPluginApi) {
 
         for (const candidate of candidates) {
             const normalized = normalizeUserRequest(stripInjectedMemoryContext(candidate));
-            if (normalized) {
+            if (normalized && !isSyntheticControlRequest(normalized)) {
                 return normalized;
             }
         }
