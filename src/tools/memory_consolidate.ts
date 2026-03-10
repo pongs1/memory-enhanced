@@ -231,6 +231,7 @@ export async function executeMemoryConsolidate(
             writeToDisk: true,
             exploration: {
                 enabled: pluginConfig?.enableV8ExplorationNoise ?? false,
+                mode: pluginConfig?.v8ExplorationMode,
                 newEdgeProbability: pluginConfig?.v8ExplorationNewEdgeProbability,
                 weightJitterProbability: pluginConfig?.v8ExplorationWeightJitterProbability,
                 weightJitterDelta: pluginConfig?.v8ExplorationWeightJitterDelta,
@@ -268,7 +269,7 @@ export async function executeMemoryConsolidate(
         `  Semantic Corpus: ${report.semanticCorpusEntries} events compiled for offline LLM annotation`,
         `  Associative Graph: ${report.associativeGraphNodes} fast nodes, ${report.associativeGraphEdges} structural edges`,
         `  V8 Graph: ${report.v8GraphBundles} bundles, ${report.v8GraphNodes} nodes, ${report.v8GraphEdges} edges`,
-        `  V8 Exploration Noise: +${report.explorationAddedEdges} weak edges, ${report.explorationJitteredEdges} jittered associative edges`,
+        `  V8 Exploration Noise: +${report.explorationAddedEdges} sparsity-biased weak edges, ${report.explorationJitteredEdges} jittered associative edges`,
         `  Offline Annotation Drafts: ${report.offlineAnnotatedBundles} new, ${report.offlineAnnotationSkipped} skipped${report.offlineAnnotationModel ? ` (${report.offlineAnnotationModel})` : " (no model configured)"}`,
     ];
 

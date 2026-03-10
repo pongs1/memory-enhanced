@@ -60,7 +60,13 @@
       "enableV8ExplorationNoise": {
         "type": "boolean",
         "default": false,
-        "description": "Enable very low-frequency exploration noise in the V8 graph: tiny associative edge jitter plus a few weak random associative links"
+        "description": "Enable very low-frequency exploration noise in the V8 graph: tiny associative edge jitter plus a few weak exploratory associative links"
+      },
+      "v8ExplorationMode": {
+        "type": "string",
+        "default": "global_random",
+        "enum": ["disabled", "global_random", "sparse_biased"],
+        "description": "Exploration mode for V8 graph noise: disabled, uniform global randomness, or sparsity-biased exploratory linking"
       },
       "v8ExplorationNewEdgeProbability": {
         "type": "number",

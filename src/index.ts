@@ -57,6 +57,7 @@ export default function register(api: OpenClawPluginApi) {
             outputCheckpointTailChars?: number;
             enableV8GraphRecall?: boolean;
             enableV8ExplorationNoise?: boolean;
+            v8ExplorationMode?: "disabled" | "global_random" | "sparse_biased";
             v8ExplorationNewEdgeProbability?: number;
             v8ExplorationWeightJitterProbability?: number;
             v8ExplorationWeightJitterDelta?: number;

@@ -25,6 +25,7 @@ import type {
 
 export const DEFAULT_V8_EXPLORATION_CONFIG: V8ExplorationConfig = {
     enabled: false,
+    mode: "global_random",
     newEdgeProbability: 0.004,
     weightJitterProbability: 0.015,
     weightJitterDelta: 0.03,
@@ -290,16 +291,85 @@ function randomBetween(min: number, max: number): number {
     return min + Math.random() * (max - min);
 }
 
+function buildUndirectedEdgeKey(src: string, dst: string, type: string): string {
+    return src < dst ? `${src}<->${dst}:${type}` : `${dst}<->${src}:${type}`;
+}
+
+function buildNodeDegreeMap(edges: V8MemoryEdge[]): Map<string, { total: number; associative: number }> {
+    const degreeMap = new Map<string, { total: number; associative: number }>();
+    const touch = (nodeId: string, edgeType: V8MemoryEdge["type"]) => {
+        const current = degreeMap.get(nodeId) || { total: 0, associative: 0 };
+        current.total += 1;
+        if (edgeType === "associative") {
+            current.associative += 1;
+        }
+        degreeMap.set(nodeId, current);
+    };
+
+    for (const edge of edges) {
+        touch(edge.src, edge.type);
+        touch(edge.dst, edge.type);
+    }
+
+    return degreeMap;
+}
+
+function nodeSparsityScore(
+    nodeId: string,
+    degreeMap: Map<string, { total: number; associative: number }>,
+    maxAssociativeDegree: number,
+    maxTotalDegree: number
+): number {
+    const degree = degreeMap.get(nodeId) || { total: 0, associative: 0 };
+    const assocDensity = maxAssociativeDegree > 0 ? degree.associative / maxAssociativeDegree : 0;
+    const totalDensity = maxTotalDegree > 0 ? degree.total / maxTotalDegree : 0;
+    const blendedDensity = assocDensity * 0.7 + totalDensity * 0.3;
+    return clamp01(1 - blendedDensity);
+}
+
+function pickNodeWeightedBySparsity(
+    candidates: V8MemoryNode[],
+    scores: Map<string, number>
+): V8MemoryNode | null {
+    if (candidates.length === 0) return null;
+    const weighted = candidates.map((node) => ({
+        node,
+        weight: Math.max(0.05, scores.get(node.id) ?? 0.5),
+    }));
+    const total = weighted.reduce((sum, item) => sum + item.weight, 0);
+    let cursor = Math.random() * total;
+    for (const item of weighted) {
+        cursor -= item.weight;
+        if (cursor <= 0) {
+            return item.node;
+        }
+    }
+    return weighted[weighted.length - 1]?.node || null;
+}
+
 function applyExplorationPerturbation(
     bundles: V8MemoryBundle[],
     nodes: V8MemoryNode[],
     edges: V8MemoryEdge[],
     config: V8ExplorationConfig
 ): { edges: V8MemoryEdge[]; stats: { addedEdges: number; jitteredEdges: number } } {
-    if (!config.enabled) {
+    if (!config.enabled || config.mode === "disabled") {
         return { edges, stats: { addedEdges: 0, jitteredEdges: 0 } };
     }
 
+    if (config.mode === "sparse_biased") {
+        return applySparseBiasedExplorationPerturbation(bundles, nodes, edges, config);
+    }
+
+    return applyGlobalExplorationPerturbation(bundles, nodes, edges, config);
+}
+
+function applyGlobalExplorationPerturbation(
+    bundles: V8MemoryBundle[],
+    nodes: V8MemoryNode[],
+    edges: V8MemoryEdge[],
+    config: V8ExplorationConfig
+): { edges: V8MemoryEdge[]; stats: { addedEdges: number; jitteredEdges: number } } {
     let jitteredEdges = 0;
     const nextEdges = edges.map((edge) => {
         if (edge.type !== "associative") {
@@ -320,7 +390,7 @@ function applyExplorationPerturbation(
         };
     });
 
-    const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+    const bundleById = new Map(bundles.map((bundle) => [bundle.bundleId, bundle]));
     const existingKeys = new Set(nextEdges.map((edge) => buildEdgeKey(edge.src, edge.dst, edge.type)));
     const eligibleNodes = nodes.filter((node) =>
         node.importance >= 0.55 &&
@@ -345,8 +415,8 @@ function applyExplorationPerturbation(
         const dst = eligibleNodes[Math.floor(Math.random() * eligibleNodes.length)];
         if (!src || !dst || src.id === dst.id) continue;
         if (src.bundleId === dst.bundleId) continue;
-        const srcBundle = bundles.find((bundle) => bundle.bundleId === src.bundleId);
-        const dstBundle = bundles.find((bundle) => bundle.bundleId === dst.bundleId);
+        const srcBundle = bundleById.get(src.bundleId);
+        const dstBundle = bundleById.get(dst.bundleId);
         if (srcBundle?.sourceRef === dstBundle?.sourceRef) continue;
 
         const key = buildEdgeKey(src.id, dst.id, "associative");
@@ -354,6 +424,136 @@ function applyExplorationPerturbation(
         existingKeys.add(key);
 
         const baseWeight = randomBetween(config.minNewEdgeWeight, config.maxNewEdgeWeight);
+        addedEdges.push({
+            id: `me_explore_${src.id}_${dst.id}_${attempt + 1}`,
+            type: "associative",
+            src: src.id,
+            dst: dst.id,
+            assocStrength: baseWeight,
+            utility: clamp01(baseWeight * 0.9),
+            trust: clamp01(baseWeight * 0.8),
+            freshness: 0.72,
+            contextFit: clamp01(baseWeight * 0.85),
+            evidenceCount: 1,
+            activationCount: 0,
+            adoptCount: 0,
+            rejectCount: 0,
+            lastUpdatedAt: nowISO(),
+            lastVerifiedAt: null,
+        });
+    }
+
+    return {
+        edges: [...nextEdges, ...addedEdges],
+        stats: {
+            addedEdges: addedEdges.length,
+            jitteredEdges,
+        },
+    };
+}
+
+function applySparseBiasedExplorationPerturbation(
+    bundles: V8MemoryBundle[],
+    nodes: V8MemoryNode[],
+    edges: V8MemoryEdge[],
+    config: V8ExplorationConfig
+): { edges: V8MemoryEdge[]; stats: { addedEdges: number; jitteredEdges: number } } {
+    const degreeMap = buildNodeDegreeMap(edges);
+    const maxAssociativeDegree = Math.max(
+        0,
+        ...[...degreeMap.values()].map((entry) => entry.associative)
+    );
+    const maxTotalDegree = Math.max(
+        0,
+        ...[...degreeMap.values()].map((entry) => entry.total)
+    );
+    const sparsityScores = new Map(
+        nodes.map((node) => [
+            node.id,
+            nodeSparsityScore(node.id, degreeMap, maxAssociativeDegree, maxTotalDegree),
+        ])
+    );
+    const bundleById = new Map(bundles.map((bundle) => [bundle.bundleId, bundle]));
+
+    let jitteredEdges = 0;
+    const nextEdges = edges.map((edge) => {
+        if (edge.type !== "associative") {
+            return edge;
+        }
+        const localSparsity = (
+            (sparsityScores.get(edge.src) ?? 0.5) +
+            (sparsityScores.get(edge.dst) ?? 0.5)
+        ) / 2;
+        const effectiveProbability = clamp01(
+            config.weightJitterProbability * (0.65 + localSparsity * 0.9)
+        );
+        if (Math.random() > effectiveProbability) {
+            return edge;
+        }
+
+        let delta: number;
+        if (localSparsity <= 0.3) {
+            delta = randomBetween(-config.weightJitterDelta, config.weightJitterDelta * 0.2);
+        } else if (localSparsity >= 0.7) {
+            delta = randomBetween(-config.weightJitterDelta * 0.25, config.weightJitterDelta);
+        } else {
+            delta = randomBetween(-config.weightJitterDelta * 0.6, config.weightJitterDelta * 0.6);
+        }
+        jitteredEdges += 1;
+        return {
+            ...edge,
+            assocStrength: clamp01(edge.assocStrength + delta),
+            utility: clamp01(edge.utility + delta * 0.8),
+            contextFit: clamp01(edge.contextFit + delta * 0.6),
+            lastUpdatedAt: nowISO(),
+        };
+    });
+
+    const existingKeys = new Set(
+        nextEdges
+            .filter((edge) => edge.type === "associative")
+            .map((edge) => buildUndirectedEdgeKey(edge.src, edge.dst, edge.type))
+    );
+    const eligibleNodes = nodes.filter((node) =>
+        node.importance >= 0.55 &&
+        node.confidence >= 0.55 &&
+        Boolean(node.text)
+    );
+    const addedEdges: V8MemoryEdge[] = [];
+    const maxAttempts = Math.max(config.maxNewEdges * 20, eligibleNodes.length * 2);
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (addedEdges.length >= config.maxNewEdges) {
+            break;
+        }
+        if (Math.random() > config.newEdgeProbability) {
+            continue;
+        }
+        if (eligibleNodes.length < 2) {
+            break;
+        }
+
+        const src = pickNodeWeightedBySparsity(eligibleNodes, sparsityScores);
+        const dst = pickNodeWeightedBySparsity(eligibleNodes, sparsityScores);
+        if (!src || !dst || src.id === dst.id) continue;
+        if (src.bundleId === dst.bundleId) continue;
+        const srcBundle = bundleById.get(src.bundleId);
+        const dstBundle = bundleById.get(dst.bundleId);
+        if (srcBundle?.sourceRef === dstBundle?.sourceRef) continue;
+        const pairSparsity = ((sparsityScores.get(src.id) ?? 0.5) + (sparsityScores.get(dst.id) ?? 0.5)) / 2;
+        if (pairSparsity < 0.28) continue;
+
+        const key = buildUndirectedEdgeKey(src.id, dst.id, "associative");
+        if (existingKeys.has(key)) continue;
+        existingKeys.add(key);
+
+        const sparseLift = 0.7 + pairSparsity * 0.6;
+        const minWeight = config.minNewEdgeWeight;
+        const maxWeight = Math.max(
+            minWeight,
+            config.minNewEdgeWeight + (config.maxNewEdgeWeight - config.minNewEdgeWeight) * sparseLift
+        );
+        const baseWeight = randomBetween(minWeight, maxWeight);
         addedEdges.push({
             id: `me_explore_${src.id}_${dst.id}_${attempt + 1}`,
             type: "associative",

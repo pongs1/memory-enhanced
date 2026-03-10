@@ -50,6 +50,7 @@ export interface V8GraphManifest {
 
 export interface V8ExplorationConfig {
     enabled: boolean;
+    mode: "disabled" | "global_random" | "sparse_biased";
     newEdgeProbability: number;
     weightJitterProbability: number;
     weightJitterDelta: number;
