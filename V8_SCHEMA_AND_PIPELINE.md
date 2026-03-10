@@ -3,6 +3,10 @@
 Status: draft  
 Depends on: [V8_ARCHITECTURE.md](./V8_ARCHITECTURE.md)
 
+Interface and migration companion:
+
+- [V8_TYPES_AND_MIGRATION.md](./V8_TYPES_AND_MIGRATION.md)
+
 This document turns the V8 architecture into an implementable design.
 It defines:
 

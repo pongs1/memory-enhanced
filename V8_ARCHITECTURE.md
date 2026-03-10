@@ -10,6 +10,7 @@ It is the architecture we want to converge toward before large-scale rewrites.
 The implementable companion spec is:
 
 - [V8_SCHEMA_AND_PIPELINE.md](./V8_SCHEMA_AND_PIPELINE.md)
+- [V8_TYPES_AND_MIGRATION.md](./V8_TYPES_AND_MIGRATION.md)
 
 ## 1. Design Goal
 
