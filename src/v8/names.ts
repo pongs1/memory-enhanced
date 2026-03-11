@@ -33,6 +33,16 @@ const WEAK_EN_NAMES = new Set([
     "event",
     "memory",
 ]);
+const NAME_NOISE_PATTERNS = [
+    /Memory Context/i,
+    /Task Ledger/i,
+    /Working Memory Rule/i,
+    /Session Resume/i,
+    /Priority Shift/i,
+    /latest message is authoritative/i,
+    /obey now first/i,
+    /read heartbeat/i,
+];
 
 function sanitizeText(text: string, maxChars = 120): string {
     return (text || "")
@@ -51,12 +61,41 @@ function takeLeadingClause(text: string, maxChars = 120): string {
 
 function extractZhCandidate(text: string): string {
     const clause = takeLeadingClause(text, 96);
-    const zhChunks = clause.match(/[\u4e00-\u9fff]{2,}/g) || [];
+    const normalizeChunk = (value: string) =>
+        sanitizeText(
+            value
+                .replace(/^(?:请|去|到|先|再|然后|继续|改为|改成|停止(?:刚才的?)?|算了|先别|先不要)/g, "")
+                .replace(/(?:并(?:详细)?总结.*|不要省略.*|只回复.*)$/g, "")
+                .trim(),
+            72
+        );
+    const scoreChunk = (value: string): number => {
+        const chunk = normalizeChunk(value);
+        if (!chunk || NAME_NOISE_PATTERNS.some((pattern) => pattern.test(chunk))) return -999;
+        let score = 0;
+        if (chunk.length >= 3 && chunk.length <= 12) score += 2.5;
+        else if (chunk.length <= 18) score += 1.2;
+        else score -= 1.8;
+        if (/(?:系统|项目|课程|讲|积分|字幕|部署|日志|路径|仓库|模型|图|工作流|任务|接口)/.test(chunk)) {
+            score += 2.2;
+        }
+        if (/^(?:去|到|请|先|再|然后|继续|不要|不能|停止|改为|改成|只回复)/.test(chunk)) {
+            score -= 1.8;
+        }
+        if (/[#|*:]/.test(chunk)) score -= 2;
+        return score;
+    };
+
+    const zhChunks = clause.match(/[\u4e00-\u9fff]{2,24}/g) || [];
     if (zhChunks.length === 0) {
         return "";
     }
 
-    return sanitizeText(zhChunks.join(" "), 72);
+    const best = [...zhChunks]
+        .map((chunk) => normalizeChunk(chunk))
+        .filter(Boolean)
+        .sort((a, b) => scoreChunk(b) - scoreChunk(a) || a.length - b.length)[0];
+    return best || "";
 }
 
 function extractEnCandidate(text: string): string {

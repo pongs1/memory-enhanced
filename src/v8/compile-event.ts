@@ -112,6 +112,13 @@ const PROMPT_NOISE_PATTERNS = [
     /Current time:/i,
     /HEARTBEAT_OK/i,
     /Read HEARTBEAT\.md if it exists/i,
+    /Priority Shift/i,
+    /Session Resume/i,
+    /latest message is authoritative for this turn/i,
+    /Obey NOW first/i,
+    /PREVIOUS ACTIVE -> backlog/i,
+    /Do not keep executing the previous active task/i,
+    /Follow it strictly\. Do not infer or repeat old tasks/i,
 ];
 const EN_STOP_WORDS = new Set([
     "the", "and", "for", "with", "from", "that", "this", "there", "here", "then", "than", "when", "where",
@@ -127,6 +134,64 @@ const GENERIC_ACTION_PHRASES = new Set([
     "总结", "继续", "回复", "只回复", "在线吗", "查找", "检索", "搜索", "分析", "处理", "测试", "排查", "重构",
     "summarize", "continue", "reply", "search", "find", "analyze", "process", "test", "debug", "refactor",
 ]);
+const INTENT_ACTION_PATTERNS = [
+    /查找/,
+    /寻找/,
+    /检索/,
+    /搜索/,
+    /找/,
+    /总结/,
+    /归纳/,
+    /部署/,
+    /修复/,
+    /回滚/,
+    /更新/,
+    /测试/,
+    /排查/,
+    /重构/,
+    /阅读/,
+    /提取/,
+    /分析/,
+    /上网/,
+    /网上/,
+    /\bsearch\b/i,
+    /\bfind\b/i,
+    /\bsummar(?:ize|y)\b/i,
+    /\bdeploy\b/i,
+    /\bfix\b/i,
+    /\bdebug\b/i,
+    /\brefactor\b/i,
+    /\bread\b/i,
+];
+const INTENT_DOMAIN_PATTERNS = [
+    /字幕/,
+    /积分/,
+    /仓库/,
+    /项目/,
+    /系统/,
+    /pdf/i,
+    /日志/,
+    /网关/,
+    /部署/,
+    /模型/,
+    /图/,
+    /记忆/,
+    /\brepo\b/i,
+    /\bpath\b/i,
+    /\berror\b/i,
+];
+const INTENT_NOISE_PATTERNS = [
+    /latest message is authoritative/i,
+    /obey now first/i,
+    /previous active/i,
+    /task ledger/i,
+    /session resume/i,
+    /working memory rule/i,
+    /read heartbeat/i,
+    /follow it strictly/i,
+    /do not infer or repeat old tasks/i,
+    /memory context/i,
+];
 
 function clamp01(value: number): number {
     return Math.max(0, Math.min(1, value));
@@ -188,28 +253,101 @@ function extractLedgerHints(rawText: string): string[] {
         raw.match(/(?:^|\n)\s*-\s*Last User Request\s*:\s*([^\n]+)/i)?.[1] || "",
         raw.match(/(?:^|\n)\s*-\s*Active\s*:\s*([^\n]+)/i)?.[1] || "",
         raw.match(/(?:^|\n)\s*-\s*Goal\s*:\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*NOW\s*:\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*Now\s*:\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*Immediate\s*:\s*([^\n]+)/i)?.[1] || "",
         raw.match(/(?:^|\n)\s*-\s*最新用户请求\s*[:：]\s*([^\n]+)/i)?.[1] || "",
         raw.match(/(?:^|\n)\s*-\s*活跃\s*[:：]\s*([^\n]+)/i)?.[1] || "",
         raw.match(/(?:^|\n)\s*-\s*目标\s*[:：]\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*现在\s*[:：]\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*当前\s*[:：]\s*([^\n]+)/i)?.[1] || "",
     ];
     return candidates
         .map((item) => sanitizeMemoryText(normalizeUserRequest(item, 260), 260))
         .filter(Boolean);
 }
 
+function extractExplicitUserTaskFromLedger(rawText: string): string {
+    const raw = rawText || "";
+    const prioritized = [
+        raw.match(/(?:^|\n)\s*-\s*NOW\s*:\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*Now\s*:\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*现在\s*[:：]\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*当前\s*[:：]\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*Last User Request\s*:\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*Latest User Request\s*:\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*最新用户请求\s*[:：]\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*Active\s*:\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*活跃\s*[:：]\s*([^\n]+)/i)?.[1] || "",
+    ]
+        .map((item) => sanitizeMemoryText(normalizeUserRequest(item, 280), 280))
+        .filter(Boolean);
+
+    const highSignal = prioritized.find((item) => {
+        if (isNoisyIntent(item)) return false;
+        if (INTENT_NOISE_PATTERNS.some((pattern) => pattern.test(item))) return false;
+        return /(?:查找|寻找|检索|搜索|找|总结|部署|修复|回滚|更新|测试|排查|重构|阅读|提取|分析|上网|网上|不要|不能|必须|search|find|summar)/i.test(item);
+    });
+    return highSignal || prioritized.find((item) => !isNoisyIntent(item)) || "";
+}
+
 function isNoisyIntent(value: string): boolean {
     const text = sanitizeMemoryText(value, 260).toLowerCase();
     if (!text) return true;
     if (PROMPT_NOISE_PATTERNS.some((pattern) => pattern.test(text))) return true;
-    if (/(read heartbeat|heartbeat_ok|session resume|task ledger|working memory|existing active task|workspace context|follow it strictly|do not infer|prior chat|old tasks)/i.test(text)) return true;
+    if (/(read heartbeat|heartbeat_ok|session resume|task ledger|working memory|existing active task|workspace context|follow it strictly|do not infer|prior chat|old tasks|latest message is authoritative|obey now first|previous active)/i.test(text)) return true;
     if (/^(在线吗|继续|ok|好的|收到)$/i.test(text)) return true;
     return false;
+}
+
+function scoreIntentCandidate(value: string): number {
+    const text = sanitizeMemoryText(normalizeUserRequest(value, 320), 320);
+    if (!text) return -999;
+    let score = 0;
+    const length = text.length;
+    if (length >= 8 && length <= 120) score += 1.2;
+    else if (length <= 180) score += 0.4;
+    else score -= 1.6;
+
+    const hasAction = INTENT_ACTION_PATTERNS.some((pattern) => pattern.test(text));
+    const hasConstraint = /(?:不要|不能|必须|must|must not|do not|never)/i.test(text);
+    if (hasAction) score += 1.8;
+    if (INTENT_DOMAIN_PATTERNS.some((pattern) => pattern.test(text))) score += 1.1;
+    if (PROMPT_NOISE_PATTERNS.some((pattern) => pattern.test(text))) score -= 4.2;
+    if (INTENT_NOISE_PATTERNS.some((pattern) => pattern.test(text))) score -= 4.2;
+    if (/^(read heartbeat|heartbeat_ok)$/i.test(text)) score -= 6;
+    if (!hasAction && !hasConstraint && length <= 16) score -= 0.9;
+
+    const structuralMarkers = (text.match(/(?:##|[-*]\s|:\s|\|)/g) || []).length;
+    score -= Math.min(2.8, structuralMarkers * 0.45);
+
+    if (/^(?:请|去|到|先|再|然后|改为|改成|停止|不要|不能)/.test(text)) {
+        score += 0.4;
+    }
+    return score;
 }
 
 function resolvePrimaryIntent(rawCandidates: string[]): string {
     const normalized = rawCandidates
         .map((item) => sanitizeMemoryText(normalizeUserRequest(item, 320), 320))
         .filter(Boolean);
+    if (normalized.length === 0) return "";
+
+    const scored = normalized
+        .map((text, index) => ({
+            text,
+            score: scoreIntentCandidate(text),
+            index,
+        }))
+        .sort((a, b) => {
+            if (a.score !== b.score) return b.score - a.score;
+            if (a.index !== b.index) return a.index - b.index;
+            return a.text.length - b.text.length;
+        });
+
+    if (scored[0] && scored[0].score > -0.6) {
+        return scored[0].text;
+    }
     const highSignal = normalized.find((item) => !isNoisyIntent(item));
     return highSignal || normalized[0] || "";
 }
@@ -269,10 +407,12 @@ function isNoisyPhrase(value: string): boolean {
     if (value.length < 2) return true;
     if (/^[\d\s._-]+$/.test(value)) return true;
     if (PROMPT_NOISE_PATTERNS.some((pattern) => pattern.test(value))) return true;
+    if (INTENT_NOISE_PATTERNS.some((pattern) => pattern.test(value))) return true;
     if (ZH_NOISE_TOKENS.has(value)) return true;
     if (GENERIC_ACTION_PHRASES.has(value.toLowerCase())) return true;
     const lower = value.toLowerCase();
     if (EN_STOP_WORDS.has(lower)) return true;
+    if (/[#|*]{2,}|^>\s*/.test(value)) return true;
     if (/[┌┐└┘│]/.test(value)) return true;
     return false;
 }
@@ -291,6 +431,7 @@ function scorePhrase(value: string, sourceText: string, indexHint: number, typeH
         typeHint === "path" ? 1.35 :
             typeHint === "quoted" ? 1.2 :
                 typeHint === "action" ? 1.15 :
+                    typeHint === "semantic" ? 1.25 :
                     typeHint === "segment" ? 1.05 : 1.0;
     const domainBoost = /(pdf|srt|json|markdown|repo|github|deploy|patch|openclaw|focus|graph|rebuild|rollback|error|log|二重积分|字幕|部署|回滚|重构|检索|总结|路径)/i.test(value)
         ? 1.2
@@ -366,6 +507,81 @@ function rerankPhraseScoresWithTextRank(
     return reranked.sort((a, b) => b.score - a.score);
 }
 
+function decomposeTaskPhrases(text: string): string[] {
+    const cleaned = sanitizeMemoryText(normalizeUserRequest(text, 480), 480)
+        .replace(/[“”"'`]/g, " ")
+        .replace(/\s+/g, " ");
+    if (!cleaned) return [];
+
+    const chunks = cleaned
+        .replace(/(?:并且|并|然后|同时|以及|而且|并行)/g, "，")
+        .split(/[，,。；;、\n]/)
+        .map((part) =>
+            normalizePhrase(
+                part
+                    .replace(/^(?:请|去|到|先|再|然后|继续|改为|改成|停止(?:刚才的?)?|算了|先别|先不要)\s*/g, "")
+                    .replace(/\s+/g, " "),
+                80
+            )
+        )
+        .filter(Boolean);
+
+    const picked: string[] = [];
+    const push = (value: string) => {
+        const phrase = normalizePhrase(value, 48);
+        if (!phrase || isNoisyPhrase(phrase)) return;
+        picked.push(phrase);
+    };
+
+    for (const chunk of chunks) {
+        if (/(?:上网|网上|网络|web).*(?:查找|检索|搜索|查|找)|(?:查找|检索|搜索).*(?:网页|网络|互联网|web)/i.test(chunk)) {
+            push("上网查找");
+        } else if (/(?:查找|寻找|检索|搜索)/.test(chunk)) {
+            push("查找");
+        }
+
+        if (/(?:详细|完整|不要省略|详尽|全面).*(?:总结|归纳)|(?:总结|归纳).*(?:详细|完整|不要省略|详尽|全面)/.test(chunk)) {
+            push("详细总结");
+        } else if (/(?:总结|归纳|复盘)/.test(chunk)) {
+            push("总结");
+        }
+
+        const zhNamedMatches = [
+            ...(chunk.match(/张宇(?:基础)?三十讲(?:第[一二三四五六七八九十\d]+讲)?/g) || []),
+            ...(chunk.match(/二重积分(?:技巧)?/g) || []),
+            ...(chunk.match(/(?:可视化系统开发|可视化系统|系统开发)/g) || []),
+            ...(chunk.match(/(?:部署手册|部署指南|deployment guide)/gi) || []),
+            ...(chunk.match(/(?:网关断连|gateway disconnected|gateway)/gi) || []),
+            ...(chunk.match(/(?:字幕文件|字幕)/g) || []),
+            ...(chunk.match(/(?:日志|仓库|项目|模型|图谱|图网|记忆系统)/g) || []),
+        ];
+        for (const match of zhNamedMatches) {
+            push(match);
+        }
+
+        const genericMatches =
+            chunk.match(/[\u4e00-\u9fff]{2,18}(?:系统开发|系统|项目|课程|教程|讲|积分|字幕文件|字幕|日志|路径|仓库|接口|模型|图谱|工作流)/g) ||
+            [];
+        for (const match of genericMatches) {
+            push(match);
+        }
+
+        if (chunk.length >= 3 && chunk.length <= 16 && !/[#:|]/.test(chunk)) {
+            push(chunk);
+        }
+    }
+
+    const deduped: string[] = [];
+    for (const phrase of picked) {
+        if (deduped.some((item) => item === phrase || item.includes(phrase) || phrase.includes(item))) {
+            continue;
+        }
+        deduped.push(phrase);
+        if (deduped.length >= 12) break;
+    }
+    return deduped;
+}
+
 function extractCorePhrases(text: string, maxItems = 8): string[] {
     const cleaned = sanitizeMemoryText(normalizeUserRequest(text, 1200), 1200);
     if (!cleaned) return [];
@@ -386,7 +602,7 @@ function extractCorePhrases(text: string, maxItems = 8): string[] {
     for (const match of cleaned.matchAll(/(?:[A-Za-z]:[\\/][^\s,，。；;]+|\/(?:mnt|home|var|etc|usr|opt|tmp|data|workspace|downloads)[^\s,，。；;]+)/gi)) {
         pushCandidate(match[0], "path", idx++);
     }
-    for (const match of cleaned.matchAll(/(?:查找|寻找|检索|搜索|总结|部署|修复|回滚|更新|测试|排查|重构|阅读|提取|分析|学习|复盘)(?:[^，。；;\n]{0,16})/g)) {
+    for (const match of cleaned.matchAll(/(?:查找|寻找|检索|搜索|总结|部署|修复|回滚|更新|测试|排查|重构|阅读|提取|分析|学习|复盘)(?:[^，。；;\n]{0,12})/g)) {
         pushCandidate(match[0], "action", idx++);
     }
     for (const match of cleaned.matchAll(/[^\s，。；;\n]{1,20}(?:文件|目录|路径|仓库|项目|系统|模块|日志|字幕|积分|教程|数据库|接口|模型|图谱)/g)) {
@@ -395,13 +611,16 @@ function extractCorePhrases(text: string, maxItems = 8): string[] {
     for (const match of cleaned.matchAll(/(?:search|find|summarize|deploy|fix|rollback|update|test|debug|refactor|read|extract|analy[sz]e)\s+[a-z0-9/_-]+(?:\s+[a-z0-9/_-]+){0,2}/ig)) {
         pushCandidate(match[0], "action", idx++);
     }
+    for (const phrase of decomposeTaskPhrases(cleaned)) {
+        pushCandidate(phrase, "semantic", idx++);
+    }
 
     const segments = cleaned
         .split(/[，,。；;、\n]/)
         .map((item) => sanitizeMemoryText(item, 60))
         .filter((item) => item.length >= 2);
     for (const segment of segments) {
-        if (/[\u4e00-\u9fff]/.test(segment) && segment.length <= 20) {
+        if (/[\u4e00-\u9fff]/.test(segment) && segment.length <= 16) {
             pushCandidate(segment, "segment", idx++);
         } else if (/\b[a-z]{3,}\b/i.test(segment) && segment.split(/\s+/).length <= 5) {
             pushCandidate(segment, "segment", idx++);
@@ -473,7 +692,15 @@ function pickRolePhrase(
     phrases: string[],
     fallback: string
 ): string {
-    const joined = phrases.join(" | ");
+    const filtered = phrases
+        .map((phrase) => normalizePhrase(phrase, 80))
+        .filter((phrase) =>
+            phrase &&
+            !isNoisyPhrase(phrase) &&
+            !INTENT_NOISE_PATTERNS.some((pattern) => pattern.test(phrase)) &&
+            !/[#|]{2,}/.test(phrase)
+        );
+    const joined = filtered.join(" | ");
     if (!joined) return fallback;
 
     const roleMatchers: Record<V8NodeRole, RegExp[]> = {
@@ -485,15 +712,35 @@ function pickRolePhrase(
         checkpoint: [/总结|进度|检查点|恢复|交接|完成|summary|checkpoint|resume|handoff/i],
     };
 
-    const matches = phrases.filter((phrase) =>
+    const matches = filtered.filter((phrase) =>
         roleMatchers[role].some((pattern) => pattern.test(phrase))
     );
     if (matches.length === 0) {
         return fallback;
     }
 
+    const scoreTopicPhrase = (value: string): number => {
+        const phrase = normalizePhrase(value, 64);
+        if (!phrase || isNoisyPhrase(phrase)) return -999;
+        let score = 0;
+        if (phrase.length >= 4 && phrase.length <= 14) score += 2.4;
+        else if (phrase.length <= 20) score += 1.2;
+        else score -= 1.4;
+        if (/(?:张宇|二重积分|字幕|部署|网关|可视化|记忆|图网|图谱|仓库|日志|系统|项目|pdf|workflow|repo)/i.test(phrase)) {
+            score += 2.2;
+        }
+        if (/^(?:去|到|改为|改成|不要|停止|只回复|继续|先|再)/.test(phrase)) {
+            score -= 2.1;
+        }
+        if (/[#:|]/.test(phrase)) score -= 1.6;
+        return score;
+    };
+
     if (role === "checkpoint") {
-        return [...matches].sort((a, b) => b.length - a.length)[0];
+        return [...matches].sort((a, b) => a.length - b.length)[0];
+    }
+    if (role === "topic") {
+        return [...matches].sort((a, b) => scoreTopicPhrase(b) - scoreTopicPhrase(a) || a.length - b.length)[0];
     }
 
     return [...matches].sort((a, b) => a.length - b.length)[0];
@@ -582,6 +829,8 @@ function shouldAddRole(
     normalizedContent: string
 ): boolean {
     const text = `${event.type} ${normalizedContent} ${event.tags.join(" ")}`;
+    const tagSet = new Set((event.tags || []).map((tag) => tag.toLowerCase()));
+    const isAutoRecorded = tagSet.has("auto-recorded");
     switch (role) {
         case "topic":
             return true;
@@ -594,6 +843,9 @@ function shouldAddRole(
                 event.type === "preference" ||
                 CONSTRAINT_PATTERNS.some((pattern) => pattern.test(text));
         case "condition":
+            if (isAutoRecorded) {
+                return /(?:如果|当|前提|条件|unless|only when)/i.test(text);
+            }
             return CONDITION_PATTERNS.some((pattern) => pattern.test(text));
         case "evidence":
             return event.type === "error" ||
@@ -601,6 +853,9 @@ function shouldAddRole(
                 event.associations.length > 0 ||
                 EVIDENCE_PATTERNS.some((pattern) => pattern.test(text));
         case "checkpoint":
+            if (isAutoRecorded) {
+                return CHECKPOINT_PATTERNS.some((pattern) => pattern.test(text));
+            }
             return event.type === "insight" ||
                 CHECKPOINT_PATTERNS.some((pattern) => pattern.test(text));
     }
@@ -616,8 +871,47 @@ function buildRoleText(
     intentPhrases: string[]
 ): string {
     const userFallback = sanitizeMemoryText(userIntentText || normalizedContent, 180) || title;
+    const compressWorkflowText = (value: string): string => {
+        const text = normalizePhrase(value, 120);
+        if (!text) return "";
+        if (/(?:查找|寻找|检索|搜索|找).*(?:字幕)/.test(text) || /字幕/.test(text)) return "查找字幕文件";
+        if (/二重积分/.test(text) && /(?:总结|归纳|复盘)/.test(text)) return "详细总结二重积分";
+        if (/(?:部署|安装).*(?:手册|指南)/.test(text)) return "按部署手册安装";
+        if (/(?:排查|诊断|修复).*(?:网关|gateway)/i.test(text)) return "排查网关断连";
+        if (/(?:查找|寻找|检索|搜索|上网查找)/.test(text)) return "上网查找";
+        return normalizePhrase(
+            text
+                .replace(/^(?:请|去|到|先|再|然后|继续|改为|改成|停止(?:刚才的?)?|算了|先别|先不要)\s*/g, "")
+                .replace(/^的+/, "")
+                .replace(/[。！？]$/g, ""),
+            40
+        );
+    };
     switch (role) {
         case "topic": {
+            const normalizeTopic = (value: string): string =>
+                normalizePhrase(
+                    value
+                        .replace(/张宇(?:基础)?三十讲第[一二三四五六七八九十\d]+讲/g, "张宇基础三十讲")
+                        .replace(/^(?:去|到|请)?(?:网上?|上网|网络)?(?:查找|检索|搜索|查)?/g, "")
+                        .replace(/^的+/, "")
+                        .replace(/(?:并(?:详细)?总结.*|不要省略.*)$/g, ""),
+                    64
+                );
+            const scoreCandidate = (value: string): number => {
+                const phrase = normalizeTopic(value);
+                if (!phrase || isNoisyPhrase(phrase)) return -999;
+                let score = 0;
+                if (phrase.length >= 4 && phrase.length <= 14) score += 2.4;
+                else if (phrase.length <= 20) score += 1.1;
+                else score -= 1.4;
+                if (/(?:张宇|二重积分|字幕|部署|网关|可视化|记忆|图网|图谱|仓库|日志|系统|项目|pdf|workflow|repo)/i.test(phrase)) {
+                    score += 2.3;
+                }
+                if (/^(?:去|到|改为|改成|不要|停止|只回复|继续|先|再)/.test(phrase)) score -= 2.2;
+                if (/[#:|]/.test(phrase)) score -= 1.8;
+                return score;
+            };
             const nonCommand = intentPhrases.filter((phrase) =>
                 !/^(停止|不要|改为|改成|只回复|回复|继续|先)/.test(phrase) &&
                 !/^\d+(?:[./-]|$)/.test(phrase) &&
@@ -627,26 +921,43 @@ function buildRoleText(
                 /(?:文件|目录|路径|仓库|项目|系统|课程|字幕|积分|pdf|日志|网关|部署|数据库|接口|模型|graph|repo)/i.test(phrase)
             );
             if (scoped.length > 0) {
-                return [...scoped].sort((a, b) => b.length - a.length)[0];
+                return normalizeTopic(
+                    [...scoped].sort((a, b) => scoreCandidate(b) - scoreCandidate(a) || a.length - b.length)[0]
+                );
             }
             if (nonCommand.length > 0) {
-                return [...nonCommand].sort((a, b) => b.length - a.length)[0];
+                return normalizeTopic(
+                    [...nonCommand].sort((a, b) => scoreCandidate(b) - scoreCandidate(a) || a.length - b.length)[0]
+                );
             }
             return pickRolePhrase("topic", intentPhrases, title);
         }
-        case "workflow":
-            return pickRolePhrase("workflow", intentPhrases, takeLeadingClause(userFallback, 180) || title);
+        case "workflow": {
+            const workflowShort = pickRolePhrase("workflow", intentPhrases, "");
+            const compressedWorkflow = compressWorkflowText(workflowShort);
+            if (compressedWorkflow && !/^(?:不要|不能|别|停止)/.test(compressedWorkflow)) {
+                return compressedWorkflow;
+            }
+            const decomposed = decomposeTaskPhrases(userFallback).find((phrase) =>
+                /(?:查找|寻找|检索|搜索|上网查找|总结|部署|修复|回滚|更新|测试|排查|重构|阅读|提取|分析)/.test(phrase) &&
+                !/^(?:不要|不能|别|停止)/.test(phrase)
+            );
+            if (decomposed) {
+                return compressWorkflowText(decomposed);
+            }
+            return compressWorkflowText(takeLeadingClause(userFallback, 88) || title);
+        }
         case "constraint":
             return pickRolePhrase("constraint", intentPhrases, normalizeUserRequest(userFallback, 180) || title);
         case "condition":
-            return pickRolePhrase("condition", intentPhrases, takeLeadingClause(userFallback, 180) || title);
+            return pickRolePhrase("condition", intentPhrases, "");
         case "evidence":
             return sanitizeMemoryText(
                 assistantEvidenceText || normalizedContent,
                 220
             ) || pickRolePhrase("evidence", intentPhrases, userFallback);
         case "checkpoint":
-            return pickRolePhrase("checkpoint", intentPhrases, sanitizeMemoryText(userFallback, 180) || title);
+            return pickRolePhrase("checkpoint", intentPhrases, "");
     }
 }
 
@@ -670,12 +981,43 @@ function buildNode(
         checkpoint: 0.78,
     };
     const normalizedText = sanitizeMemoryText(text, role === "evidence" ? 220 : 180);
+    const deriveRoleEnglishHint = (nodeRole: V8NodeRole, nodeText: string): string => {
+        const value = sanitizeMemoryText(nodeText, 160);
+        if (!value) return "";
+        if (/字幕/.test(value)) return nodeRole === "workflow" ? "find subtitles" : "subtitle files";
+        if (/二重积分/.test(value)) return /总结|归纳|复盘/.test(value) ? "double integral summary" : "double integral";
+        if (/可视化/.test(value)) return "visualization";
+        if (/部署/.test(value)) return "deployment";
+        if (/网关/.test(value)) return "gateway troubleshooting";
+        if (/(?:查找|寻找|检索|搜索|上网查找)/.test(value)) return "web search";
+        if (/^(?:不要|不能|别|must|do not|never)/i.test(value)) return "constraint";
+        if (/日志|报错|错误|路径|文件/.test(value)) return "evidence";
+        return "";
+    };
+    const explicitZhByRole =
+        role === "constraint"
+            ? normalizePhrase(normalizedText, 48)
+            : role === "workflow"
+                ? normalizePhrase(normalizedText, 48)
+                : role === "topic"
+                    ? normalizePhrase(
+                        normalizedText
+                            .replace(/^(?:memory|mem)\s+/i, "")
+                            .replace(/\bmemory\b/ig, "")
+                            .replace(/^(?:记忆|记忆系统)\s*/i, "")
+                            .replace(/^的+/, ""),
+                        48
+                    )
+                    : "";
     const bilingual = deriveBilingualNodeNames(normalizedText, [
         bundle.title,
         sanitizeMemoryText(sourceSeedText || event.content, 220),
         ...event.tags.filter((tag) => !/^(auto-recorded|semantic-candidate)$/i.test(tag)),
         ...event.associations,
-    ]);
+    ], {
+        explicitZh: explicitZhByRole,
+        explicitEn: deriveRoleEnglishHint(role, normalizedText),
+    });
 
     return {
         id: createNodeId(event.id, role),
@@ -745,25 +1087,43 @@ export function compileEventToBundle(
     const eventConversation = extractConversationSlices(event.content || "");
     const conversationUserText = eventConversation.userText || sourceConversation.userText;
     const conversationAssistantText = eventConversation.assistantText || sourceConversation.assistantText;
-    const ledgerHints = extractLedgerHints(`${event.content}\n${sourceText}`);
+    const ledgerRaw = `${event.content}\n${sourceText}`;
+    const ledgerHints = extractLedgerHints(ledgerRaw);
+    const explicitLedgerTask = extractExplicitUserTaskFromLedger(ledgerRaw);
+    const tagSet = new Set((event.tags || []).map((tag) => tag.toLowerCase()));
+    const isAutoRecordedSemantic =
+        tagSet.has("auto-recorded") && tagSet.has("semantic-candidate");
+    const intentCandidates = isAutoRecordedSemantic && ledgerHints.length > 0
+        ? [
+            ...ledgerHints,
+            conversationUserText,
+            sourceText,
+            event.content,
+        ]
+        : [
+            conversationUserText,
+            ...ledgerHints,
+            sourceText,
+            event.content,
+        ];
     const userIntentText = resolvePrimaryIntent([
-        conversationUserText,
-        ...ledgerHints,
-        sourceText,
-        event.content,
+        ...intentCandidates,
     ]);
+    const finalUserIntentText = isAutoRecordedSemantic && explicitLedgerTask
+        ? explicitLedgerTask
+        : userIntentText;
     const assistantEvidenceText = extractAssistantEvidence(
         conversationAssistantText || sourceText
     );
     const normalizedContent = sanitizeMemoryText(
-        `${userIntentText} ${assistantEvidenceText}`.trim(),
+        `${finalUserIntentText} ${assistantEvidenceText}`.trim(),
         320
     );
-    const intentPhrases = extractCorePhrases(userIntentText, 10);
+    const intentPhrases = extractCorePhrases(finalUserIntentText, 10);
     const title = buildBundleTitle(
         event,
-        userIntentText || normalizedContent,
-        userIntentText
+        finalUserIntentText || normalizedContent,
+        finalUserIntentText
     );
     const dayKey = deriveDayKey(event);
     const summaryRef = dayKey ? `memory/${dayKey}.md` : "memory";
@@ -791,7 +1151,7 @@ export function compileEventToBundle(
 
     const lowSignalAutoRecorded = isLowSignalAutoRecordedEvent(
         event,
-        userIntentText,
+        finalUserIntentText,
         assistantEvidenceText,
         sourceText
     );
@@ -819,7 +1179,7 @@ export function compileEventToBundle(
         roles.length === 1 &&
         lowSignalAutoRecorded &&
         assistantEvidenceText &&
-        assistantEvidenceText !== userIntentText
+        assistantEvidenceText !== finalUserIntentText
     ) {
         roles.push("evidence");
     }
@@ -832,7 +1192,7 @@ export function compileEventToBundle(
             event,
             title,
             normalizedContent,
-            userIntentText,
+            finalUserIntentText,
             assistantEvidenceText,
             intentPhrases
         );
@@ -840,16 +1200,27 @@ export function compileEventToBundle(
         if (!normalized) continue;
         roleTexts.set(role, normalized);
     }
-    const fallbackTopic = sanitizeMemoryText(userIntentText || title, 180) || title;
-    const topicCandidates = extractCorePhrases(userIntentText || fallbackTopic, 6);
+    const fallbackTopic = sanitizeMemoryText(finalUserIntentText || title, 180) || title;
+    const topicCandidates = extractCorePhrases(finalUserIntentText || fallbackTopic, 6);
     const topicFromCandidates = topicCandidates.find(
-        (item) => !/^(只回复|回复|在线吗|继续|ok|好的|收到)/i.test(item)
+        (item) =>
+            !/^(只回复|回复|在线吗|继续|ok|好的|收到)/i.test(item) &&
+            !isNoisyPhrase(item) &&
+            !INTENT_NOISE_PATTERNS.some((pattern) => pattern.test(item))
     ) || "";
     const initialTopic = roleTexts.get("topic") || fallbackTopic;
     const topicText = /^(只回复|回复|在线吗|继续|ok|好的|收到)/i.test(initialTopic)
         ? (topicFromCandidates || fallbackTopic)
         : initialTopic;
-    roleTexts.set("topic", topicText);
+    const cleanedTopicText = normalizePhrase(
+        topicText
+            .replace(/^(?:memory|mem)\s+/i, "")
+            .replace(/\bmemory\b/ig, "")
+            .replace(/^(?:记忆|记忆系统)\s*/i, "")
+            .replace(/^的+/, ""),
+        180
+    );
+    roleTexts.set("topic", cleanedTopicText || topicText);
     const workflowText = roleTexts.get("workflow") || "";
     const evidenceText = roleTexts.get("evidence") || "";
     if (workflowText && evidenceText) {
