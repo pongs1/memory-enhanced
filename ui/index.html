@@ -309,19 +309,45 @@
     .legend-row { display: flex; align-items: center; gap: 8px; }
     .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
+    /* Always-visible edge type legend */
+    #edge-legend {
+      position: absolute;
+      bottom: 14px;
+      left: 14px;
+      background: rgba(22,27,34,0.85);
+      backdrop-filter: blur(6px);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      display: flex;
+      gap: 8px;
+      flex-direction: column;
+      z-index: 19;
+      font-size: 11px;
+      color: var(--text-muted);
+      pointer-events: none;
+    }
+    #diff-legend.visible ~ #edge-legend { bottom: 130px; }
+
     /* ── Detail Drawer ────────────────────────────── */
     #drawer {
-      width: var(--drawer-w);
+      width: 0;
+      min-width: 0;
       background: var(--bg-surface);
-      border-left: 1px solid var(--border);
+      border-left: 1px solid transparent;
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
-      transform: translateX(100%);
-      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
       overflow: hidden;
+      transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+                  border-color 0.25s,
+                  min-width 0.25s;
     }
-    #drawer.open { transform: translateX(0); }
+    #drawer.open {
+      width: var(--drawer-w);
+      min-width: var(--drawer-w);
+      border-left-color: var(--border);
+    }
 
     #drawer-header {
       padding: 14px 18px;
@@ -573,6 +599,25 @@
       <div class="legend-row"><div class="legend-dot" style="background:var(--diff-rem)"></div>Removed</div>
       <div class="legend-row"><div class="legend-dot" style="background:var(--diff-mod)"></div>Changed edges</div>
     </div>
+
+    <!-- Always-visible edge legend -->
+    <div id="edge-legend">
+      <div class="legend-row">
+        <svg width="36" height="4" style="flex-shrink:0"><line x1="0" y1="2" x2="36" y2="2" stroke="rgba(255,255,255,0.45)" stroke-width="1"/></svg>
+        Associative (thin=weak)
+      </div>
+      <div class="legend-row">
+        <svg width="36" height="6" style="flex-shrink:0"><line x1="0" y1="3" x2="36" y2="3" stroke="rgba(188,140,255,0.8)" stroke-width="3"/></svg>
+        Structural
+      </div>
+      <div class="legend-row">
+        <svg width="36" height="6" style="flex-shrink:0"><line x1="0" y1="3" x2="36" y2="3" stroke="rgba(248,81,73,0.8)" stroke-width="4"/></svg>
+        Supersession
+      </div>
+      <div class="legend-row" style="margin-top:4px;padding-top:6px;border-top:1px solid var(--border);color:var(--text-muted);font-size:10px;">
+        Line thickness ∝ strength
+      </div>
+    </div>
   </div>
 
   <!-- Detail Drawer -->
@@ -646,11 +691,15 @@ function buildGraphology(nodes, edges, layerFilter) {
     if (!g.hasNode(e.source) || !g.hasNode(e.target)) return;
     const edgeId = `${e.source}->${e.target}`;
     if (g.hasEdge(edgeId)) return;
+    const w = e.weight || 0.5;
+    // Thickness: 0.5px (weak) → 5px (strong), linear scale
+    const thickness = 0.5 + w * 4.5;
     g.addDirectedEdgeWithKey(edgeId, e.source, e.target, {
-      weight: e.weight || 0.5,
-      color:  e.type === 'supersession' ? '#f85149' :
-              e.type === 'structural'   ? '#bc8cff' : 'rgba(255,255,255,0.12)',
-      size:   (e.weight || 0.5) * 2,
+      weight: w,
+      color:  e.type === 'supersession' ? 'rgba(248,81,73,0.7)'  :
+              e.type === 'structural'   ? 'rgba(188,140,255,0.55)' :
+                                         'rgba(255,255,255,0.22)',
+      size:   thickness,
     });
   });
 
@@ -793,10 +842,10 @@ function selectNode(id, g) {
   const raw = g.getNodeAttribute(id, '_raw');
   openDrawer(raw, id, g);
   refreshNodeListSelection(id);
-
-  // Focus camera
-  const { x, y } = g.getNodeAttributes(id);
-  sigmaInstance.getCamera().animate({ x, y, ratio: 0.5 }, { duration: 400 });
+  // Do NOT animate camera with raw graph coords — they are not screen coords.
+  // Sigma handles its own camera; moving it aggressively sends the view to infinity.
+  // A light zoom-to-fit on the selected node can be done later via sigmaInstance's
+  // built-in graph-to-viewport projection if needed.
 }
 
 // ─── SIDEBAR NODE LIST ────────────────────────────────────────────────────────
