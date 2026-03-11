@@ -680,9 +680,10 @@ function buildGraphology(nodes, edges, layerFilter) {
     if (layerFilter !== 'all' && n.layer !== layerFilter) return;
     g.addNode(n.id, {
       label:   n.summary ? n.summary.substring(0, 38) + (n.summary.length > 38 ? '…' : '') : n.id,
-      size:    8 + (n.hit || 0) * 10,
+      // 3px base + up to 4px for high-importance nodes (importance 0–1)
+      // hit/adopt are 0 for most real nodes so we use importance instead
+      size:    3 + (n.importance || 0.5) * 4,
       color:   COLORS[n.layer] || '#7d8590',
-      // store full data for drawer
       _raw: n,
     });
   });
@@ -721,15 +722,16 @@ function applyForceLayout(g, onDone) {
   const pos = {};
   nodes.forEach((id, i) => {
     const angle = (2 * Math.PI * i) / n;
-    const r = 20 + Math.random() * 10;
+    // Large initial radius so 300+ nodes start spread out → repulsion has room to work
+    const r = 200 + Math.random() * 80;
     pos[id] = { x: Math.cos(angle) * r, y: Math.sin(angle) * r, vx: 0, vy: 0 };
   });
 
   const ITER    = 300;
-  const REPULSE = 0.5;
-  const ATTRACT = 0.06;
+  const REPULSE = 5;    // was 0.5 — stronger push so nodes don't clump
+  const ATTRACT = 0.04; // slightly softer pull
   const DAMP    = 0.88;
-  const GRAV    = 0.04;
+  const GRAV    = 0.02; // weaker gravity so nodes spread further
 
   for (let it = 0; it < ITER; it++) {
     // Repulsion between all pairs (O(n²) — fine for <2k nodes)
@@ -785,9 +787,12 @@ function initSigma(g) {
     labelSize: 11,
     labelWeight: '400',
     labelColor: { color: '#7d8590' },
-    labelRenderedSizeThreshold: 6,
+    // Only show labels when node is large enough on screen (after zooming in)
+    labelRenderedSizeThreshold: 10,
     zIndex: true,
     defaultNodeType: 'circle',
+    minCameraRatio: 0.02,  // allow zooming way out
+    maxCameraRatio: 10,    // allow zooming way in to read labels
   });
 
   // ── Hover tooltip
