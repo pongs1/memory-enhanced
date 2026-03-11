@@ -18,6 +18,8 @@ import { buildV8Graph } from "../v8/compiler.js";
 import { runOfflineBundleAnnotation } from "../v8/offline-annotator.js";
 import { runClusterRebuild } from "../v8/cluster-rebuilder.js";
 import { writeGraphManifest } from "../v8/manifest.js";
+import { graphPaths } from "../v8/paths.js";
+import { materializeClusterRebuildGraph, writeGraphSnapshotDir } from "../v8/rebuild-materializer.js";
 import type { V8ClusterDiagnosis } from "../v8/types.js";
 import {
     diagnoseAssociativeClusters,
@@ -86,6 +88,8 @@ interface ConsolidationReport {
     clusterRebuildSkipped: number;
     clusterRebuildModel: string | null;
     clusterDiagnosisSkippedReason: string | null;
+    clusterRebuildAppliedClusters: number;
+    clusterRebuildSnapshotDir: string | null;
 }
 
 /**
@@ -155,6 +159,8 @@ export async function executeMemoryConsolidate(
         clusterRebuildSkipped: 0,
         clusterRebuildModel: null,
         clusterDiagnosisSkippedReason: null,
+        clusterRebuildAppliedClusters: 0,
+        clusterRebuildSnapshotDir: null,
     };
 
     // --- 1. Collect event files based on scope ---
@@ -329,11 +335,53 @@ export async function executeMemoryConsolidate(
 
         const rebuildRun = await runClusterRebuild({
             workspace,
-            diagnoses: selectRebuildCandidates(diagnoses),
+            diagnoses: /^(1|true|yes)$/i.test(
+                process.env.MEMORY_CLUSTER_REBUILD_INCLUDE_PLASTIC || ""
+            )
+                ? diagnoses
+                : selectRebuildCandidates(diagnoses),
         });
         report.clusterRebuildDrafts = rebuildRun.records.length;
         report.clusterRebuildSkipped = rebuildRun.skipped;
         report.clusterRebuildModel = rebuildRun.model;
+
+        const keepBoth =
+            /^(1|true|yes)$/i.test(process.env.MEMORY_CLUSTER_REBUILD_KEEP_BOTH || "");
+        const applyRebuiltGraph =
+            /^(1|true|yes)$/i.test(process.env.MEMORY_CLUSTER_REBUILD_APPLY || "");
+
+        if ((keepBoth || applyRebuiltGraph) && rebuildRun.records.length > 0) {
+            const materialized = materializeClusterRebuildGraph(v8Graph, rebuildRun.records);
+            report.clusterRebuildAppliedClusters = materialized.appliedClusters;
+
+            if (keepBoth) {
+                const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+                const gp = graphPaths(workspace);
+                const snapshotRoot = path.join(
+                    workspace,
+                    ".memory",
+                    "graph_snapshots",
+                    `rebuild_${stamp}`
+                );
+                const preDir = path.join(snapshotRoot, "pre_rebuild");
+                const postDir = path.join(snapshotRoot, "post_rebuild");
+                ensureDir(path.dirname(snapshotRoot));
+                if (fs.existsSync(snapshotRoot)) {
+                    fs.rmSync(snapshotRoot, { recursive: true, force: true });
+                }
+                fs.cpSync(gp.graphDir, preDir, { recursive: true });
+                writeGraphSnapshotDir(postDir, materialized.graph);
+                report.clusterRebuildSnapshotDir = snapshotRoot;
+            }
+
+            if (applyRebuiltGraph) {
+                const gp = graphPaths(workspace);
+                writeGraphSnapshotDir(gp.graphDir, materialized.graph);
+                writeGraphManifest(workspace, {
+                    updatedAt: new Date().toISOString(),
+                });
+            }
+        }
     }
 
     // --- Format report ---
@@ -353,6 +401,12 @@ export async function executeMemoryConsolidate(
         `  Cluster Diagnosis: ${report.clusterDiagnoses} clusters checked, ${report.clusterRebuildCandidates} queued for rebuild`,
         `  Cluster Rebuild Drafts: ${report.clusterRebuildDrafts} new, ${report.clusterRebuildSkipped} skipped${report.clusterRebuildModel ? ` (${report.clusterRebuildModel})` : " (disabled or no model configured)"}`,
     ];
+    if (report.clusterRebuildAppliedClusters > 0) {
+        lines.push(`  Cluster Rebuild Applied: ${report.clusterRebuildAppliedClusters} cluster(s) materialized`);
+    }
+    if (report.clusterRebuildSnapshotDir) {
+        lines.push(`  Cluster Rebuild Snapshots: ${report.clusterRebuildSnapshotDir}`);
+    }
     if (report.clusterDiagnosisSkippedReason) {
         lines.push(`  Cluster Diagnosis Gate: skipped (${report.clusterDiagnosisSkippedReason})`);
     }
