@@ -302,6 +302,8 @@ export function normalizeUserRequest(value: string, maxChars = 240): string {
         .replace(/<!-- Memory Context \(Live\) -->/g, " ")
         .replace(/<!-- End Memory Context -->/g, " ")
         .replace(/<!--[\s\S]*?-->/g, " ")
+        .replace(/\b(?:User|Asst|Assistant|System)\s*:/gi, " ")
+        .replace(/(?:用户|助手|系统)\s*：/g, " ")
         .replace(/^##\s*Task Ledger\b.*$/gim, " ")
         .replace(/\*\*(Goal|Updated|Active|Next|Deferred|Done Recently|Last User Request):\*\*/gi, " ")
         .replace(/^>+\s*/gm, "")
