@@ -87,6 +87,22 @@ function extractMessageText(payload: any): string {
             .join("\n")
             .trim();
     }
+    const reasoning = payload?.choices?.[0]?.message?.reasoning_content;
+    if (typeof reasoning === "string") {
+        return reasoning.trim();
+    }
+    const legacyText = payload?.choices?.[0]?.text;
+    if (typeof legacyText === "string") {
+        return legacyText.trim();
+    }
+    const outputText = payload?.output_text;
+    if (typeof outputText === "string") {
+        return outputText.trim();
+    }
+    const alt = payload?.output?.[0]?.content?.[0]?.text;
+    if (typeof alt === "string") {
+        return alt.trim();
+    }
     return "";
 }
 
@@ -105,7 +121,12 @@ async function callChat(
             temperature: 0.2,
         },
     });
-    return extractMessageText(payload);
+    const extracted = extractMessageText(payload);
+    if (!extracted && /^(1|true|yes)$/i.test(process.env.MEMORY_ANNOTATION_DEBUG_SOURCE || "")) {
+        const preview = sanitizeText(JSON.stringify(payload), 800);
+        console.warn(`[Memory V8] Empty chat content from model ${config.model}. Payload preview: ${preview}`);
+    }
+    return extracted;
 }
 
 function collectJsonlFiles(dirPath: string): string[] {
@@ -277,10 +298,27 @@ async function annotateBundle(
     } as const;
 
     const scenePrompt = buildSceneReconstructionPrompt(promptInput);
-    const stage1SceneDraft = await callChat(config, [
+    let stage1SceneDraft = await callChat(config, [
         { role: "system", content: scenePrompt.system },
         { role: "user", content: scenePrompt.user },
     ]);
+    if (!stage1SceneDraft) {
+        const compactSourceText = sanitizeText(sourceText, 4200);
+        if (compactSourceText.length < sourceText.length) {
+            const retryPrompt = buildSceneReconstructionPrompt({
+                ...promptInput,
+                sourceText: compactSourceText,
+                contextBlocks: buildContextBlocks(bundle),
+            });
+            stage1SceneDraft = await callChat(config, [
+                { role: "system", content: retryPrompt.system },
+                { role: "user", content: retryPrompt.user },
+            ]);
+            if (/^(1|true|yes)$/i.test(process.env.MEMORY_ANNOTATION_DEBUG_SOURCE || "")) {
+                console.warn(`[Memory V8] Stage1 retry with compact source for ${bundle.bundleId}`);
+            }
+        }
+    }
 
     if (!stage1SceneDraft) {
         if (/^(1|true|yes)$/i.test(process.env.MEMORY_ANNOTATION_DEBUG_SOURCE || "")) {
@@ -293,10 +331,27 @@ async function annotateBundle(
         ...promptInput,
         sceneDraft: stage1SceneDraft,
     });
-    const stage2RelationDraft = await callChat(config, [
+    let stage2RelationDraft = await callChat(config, [
         { role: "system", content: relationPrompt.system },
         { role: "user", content: relationPrompt.user },
     ]);
+    if (!stage2RelationDraft) {
+        const compactSourceText = sanitizeText(sourceText, 3600);
+        if (compactSourceText.length < sourceText.length) {
+            const retryPrompt = buildRelationScoringPrompt({
+                ...promptInput,
+                sourceText: compactSourceText,
+                sceneDraft: sanitizeText(stage1SceneDraft, 8000),
+            });
+            stage2RelationDraft = await callChat(config, [
+                { role: "system", content: retryPrompt.system },
+                { role: "user", content: retryPrompt.user },
+            ]);
+            if (/^(1|true|yes)$/i.test(process.env.MEMORY_ANNOTATION_DEBUG_SOURCE || "")) {
+                console.warn(`[Memory V8] Stage2 retry with compact source for ${bundle.bundleId}`);
+            }
+        }
+    }
 
     if (!stage2RelationDraft) {
         if (/^(1|true|yes)$/i.test(process.env.MEMORY_ANNOTATION_DEBUG_SOURCE || "")) {
