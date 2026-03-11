@@ -671,6 +671,7 @@ function persistGraph(output: BuildGraphOutput, workspace: string) {
     return writeGraphManifest(workspace, {
         updatedAt: new Date().toISOString(),
         lastFullRebuildAt: new Date().toISOString(),
+        buildCount: (output.manifest?.buildCount || 0) + 1,
     });
 }
 

@@ -97,6 +97,21 @@
         "type": "number",
         "default": 0.12,
         "description": "Maximum initial weight for exploration-added weak associative links"
+      },
+      "v8ClusterDiagnosisMinBuildCount": {
+        "type": "number",
+        "default": 3,
+        "description": "Minimum V8 graph build count before cluster diagnosis/queue pruning starts"
+      },
+      "v8ClusterDiagnosisMinTotalHits": {
+        "type": "number",
+        "default": 4,
+        "description": "Minimum total node hit count required before cluster diagnosis can start"
+      },
+      "v8ClusterDiagnosisCooldownMinutes": {
+        "type": "number",
+        "default": 180,
+        "description": "Cooldown window between cluster diagnosis runs to avoid immediate repeated pruning"
       }
     }
   },

@@ -5,17 +5,21 @@ import { postJson } from "../http-client.js";
 import { graphPaths } from "./paths.js";
 import {
     buildClusterRebuildPrompt,
+    buildClusterRebuildSecondCheckPrompt,
     buildClusterScenePrompt,
 } from "./rebuild-prompt.js";
 import { buildClusterRebuildDraftFromMarkdown } from "./rebuild-stage-parser.js";
 import type {
     V8ClusterDiagnosis,
+    V8ClusterRelatedMemorySnippet,
     V8ClusterRebuildRecord,
     V8ClusterRebuildRunInput,
     V8ClusterRebuildRunOutput,
+    V8ClusterRebuildDraft,
     V8MemoryBundle,
     V8MemoryEdge,
     V8MemoryNode,
+    V8SourceIndex,
 } from "./types.js";
 
 interface ClusterRebuildApiConfig {
@@ -127,6 +131,7 @@ function loadGraph(workspace: string): {
     bundlesById: Map<string, V8MemoryBundle>;
     nodesById: Map<string, V8MemoryNode>;
     edges: V8MemoryEdge[];
+    sourceIndex: V8SourceIndex;
 } {
     const gp = graphPaths(workspace);
     const bundles = readJsonl<V8MemoryBundle>(gp.bundles);
@@ -140,10 +145,17 @@ function loadGraph(workspace: string): {
         ...readJsonl<V8MemoryEdge>(gp.edgesStructural),
         ...readJsonl<V8MemoryEdge>(gp.edgesSupersession),
     ];
+    let sourceIndex: V8SourceIndex = {};
+    try {
+        sourceIndex = JSON.parse(fs.readFileSync(gp.sourceIndex, "utf-8")) as V8SourceIndex;
+    } catch {
+        sourceIndex = {};
+    }
     return {
         bundlesById: new Map(bundles.map((bundle) => [bundle.bundleId, bundle])),
         nodesById: new Map(nodes.map((node) => [node.id, node])),
         edges,
+        sourceIndex,
     };
 }
 
@@ -155,6 +167,101 @@ function rankDiagnoses(diagnoses: V8ClusterDiagnosis[], maxClusters: number): V8
             return bScore - aScore;
         })
         .slice(0, maxClusters);
+}
+
+function buildRelatedMemorySnippets(input: {
+    workspace: string;
+    diagnosis: V8ClusterDiagnosis;
+    graph: {
+        nodesById: Map<string, V8MemoryNode>;
+        edges: V8MemoryEdge[];
+        sourceIndex: V8SourceIndex;
+    };
+    maxSnippets: number;
+}): V8ClusterRelatedMemorySnippet[] {
+    const clusterNodeIds = new Set(input.diagnosis.nodeIds);
+    const sourceCache = new Map<string, string>();
+
+    const getSourceText = (sourceRef: string): string => {
+        const normalized = sourceRef || "";
+        if (!normalized) return "";
+        if (sourceCache.has(normalized)) {
+            return sourceCache.get(normalized)!;
+        }
+        const text = sanitizeText(loadSourceSnippet(input.workspace, normalized), 360);
+        sourceCache.set(normalized, text);
+        return text;
+    };
+
+    const scoredEdges = input.graph.edges
+        .filter((edge) => clusterNodeIds.has(edge.src) || clusterNodeIds.has(edge.dst))
+        .map((edge) => {
+            const src = input.graph.nodesById.get(edge.src);
+            const dst = input.graph.nodesById.get(edge.dst);
+            if (!src || !dst) return null;
+            const internal = clusterNodeIds.has(edge.src) && clusterNodeIds.has(edge.dst);
+            const score =
+                (internal ? 1.0 : 0.72) +
+                edge.assocStrength * 0.6 +
+                edge.utility * 0.35 +
+                edge.trust * 0.25;
+            return { edge, src, dst, internal, score };
+        })
+        .filter((item): item is NonNullable<typeof item> => Boolean(item))
+        .sort((a, b) => b.score - a.score);
+
+    const output: V8ClusterRelatedMemorySnippet[] = [];
+    const seen = new Set<string>();
+
+    for (const item of scoredEdges) {
+        if (output.length >= input.maxSnippets) break;
+        const key = `${item.edge.id}:${item.src.id}:${item.dst.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const srcEntry = input.graph.sourceIndex[item.src.sourceRef];
+        const dstEntry = input.graph.sourceIndex[item.dst.sourceRef];
+        const srcSourceRef = srcEntry?.sourceRef || item.src.sourceRef;
+        const dstSourceRef = dstEntry?.sourceRef || item.dst.sourceRef;
+
+        const srcNodeText = sanitizeText(item.src.summary || item.src.text, 180);
+        const dstNodeText = sanitizeText(item.dst.summary || item.dst.text, 180);
+        const srcMemory = getSourceText(srcSourceRef);
+        const dstMemory = getSourceText(dstSourceRef);
+
+        output.push({
+            edgeId: item.edge.id,
+            edgeType: item.edge.type,
+            srcNodeId: item.src.id,
+            srcRole: item.src.role,
+            srcName: item.src.names.zh || item.src.names.en || item.src.id,
+            srcText: srcMemory ? `${srcNodeText}\n[Source]\n${srcMemory}` : srcNodeText,
+            srcSourceRef,
+            dstNodeId: item.dst.id,
+            dstRole: item.dst.role,
+            dstName: item.dst.names.zh || item.dst.names.en || item.dst.id,
+            dstText: dstMemory ? `${dstNodeText}\n[Source]\n${dstMemory}` : dstNodeText,
+            dstSourceRef,
+            note: item.internal
+                ? "internal established edge"
+                : "adjacent memory connected by established edge",
+        });
+    }
+
+    return output;
+}
+
+function shouldRunSecondCheck(
+    rebuiltDraft: V8ClusterRebuildDraft,
+    clusterNodeCount: number,
+    relatedMemoryCount: number
+): boolean {
+    if (relatedMemoryCount <= 0) return false;
+    const preserved = rebuiltDraft.preservedNodeIds.filter(Boolean);
+    const dropped = rebuiltDraft.droppedNodeIds.filter(Boolean);
+    const noRebuildOutput = rebuiltDraft.rebuiltNodes.length === 0 && rebuiltDraft.rebuiltEdges.length === 0;
+    const droppedMost = clusterNodeCount > 0 && dropped.length >= Math.max(1, Math.ceil(clusterNodeCount * 0.75));
+    return noRebuildOutput && (preserved.length === 0 || droppedMost);
 }
 
 export async function runClusterRebuild(
@@ -218,6 +325,15 @@ export async function runClusterRebuild(
             sourceRef,
             text: sanitizeText(loadSourceSnippet(workspace, sourceRef), 2400),
         })).filter((item) => item.text);
+        const relatedMemorySnippets = buildRelatedMemorySnippets({
+            workspace,
+            diagnosis,
+            graph,
+            maxSnippets: Math.max(
+                2,
+                Number(process.env.MEMORY_CLUSTER_REBUILD_RELATED_MAX || 10)
+            ),
+        });
 
         const scenePrompt = buildClusterScenePrompt({
             diagnosis,
@@ -225,6 +341,7 @@ export async function runClusterRebuild(
             nodes,
             edges,
             sourceSnippets,
+            relatedMemorySnippets,
         });
         const stage1SceneDraft = await callChat(config, [
             { role: "system", content: scenePrompt.system },
@@ -238,26 +355,64 @@ export async function runClusterRebuild(
             nodes,
             edges,
             sourceSnippets,
+            relatedMemorySnippets,
         }, stage1SceneDraft);
-        const stage2RebuildDraft = await callChat(config, [
+        let stage2RebuildDraft = await callChat(config, [
             { role: "system", content: rebuildPrompt.system },
             { role: "user", content: rebuildPrompt.user },
         ]);
         if (!stage2RebuildDraft) continue;
 
-        const rebuiltDraft = buildClusterRebuildDraftFromMarkdown({
+        let rebuiltDraft = buildClusterRebuildDraftFromMarkdown({
             diagnosis,
             sceneDraft: stage1SceneDraft,
             rebuildDraft: stage2RebuildDraft,
         });
+        let secondCheckUsed = false;
+
+        if (shouldRunSecondCheck(rebuiltDraft, nodes.length, relatedMemorySnippets.length)) {
+            const secondCheckPrompt = buildClusterRebuildSecondCheckPrompt(
+                {
+                    diagnosis,
+                    bundles,
+                    nodes,
+                    edges,
+                    sourceSnippets,
+                    relatedMemorySnippets,
+                },
+                stage1SceneDraft,
+                stage2RebuildDraft
+            );
+            const secondDraft = await callChat(config, [
+                { role: "system", content: secondCheckPrompt.system },
+                { role: "user", content: secondCheckPrompt.user },
+            ]);
+            if (secondDraft) {
+                stage2RebuildDraft = secondDraft;
+                rebuiltDraft = buildClusterRebuildDraftFromMarkdown({
+                    diagnosis,
+                    sceneDraft: stage1SceneDraft,
+                    rebuildDraft: stage2RebuildDraft,
+                });
+                secondCheckUsed = true;
+            }
+        }
+
+        const relatedMemoryRefs = [
+            ...new Set(
+                relatedMemorySnippets.flatMap((item) => [item.srcSourceRef, item.dstSourceRef]).filter(Boolean)
+            ),
+        ];
 
         const record: V8ClusterRebuildRecord = {
             clusterId: diagnosis.clusterId,
             diagnosis,
             sourceRefs,
+            relatedMemoryRefs,
             stage1SceneDraft,
             stage2RebuildDraft,
             rebuiltDraft,
+            secondCheckUsed,
             model: config.model,
             createdAt: nowISO(),
         };

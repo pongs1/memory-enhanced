@@ -50,6 +50,9 @@ export interface V8GraphManifest {
     createdAt: string;
     updatedAt: string;
     lastFullRebuildAt: string | null;
+    buildCount: number;
+    clusterDiagnosisCount: number;
+    lastClusterDiagnosisAt: string | null;
     legacyGraphMigrated: boolean;
 }
 
@@ -344,11 +347,29 @@ export interface V8ClusterRebuildRecord {
     clusterId: string;
     diagnosis: V8ClusterDiagnosis;
     sourceRefs: string[];
+    relatedMemoryRefs: string[];
     stage1SceneDraft: string;
     stage2RebuildDraft: string;
     rebuiltDraft: V8ClusterRebuildDraft;
+    secondCheckUsed: boolean;
     model: string;
     createdAt: string;
+}
+
+export interface V8ClusterRelatedMemorySnippet {
+    edgeId: string;
+    edgeType: V8EdgeType;
+    srcNodeId: string;
+    srcRole: V8NodeRole;
+    srcName: string;
+    srcText: string;
+    srcSourceRef: string;
+    dstNodeId: string;
+    dstRole: V8NodeRole;
+    dstName: string;
+    dstText: string;
+    dstSourceRef: string;
+    note: string;
 }
 
 export interface V8HardeningConfig {

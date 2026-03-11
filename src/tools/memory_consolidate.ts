@@ -17,6 +17,8 @@ import { postJson } from "../http-client.js";
 import { buildV8Graph } from "../v8/compiler.js";
 import { runOfflineBundleAnnotation } from "../v8/offline-annotator.js";
 import { runClusterRebuild } from "../v8/cluster-rebuilder.js";
+import { writeGraphManifest } from "../v8/manifest.js";
+import type { V8ClusterDiagnosis } from "../v8/types.js";
 import {
     diagnoseAssociativeClusters,
     selectRebuildCandidates,
@@ -83,6 +85,7 @@ interface ConsolidationReport {
     clusterRebuildDrafts: number;
     clusterRebuildSkipped: number;
     clusterRebuildModel: string | null;
+    clusterDiagnosisSkippedReason: string | null;
 }
 
 /**
@@ -151,6 +154,7 @@ export async function executeMemoryConsolidate(
         clusterRebuildDrafts: 0,
         clusterRebuildSkipped: 0,
         clusterRebuildModel: null,
+        clusterDiagnosisSkippedReason: null,
     };
 
     // --- 1. Collect event files based on scope ---
@@ -261,20 +265,57 @@ export async function executeMemoryConsolidate(
         report.v8GraphEdges = v8Graph.edges.length;
         report.explorationAddedEdges = v8Graph.explorationStats?.addedEdges ?? 0;
         report.explorationJitteredEdges = v8Graph.explorationStats?.jitteredEdges ?? 0;
-        const stableNodeIds = [
-            ...(v8Graph.hardCoreIndex.agent_identity_core || []),
-            ...(v8Graph.hardCoreIndex.inter_agent_protocol_core || []),
-        ];
-        const diagnoses = diagnoseAssociativeClusters(
-            {
-                nodes: v8Graph.nodes,
-                edges: v8Graph.edges,
-            },
-            stableNodeIds
+
+        const minBuildCount = Math.max(
+            1,
+            Number(pluginConfig?.v8ClusterDiagnosisMinBuildCount ?? 3)
         );
-        const clusterQueueRun = syncClusterDiagnosisQueue(workspace, diagnoses, new Date().toISOString());
-        report.clusterDiagnoses = clusterQueueRun.diagnoses;
-        report.clusterRebuildCandidates = clusterQueueRun.queued;
+        const minTotalHits = Math.max(
+            0,
+            Number(pluginConfig?.v8ClusterDiagnosisMinTotalHits ?? 4)
+        );
+        const cooldownMinutes = Math.max(
+            0,
+            Number(pluginConfig?.v8ClusterDiagnosisCooldownMinutes ?? 180)
+        );
+        const totalNodeHits = v8Graph.nodes.reduce((sum, node) => sum + node.hitCount, 0);
+        const buildCount = v8Graph.manifest.buildCount || 0;
+        const nowIso = new Date().toISOString();
+        const lastDiagnosisAt = v8Graph.manifest.lastClusterDiagnosisAt
+            ? Date.parse(v8Graph.manifest.lastClusterDiagnosisAt)
+            : NaN;
+        const cooldownMs = cooldownMinutes * 60 * 1000;
+        const inCooldown =
+            Number.isFinite(lastDiagnosisAt) &&
+            Date.now() - lastDiagnosisAt < cooldownMs;
+
+        let diagnoses: V8ClusterDiagnosis[] = [];
+        if (buildCount < minBuildCount) {
+            report.clusterDiagnosisSkippedReason = `waiting for graph build count (${buildCount}/${minBuildCount})`;
+        } else if (totalNodeHits < minTotalHits) {
+            report.clusterDiagnosisSkippedReason = `waiting for graph usage hits (${totalNodeHits}/${minTotalHits})`;
+        } else if (inCooldown) {
+            report.clusterDiagnosisSkippedReason = `diagnosis cooldown active (${cooldownMinutes} min)`;
+        } else {
+            const stableNodeIds = [
+                ...(v8Graph.hardCoreIndex.agent_identity_core || []),
+                ...(v8Graph.hardCoreIndex.inter_agent_protocol_core || []),
+            ];
+            diagnoses = diagnoseAssociativeClusters(
+                {
+                    nodes: v8Graph.nodes,
+                    edges: v8Graph.edges,
+                },
+                stableNodeIds
+            );
+            const clusterQueueRun = syncClusterDiagnosisQueue(workspace, diagnoses, nowIso);
+            report.clusterDiagnoses = clusterQueueRun.diagnoses;
+            report.clusterRebuildCandidates = clusterQueueRun.queued;
+            writeGraphManifest(workspace, {
+                clusterDiagnosisCount: (v8Graph.manifest.clusterDiagnosisCount || 0) + 1,
+                lastClusterDiagnosisAt: nowIso,
+            });
+        }
 
         const annotationRun = await runOfflineBundleAnnotation({
             workspace,
@@ -312,6 +353,9 @@ export async function executeMemoryConsolidate(
         `  Cluster Diagnosis: ${report.clusterDiagnoses} clusters checked, ${report.clusterRebuildCandidates} queued for rebuild`,
         `  Cluster Rebuild Drafts: ${report.clusterRebuildDrafts} new, ${report.clusterRebuildSkipped} skipped${report.clusterRebuildModel ? ` (${report.clusterRebuildModel})` : " (disabled or no model configured)"}`,
     ];
+    if (report.clusterDiagnosisSkippedReason) {
+        lines.push(`  Cluster Diagnosis Gate: skipped (${report.clusterDiagnosisSkippedReason})`);
+    }
 
     if (report.unconsolidated > 0) {
         lines.push(

@@ -1,5 +1,6 @@
 import type {
     V8ClusterDiagnosis,
+    V8ClusterRelatedMemorySnippet,
     V8MemoryBundle,
     V8MemoryEdge,
     V8MemoryNode,
@@ -15,6 +16,7 @@ export interface V8ClusterRebuildPromptInput {
     nodes: V8MemoryNode[];
     edges: V8MemoryEdge[];
     sourceSnippets: Array<{ sourceRef: string; text: string }>;
+    relatedMemorySnippets: V8ClusterRelatedMemorySnippet[];
 }
 
 export interface V8ClusterRebuildPromptMessages {
@@ -58,6 +60,29 @@ function renderSources(sourceSnippets: Array<{ sourceRef: string; text: string }
         .join("\n\n");
 }
 
+function renderRelatedMemorySnippets(
+    relatedMemorySnippets: V8ClusterRelatedMemorySnippet[]
+): string {
+    if (relatedMemorySnippets.length === 0) {
+        return "(none)";
+    }
+
+    const sections: string[] = [];
+    for (const item of relatedMemorySnippets) {
+        sections.push(
+            [
+                `## edge ${item.edgeId} (${item.edgeType})`,
+                `note: ${item.note}`,
+                `src: ${item.srcNodeId} [${item.srcRole}] ${item.srcName} @ ${item.srcSourceRef}`,
+                `src memory: ${sanitizeText(item.srcText, 300)}`,
+                `dst: ${item.dstNodeId} [${item.dstRole}] ${item.dstName} @ ${item.dstSourceRef}`,
+                `dst memory: ${sanitizeText(item.dstText, 300)}`,
+            ].join("\n")
+        );
+    }
+    return sections.join("\n\n");
+}
+
 export function buildClusterScenePrompt(
     input: V8ClusterRebuildPromptInput
 ): V8ClusterRebuildPromptMessages {
@@ -96,6 +121,9 @@ export function buildClusterScenePrompt(
             "",
             "Source snippets:",
             renderSources(input.sourceSnippets),
+            "",
+            "Edge-linked memory snippets for second check:",
+            renderRelatedMemorySnippets(input.relatedMemorySnippets),
             "",
             "Output only these sections:",
             "",
@@ -144,6 +172,9 @@ export function buildClusterRebuildPrompt(
             "Current nodes:",
             renderNodeTable(input.nodes, input.diagnosis),
             "",
+            "Edge-linked memory snippets for second check:",
+            renderRelatedMemorySnippets(input.relatedMemorySnippets),
+            "",
             "Output only these sections:",
             "",
             "# Preserve Nodes",
@@ -168,6 +199,67 @@ export function buildClusterRebuildPrompt(
             "",
             "# Rationale",
             "- why this rebuilt cluster is better for future recall",
+        ].join("\n"),
+    };
+}
+
+export function buildClusterRebuildSecondCheckPrompt(
+    input: V8ClusterRebuildPromptInput,
+    sceneDraft: string,
+    firstDraft: string
+): V8ClusterRebuildPromptMessages {
+    return {
+        system: [
+            "Job: second-check a potentially over-pruned local rebuild draft.",
+            "",
+            "Do not keep noisy hitchhikers, but do not delete useful memory only because it is hard to trigger in token flow.",
+            "Use edge-linked memory snippets to verify if latent reusable knowledge exists.",
+            "",
+            "Rules:",
+            "- Keep this local to the same cluster.",
+            "- If first draft dropped almost everything, re-check evidence/checkpoint/workflow value before confirming.",
+            "- If any reusable memory exists, output a sparse preserved/rebuilt structure.",
+            "- Use short markdown tables only.",
+        ].join("\n"),
+        user: [
+            "Second check required: first draft may have over-pruned this cluster.",
+            "",
+            "Stage 1 scene:",
+            '"""',
+            sanitizeText(sceneDraft, 12000),
+            '"""',
+            "",
+            "First rebuild draft:",
+            '"""',
+            sanitizeText(firstDraft, 12000),
+            '"""',
+            "",
+            "Current nodes:",
+            renderNodeTable(input.nodes, input.diagnosis),
+            "",
+            "Edge-linked memory snippets for second check:",
+            renderRelatedMemorySnippets(input.relatedMemorySnippets),
+            "",
+            "Output only these sections:",
+            "",
+            "# Preserve Nodes",
+            "| node id | keep reason |",
+            "| --- | --- |",
+            "",
+            "# Drop Nodes",
+            "| node id | drop reason |",
+            "| --- | --- |",
+            "",
+            "# Rebuilt Nodes",
+            "| zh name | en name | role | kind | text | summary |",
+            "| --- | --- | --- | --- | --- | --- |",
+            "",
+            "# Rebuilt Relations",
+            "| src node | src role | dst node | dst role | relation type | initial weight | why |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+            "",
+            "# Rationale",
+            "- explain what was retained after second check",
         ].join("\n"),
     };
 }

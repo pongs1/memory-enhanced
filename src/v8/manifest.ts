@@ -38,6 +38,19 @@ function normalizeManifest(
         createdAt,
         updatedAt: clampIsoString(value?.updatedAt, now) || now,
         lastFullRebuildAt: clampIsoString(value?.lastFullRebuildAt, null),
+        buildCount:
+            typeof value?.buildCount === "number" &&
+                Number.isFinite(value.buildCount) &&
+                value.buildCount >= 0
+                ? Math.trunc(value.buildCount)
+                : 0,
+        clusterDiagnosisCount:
+            typeof value?.clusterDiagnosisCount === "number" &&
+                Number.isFinite(value.clusterDiagnosisCount) &&
+                value.clusterDiagnosisCount >= 0
+                ? Math.trunc(value.clusterDiagnosisCount)
+                : 0,
+        lastClusterDiagnosisAt: clampIsoString(value?.lastClusterDiagnosisAt, null),
         legacyGraphMigrated: Boolean(value?.legacyGraphMigrated),
     };
 }
