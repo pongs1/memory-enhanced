@@ -24,7 +24,49 @@ export interface V8ClusterRebuildPromptMessages {
     user: string;
 }
 
-function renderNodeTable(nodes: V8MemoryNode[], diagnosis: V8ClusterDiagnosis): string {
+function renderClusterStructureSummary(
+    nodes: V8MemoryNode[],
+    edges: V8MemoryEdge[],
+    diagnosis: V8ClusterDiagnosis
+): string {
+    const roleCounts = new Map<string, number>();
+    const edgeTypeCounts = new Map<string, number>();
+    for (const node of nodes) {
+        roleCounts.set(node.role, (roleCounts.get(node.role) || 0) + 1);
+    }
+    for (const edge of edges) {
+        edgeTypeCounts.set(edge.type, (edgeTypeCounts.get(edge.type) || 0) + 1);
+    }
+
+    const roleSummary =
+        [...roleCounts.entries()].map(([role, count]) => `${role}=${count}`).join(", ") || "(none)";
+    const edgeTypeSummary =
+        [...edgeTypeCounts.entries()].map(([type, count]) => `${type}=${count}`).join(", ") || "(none)";
+
+    return [
+        `- node count: ${nodes.length}`,
+        `- edge count: ${edges.length}`,
+        `- hitchhiker candidates: ${diagnosis.hitchhikerNodeIds.length}`,
+        `- role distribution: ${roleSummary}`,
+        `- edge type distribution: ${edgeTypeSummary}`,
+    ].join("\n");
+}
+
+function renderStage1NodeIndex(nodes: V8MemoryNode[], diagnosis: V8ClusterDiagnosis): string {
+    const hitchhikers = new Set(diagnosis.hitchhikerNodeIds);
+    const lines = [
+        "| node id | role | source ref | hint |",
+        "| --- | --- | --- | --- |",
+    ];
+    for (const node of nodes) {
+        lines.push(
+            `| ${node.id} | ${node.role} | ${node.sourceRef} | ${hitchhikers.has(node.id) ? "possible hitchhiker" : ""} |`
+        );
+    }
+    return lines.join("\n");
+}
+
+function renderStage2NodeTable(nodes: V8MemoryNode[], diagnosis: V8ClusterDiagnosis): string {
     const hitchhikers = new Set(diagnosis.hitchhikerNodeIds);
     const lines = [
         "| node id | role | kind | source ref | hits | adopts | harms | hint |",
@@ -114,8 +156,11 @@ export function buildClusterScenePrompt(
             `- internal density: ${input.diagnosis.internalAssociativeDensity.toFixed(2)}`,
             `- reasons: ${input.diagnosis.reasons.join(" ; ") || "(none)"}`,
             "",
-            "Current cluster nodes:",
-            renderNodeTable(input.nodes, input.diagnosis),
+            "Cluster structure summary:",
+            renderClusterStructureSummary(input.nodes, input.edges, input.diagnosis),
+            "",
+            "Node index (id-level only, no node text):",
+            renderStage1NodeIndex(input.nodes, input.diagnosis),
             "",
             "Current associative edges inside the cluster:",
             renderEdgeTable(input.edges),
@@ -176,7 +221,7 @@ export function buildClusterRebuildPrompt(
             '"""',
             "",
             "Current nodes:",
-            renderNodeTable(input.nodes, input.diagnosis),
+            renderStage2NodeTable(input.nodes, input.diagnosis),
             "",
             "Edge-linked memory snippets for second check:",
             renderRelatedMemorySnippets(input.relatedMemorySnippets),
@@ -245,7 +290,7 @@ export function buildClusterRebuildSecondCheckPrompt(
             '"""',
             "",
             "Current nodes:",
-            renderNodeTable(input.nodes, input.diagnosis),
+            renderStage2NodeTable(input.nodes, input.diagnosis),
             "",
             "Edge-linked memory snippets for second check:",
             renderRelatedMemorySnippets(input.relatedMemorySnippets),
