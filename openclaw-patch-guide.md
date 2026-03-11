@@ -458,14 +458,15 @@ replace that one-shot call with this loop:
                 pendingLiveInterrupt !== null && isRunnerAbortError(err);
 
               if (resumeFromLiveInterrupt && liveInterruptResumeCount < maxLiveInterruptResumes) {
-                const interrupt = pendingLiveInterrupt;
+                const interruptReason =
+                  (pendingLiveInterrupt as unknown as { reason?: string } | null)?.reason;
                 pendingLiveInterrupt = null;
                 liveInterruptResumeCount += 1;
                 shouldResumeFromLiveInterrupt = true;
 
                 log.debug(
                   `live interrupt resume: runId=${params.runId} sessionId=${params.sessionId} ` +
-                    `reason=${interrupt?.reason ?? "unknown"} count=${liveInterruptResumeCount}`,
+                    `reason=${interruptReason ?? "unknown"} count=${liveInterruptResumeCount}`,
                 );
 
                 continue;
