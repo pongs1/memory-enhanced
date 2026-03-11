@@ -37,6 +37,7 @@ const WORKFLOW_PATTERNS = [
     /检查/,
     /验证/,
     /查找/,
+    /寻找/,
     /检索/,
     /搜索/,
 ];
@@ -100,6 +101,32 @@ const EVIDENCE_PATTERNS = [
     /文件/,
     /路径/,
 ];
+const PROMPT_NOISE_PATTERNS = [
+    /Memory Context \(Live\)/i,
+    /End Memory Context/i,
+    /Task Ledger/i,
+    /Working Memory Rule/i,
+    /Last User Request/i,
+    /Latest User Request/i,
+    /Project Goal/i,
+    /Current time:/i,
+    /HEARTBEAT_OK/i,
+    /Read HEARTBEAT\.md if it exists/i,
+];
+const EN_STOP_WORDS = new Set([
+    "the", "and", "for", "with", "from", "that", "this", "there", "here", "then", "than", "when", "where",
+    "what", "which", "into", "onto", "about", "just", "only", "also", "will", "would", "could", "should",
+    "have", "has", "had", "was", "were", "are", "is", "be", "been", "being", "you", "your", "our", "their",
+    "task", "goal", "active", "next", "deferred", "done", "request", "user", "assistant", "system",
+]);
+const ZH_NOISE_TOKENS = new Set([
+    "任务栈", "任务", "目标", "活跃", "下一个", "待办", "延期", "已完成", "用户请求", "最新请求", "系统", "助手",
+    "记忆上下文", "工作记忆", "心跳", "时间", "当前时间", "请继续", "继续",
+]);
+const GENERIC_ACTION_PHRASES = new Set([
+    "总结", "继续", "回复", "只回复", "在线吗", "查找", "检索", "搜索", "分析", "处理", "测试", "排查", "重构",
+    "summarize", "continue", "reply", "search", "find", "analyze", "process", "test", "debug", "refactor",
+]);
 
 function clamp01(value: number): number {
     return Math.max(0, Math.min(1, value));
@@ -115,14 +142,21 @@ function detectLanguage(text: string): "zh" | "en" | "mixed" | "unknown" {
 }
 
 function sanitizeMemoryText(text: string, maxChars = 320): string {
-    return (text || "")
+    const cleaned = (text || "")
+        .replace(/```[\s\S]*?```/g, " ")
+        .replace(/^[-*]\s*(?:Goal|Updated|Active|Next|Deferred|Done Recently|Last User Request|Latest User Request)\s*:.*$/gim, " ")
+        .replace(/^\|.+\|$/gm, " ")
+        .replace(/^[\u2500-\u257f┌┐└┘├┤│─]+.*$/gm, " ")
         .replace(/<!--[\s\S]*?-->/g, " ")
         .replace(/\b(?:User|Asst|Assistant|System)\s*:/gi, " ")
         .replace(/(?:用户|助手|系统)\s*：/g, " ")
         .replace(/\b(?:HEARTBEAT_OK|Read HEARTBEAT\.md if it exists)\b/gi, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, maxChars);
+        .replace(/\s+/g, " ");
+    const withoutNoise = PROMPT_NOISE_PATTERNS.reduce(
+        (acc, pattern) => acc.replace(pattern, " "),
+        cleaned
+    );
+    return withoutNoise.trim().slice(0, maxChars);
 }
 
 function extractDailyLogFragmentByEventId(markdown: string, eventId: string): string {
@@ -134,7 +168,7 @@ function extractDailyLogFragmentByEventId(markdown: string, eventId: string): st
         .map((section) => section.trim())
         .filter(Boolean);
     const matched = sections.find((section) => section.includes(marker));
-    return matched ? sanitizeMemoryText(matched, 4200) : "";
+    return matched || "";
 }
 
 function stripDailyLogScaffolding(text: string, eventId: string): string {
@@ -146,6 +180,38 @@ function stripDailyLogScaffolding(text: string, eventId: string): string {
             .replace(idPattern, " "),
         4000
     );
+}
+
+function extractLedgerHints(rawText: string): string[] {
+    const raw = rawText || "";
+    const candidates = [
+        raw.match(/(?:^|\n)\s*-\s*Last User Request\s*:\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*Active\s*:\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*Goal\s*:\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*最新用户请求\s*[:：]\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*活跃\s*[:：]\s*([^\n]+)/i)?.[1] || "",
+        raw.match(/(?:^|\n)\s*-\s*目标\s*[:：]\s*([^\n]+)/i)?.[1] || "",
+    ];
+    return candidates
+        .map((item) => sanitizeMemoryText(normalizeUserRequest(item, 260), 260))
+        .filter(Boolean);
+}
+
+function isNoisyIntent(value: string): boolean {
+    const text = sanitizeMemoryText(value, 260).toLowerCase();
+    if (!text) return true;
+    if (PROMPT_NOISE_PATTERNS.some((pattern) => pattern.test(text))) return true;
+    if (/(read heartbeat|heartbeat_ok|session resume|task ledger|working memory|existing active task|workspace context|follow it strictly|do not infer|prior chat|old tasks)/i.test(text)) return true;
+    if (/^(在线吗|继续|ok|好的|收到)$/i.test(text)) return true;
+    return false;
+}
+
+function resolvePrimaryIntent(rawCandidates: string[]): string {
+    const normalized = rawCandidates
+        .map((item) => sanitizeMemoryText(normalizeUserRequest(item, 320), 320))
+        .filter(Boolean);
+    const highSignal = normalized.find((item) => !isNoisyIntent(item));
+    return highSignal || normalized[0] || "";
 }
 
 function takeLeadingClause(text: string, maxChars = 96): string {
@@ -179,62 +245,160 @@ function extractConversationSlices(content: string): {
     assistantText: string;
 } {
     const raw = content || "";
-    const userText =
-        raw.match(/(?:^|\n)\s*(?:User|用户)\s*[:：]\s*([\s\S]*?)(?=\n\s*(?:Asst|Assistant|助手)\s*[:：]|$)/i)?.[1] ||
-        "";
-    const assistantText =
-        raw.match(/(?:^|\n)\s*(?:Asst|Assistant|助手)\s*[:：]\s*([\s\S]*)$/i)?.[1] || "";
+    const userMatches = [...raw.matchAll(/(?:^|\n)\s*(?:User|用户)\s*[:：]\s*([\s\S]*?)(?=\n\s*(?:User|用户|Asst|Assistant|助手)\s*[:：]|$)/gi)];
+    const assistantMatches = [...raw.matchAll(/(?:^|\n)\s*(?:Asst|Assistant|助手)\s*[:：]\s*([\s\S]*?)(?=\n\s*(?:User|用户|Asst|Assistant|助手)\s*[:：]|$)/gi)];
+    const userText = userMatches[userMatches.length - 1]?.[1] || "";
+    const assistantText = assistantMatches[assistantMatches.length - 1]?.[1] || "";
     return {
         userText: sanitizeMemoryText(userText, 420),
         assistantText: sanitizeMemoryText(assistantText, 420),
     };
 }
 
-function splitIntentPhrases(text: string, maxItems = 8): string[] {
-    const cleaned = sanitizeMemoryText(normalizeUserRequest(text, 420), 420);
+function normalizePhrase(value: string, maxChars = 48): string {
+    return sanitizeMemoryText(
+        value
+            .replace(/^[`"'“”‘’《》\[\](){}]+/, "")
+            .replace(/[`"'“”‘’《》\[\](){}]+$/, ""),
+        maxChars
+    );
+}
+
+function isNoisyPhrase(value: string): boolean {
+    if (!value) return true;
+    if (value.length < 2) return true;
+    if (/^[\d\s._-]+$/.test(value)) return true;
+    if (PROMPT_NOISE_PATTERNS.some((pattern) => pattern.test(value))) return true;
+    if (ZH_NOISE_TOKENS.has(value)) return true;
+    if (GENERIC_ACTION_PHRASES.has(value.toLowerCase())) return true;
+    const lower = value.toLowerCase();
+    if (EN_STOP_WORDS.has(lower)) return true;
+    if (/[┌┐└┘│]/.test(value)) return true;
+    return false;
+}
+
+function scorePhrase(value: string, sourceText: string, indexHint: number, typeHint: string): number {
+    if (!value) return -999;
+    const lowerValue = value.toLowerCase();
+    const lowerSource = sourceText.toLowerCase();
+    const rawFreq = lowerSource.split(lowerValue).length - 1;
+    const freq = rawFreq > 0 ? rawFreq : 1;
+    const position = lowerSource.indexOf(lowerValue);
+    const positionBoost = position >= 0 ? clamp01(1 - position / Math.max(1, lowerSource.length)) : 0.3;
+    const cjkLengthPenalty = /[\u4e00-\u9fff]/.test(value) && value.length > 14 ? 0.7 : 1;
+    const longPenalty = value.length > 28 ? 0.6 : 1;
+    const typeBoost =
+        typeHint === "path" ? 1.35 :
+            typeHint === "quoted" ? 1.2 :
+                typeHint === "action" ? 1.15 :
+                    typeHint === "segment" ? 1.05 : 1.0;
+    const domainBoost = /(pdf|srt|json|markdown|repo|github|deploy|patch|openclaw|focus|graph|rebuild|rollback|error|log|二重积分|字幕|部署|回滚|重构|检索|总结|路径)/i.test(value)
+        ? 1.2
+        : 1.0;
+    const orderPenalty = 1 - Math.min(0.45, indexHint * 0.06);
+    return freq * 1.5 * positionBoost * typeBoost * domainBoost * cjkLengthPenalty * longPenalty * orderPenalty;
+}
+
+function extractCorePhrases(text: string, maxItems = 8): string[] {
+    const cleaned = sanitizeMemoryText(normalizeUserRequest(text, 1200), 1200);
     if (!cleaned) return [];
-    const normalized = cleaned
-        .replace(/[，,。；;、\n]/g, "|")
-        .replace(/(?:并且|并|然后|再|同时|以及|且|并行|再去)/g, "|")
-        .replace(/\s{2,}/g, " ");
 
-    const chunks = normalized
-        .split("|")
-        .map((item) => sanitizeMemoryText(item, 72))
-        .filter((item) => item.length >= 2);
+    const candidates: Array<{ phrase: string; type: string; score: number }> = [];
+    const pushCandidate = (raw: string, type: string, indexHint: number) => {
+        const phrase = normalizePhrase(raw, 60);
+        if (isNoisyPhrase(phrase)) return;
+        const score = scorePhrase(phrase, cleaned, indexHint, type);
+        if (score <= 0) return;
+        candidates.push({ phrase, type, score });
+    };
 
-    const expandedChunks = chunks.flatMap((item) => {
-        if (item.length <= 24 || !/\s+/.test(item)) {
-            return [item];
-        }
-        return item
-            .split(/\s+/)
-            .map((part) => sanitizeMemoryText(part, 48))
-            .filter((part) => part.length >= 2);
-    });
-
-    const semanticHints = [
-        cleaned.match(/可视化系统开发|系统开发|可视化/)?.[0] || "",
-        cleaned.match(/张宇[^，。;\s]*?(?:三十讲|30讲)|基础三十讲|三十讲/)?.[0] || "",
-        cleaned.match(/二重积分/)?.[0] || "",
-        cleaned.match(/(?:上网|网上|网络|web)[^，。;\s]{0,8}(?:查找|检索|查询|搜索)|查找|检索|搜索/i)?.[0] || "",
-        cleaned.match(/详细总结|总结|不要省略|完整总结/)?.[0] || "",
-    ]
-        .map((item) => sanitizeMemoryText(item, 48))
-        .filter(Boolean);
-
-    const mergedBase = expandedChunks.length > 0 ? expandedChunks : chunks;
-    const merged = [...mergedBase, ...semanticHints];
-    const seen = new Set<string>();
-    const output: string[] = [];
-    for (const item of merged) {
-        const key = item.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        output.push(item);
-        if (output.length >= maxItems) break;
+    let idx = 0;
+    for (const match of cleaned.matchAll(/[“"《](.{2,50}?)[”"》]/g)) {
+        pushCandidate(match[1], "quoted", idx++);
     }
-    return output;
+    for (const match of cleaned.matchAll(/(?:[A-Za-z]:[\\/][^\s,，。；;]+|\/(?:mnt|home|var|etc|usr|opt|tmp|data|workspace|downloads)[^\s,，。；;]+)/gi)) {
+        pushCandidate(match[0], "path", idx++);
+    }
+    for (const match of cleaned.matchAll(/(?:查找|寻找|检索|搜索|总结|部署|修复|回滚|更新|测试|排查|重构|阅读|提取|分析|学习|复盘)(?:[^，。；;\n]{0,16})/g)) {
+        pushCandidate(match[0], "action", idx++);
+    }
+    for (const match of cleaned.matchAll(/[^\s，。；;\n]{1,20}(?:文件|目录|路径|仓库|项目|系统|模块|日志|字幕|积分|教程|数据库|接口|模型|图谱)/g)) {
+        pushCandidate(match[0], "segment", idx++);
+    }
+    for (const match of cleaned.matchAll(/(?:search|find|summarize|deploy|fix|rollback|update|test|debug|refactor|read|extract|analy[sz]e)\s+[a-z0-9/_-]+(?:\s+[a-z0-9/_-]+){0,2}/ig)) {
+        pushCandidate(match[0], "action", idx++);
+    }
+
+    const segments = cleaned
+        .split(/[，,。；;、\n]/)
+        .map((item) => sanitizeMemoryText(item, 60))
+        .filter((item) => item.length >= 2);
+    for (const segment of segments) {
+        if (/[\u4e00-\u9fff]/.test(segment) && segment.length <= 20) {
+            pushCandidate(segment, "segment", idx++);
+        } else if (/\b[a-z]{3,}\b/i.test(segment) && segment.split(/\s+/).length <= 5) {
+            pushCandidate(segment, "segment", idx++);
+        }
+    }
+
+    const merged = new Map<string, { phrase: string; score: number }>();
+    for (const item of candidates) {
+        const key = item.phrase.toLowerCase();
+        const current = merged.get(key);
+        if (!current || item.score > current.score) {
+            merged.set(key, { phrase: item.phrase, score: item.score });
+        }
+    }
+    const ranked = [...merged.values()].sort((a, b) => b.score - a.score);
+    const selected: string[] = [];
+    for (const item of ranked) {
+        const phrase = item.phrase;
+        if (selected.some((existing) => existing.includes(phrase) || phrase.includes(existing))) {
+            continue;
+        }
+        selected.push(phrase);
+        if (selected.length >= maxItems) break;
+    }
+    return selected;
+}
+
+function extractAssistantEvidence(text: string): string {
+    if (!text) return "";
+    const cleaned = sanitizeMemoryText(text, 1200);
+    if (!cleaned) return "";
+    const signals = [
+        ...(cleaned.match(/(?:[A-Za-z]:[\\/][^\s,，。；;`]+|\/(?:mnt|home|var|etc|usr|opt|tmp|data|workspace|downloads)[^\s,，。；;`]+)/gi) || []),
+        ...(cleaned.match(/(?:error|invalid|not found|timeout|failed|disconnected|报错|失败|不可用|断连|超时|根因|路径)[^，。；;\n]{0,40}/gi) || []),
+        ...(cleaned.match(/[^\s,，。；;\n]{1,40}\.(?:pdf|md|json|jsonl|srt|log|ts|js|py)\b/gi) || []),
+    ]
+        .map((item) => normalizePhrase(item, 80))
+        .filter((item) => !isNoisyPhrase(item));
+
+    const deduped = [...new Set(signals)];
+    if (deduped.length > 0) {
+        return sanitizeMemoryText(deduped.slice(0, 4).join(" ; "), 220);
+    }
+    const fallback = sanitizeMemoryText(takeLeadingClause(cleaned, 220), 220);
+    return isNoisyIntent(fallback) ? "" : fallback;
+}
+
+function isLowSignalAutoRecordedEvent(
+    event: MemoryEvent,
+    userIntentText: string,
+    assistantEvidenceText: string,
+    sourceText: string
+): boolean {
+    const tagSet = new Set((event.tags || []).map((tag) => tag.toLowerCase()));
+    if (!tagSet.has("auto-recorded")) return false;
+
+    const signalText = `${userIntentText} ${assistantEvidenceText}`;
+    const hasStrongSignal = /(?:[A-Za-z]:[\\/]|\/(?:mnt|home|var|etc|usr|opt|tmp|data|workspace|downloads)\/|error|failed|invalid|timeout|报错|失败|不可用|断连|路径|部署|修复|回滚|测试|重构|二重积分|字幕|仓库|repo|github)/i.test(signalText);
+    const hasInjectedNoise =
+        PROMPT_NOISE_PATTERNS.some((pattern) => pattern.test(sourceText)) ||
+        /\b(?:Goal|Active|Next|Deferred|Last User Request|Latest User Request)\b/i.test(sourceText) ||
+        /(?:任务栈|焦点栈|工作记忆|记忆上下文)/.test(sourceText);
+
+    return !hasStrongSignal && (hasInjectedNoise || sanitizeMemoryText(userIntentText, 240).length < 18);
 }
 
 function pickRolePhrase(
@@ -386,8 +550,23 @@ function buildRoleText(
 ): string {
     const userFallback = sanitizeMemoryText(userIntentText || normalizedContent, 180) || title;
     switch (role) {
-        case "topic":
+        case "topic": {
+            const nonCommand = intentPhrases.filter((phrase) =>
+                !/^(停止|不要|改为|改成|只回复|回复|继续|先)/.test(phrase) &&
+                !/^\d+(?:[./-]|$)/.test(phrase) &&
+                !/\.(?:srt|pdf|md|json|jsonl|log|ts|js|py)\b/i.test(phrase)
+            );
+            const scoped = nonCommand.filter((phrase) =>
+                /(?:文件|目录|路径|仓库|项目|系统|课程|字幕|积分|pdf|日志|网关|部署|数据库|接口|模型|graph|repo)/i.test(phrase)
+            );
+            if (scoped.length > 0) {
+                return [...scoped].sort((a, b) => b.length - a.length)[0];
+            }
+            if (nonCommand.length > 0) {
+                return [...nonCommand].sort((a, b) => b.length - a.length)[0];
+            }
             return pickRolePhrase("topic", intentPhrases, title);
+        }
         case "workflow":
             return pickRolePhrase("workflow", intentPhrases, takeLeadingClause(userFallback, 180) || title);
         case "constraint":
@@ -495,18 +674,25 @@ export function compileEventToBundle(
 ): CompileEventOutput {
     const { event, workspace } = input;
     const sourceText = resolveEventSourceText(workspace, event);
-    const conversationSlices = extractConversationSlices(sourceText);
-    const userIntentText =
-        sanitizeMemoryText(
-            normalizeUserRequest(conversationSlices.userText || sourceText || event.content, 320),
-            320
-        ) || sanitizeMemoryText(sourceText || event.content, 320);
-    const assistantEvidenceText = sanitizeMemoryText(conversationSlices.assistantText, 320);
+    const sourceConversation = extractConversationSlices(sourceText);
+    const eventConversation = extractConversationSlices(event.content || "");
+    const conversationUserText = eventConversation.userText || sourceConversation.userText;
+    const conversationAssistantText = eventConversation.assistantText || sourceConversation.assistantText;
+    const ledgerHints = extractLedgerHints(`${event.content}\n${sourceText}`);
+    const userIntentText = resolvePrimaryIntent([
+        conversationUserText,
+        ...ledgerHints,
+        sourceText,
+        event.content,
+    ]);
+    const assistantEvidenceText = extractAssistantEvidence(
+        conversationAssistantText || sourceText
+    );
     const normalizedContent = sanitizeMemoryText(
         `${userIntentText} ${assistantEvidenceText}`.trim(),
         320
     );
-    const intentPhrases = splitIntentPhrases(userIntentText, 10);
+    const intentPhrases = extractCorePhrases(userIntentText, 10);
     const title = buildBundleTitle(
         event,
         userIntentText || normalizedContent,
@@ -536,8 +722,17 @@ export function compileEventToBundle(
         updatedAt: now,
     };
 
+    const lowSignalAutoRecorded = isLowSignalAutoRecordedEvent(
+        event,
+        userIntentText,
+        assistantEvidenceText,
+        sourceText
+    );
+
     const roles: V8NodeRole[] = ["topic"];
-    const orderedOptionalRoles: V8NodeRole[] = [
+    const orderedOptionalRoles: V8NodeRole[] = lowSignalAutoRecorded
+        ? ["evidence"]
+        : [
         "workflow",
         "constraint",
         "condition",
@@ -551,25 +746,59 @@ export function compileEventToBundle(
         }
     }
 
-    if (roles.length === 1) {
+    if (roles.length === 1 && !lowSignalAutoRecorded) {
+        roles.push("evidence");
+    } else if (
+        roles.length === 1 &&
+        lowSignalAutoRecorded &&
+        assistantEvidenceText &&
+        assistantEvidenceText !== userIntentText
+    ) {
         roles.push("evidence");
     }
 
-    const uniqueRoles = Array.from(new Set(roles)).slice(0, 6);
-    const nodes = uniqueRoles.map((role) =>
+    const uniqueRoles = Array.from(new Set(roles)).slice(0, lowSignalAutoRecorded ? 3 : 6);
+    const roleTexts = new Map<V8NodeRole, string>();
+    for (const role of uniqueRoles) {
+        const drafted = buildRoleText(
+            role,
+            event,
+            title,
+            normalizedContent,
+            userIntentText,
+            assistantEvidenceText,
+            intentPhrases
+        );
+        const normalized = sanitizeMemoryText(drafted, role === "evidence" ? 220 : 180);
+        if (!normalized) continue;
+        roleTexts.set(role, normalized);
+    }
+    const fallbackTopic = sanitizeMemoryText(userIntentText || title, 180) || title;
+    const topicCandidates = extractCorePhrases(userIntentText || fallbackTopic, 6);
+    const topicFromCandidates = topicCandidates.find(
+        (item) => !/^(只回复|回复|在线吗|继续|ok|好的|收到)/i.test(item)
+    ) || "";
+    const initialTopic = roleTexts.get("topic") || fallbackTopic;
+    const topicText = /^(只回复|回复|在线吗|继续|ok|好的|收到)/i.test(initialTopic)
+        ? (topicFromCandidates || fallbackTopic)
+        : initialTopic;
+    roleTexts.set("topic", topicText);
+
+    const filteredRoles = uniqueRoles.filter((role) => {
+        const text = roleTexts.get(role);
+        if (!text) return false;
+        if (role !== "topic" && text === topicText) return false;
+        if (/^(只回复|回复|在线吗|继续|ok|好的|收到)/i.test(text)) return false;
+        if (role === "checkpoint" && /^(继续|总结|resume|continue|停止|不要|改为|改成)/i.test(text)) return false;
+        return true;
+    });
+
+    const nodes = filteredRoles.map((role) =>
         buildNode(
             event,
             bundle,
             role,
-            buildRoleText(
-                role,
-                event,
-                title,
-                normalizedContent,
-                userIntentText,
-                assistantEvidenceText,
-                intentPhrases
-            ),
+            roleTexts.get(role) || fallbackTopic,
             sourceText,
             language,
             dayKey,

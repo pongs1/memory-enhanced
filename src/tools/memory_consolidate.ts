@@ -90,6 +90,7 @@ interface ConsolidationReport {
     clusterDiagnosisSkippedReason: string | null;
     clusterRebuildAppliedClusters: number;
     clusterRebuildSnapshotDir: string | null;
+    clusterRebuildSnapshotsPruned: number;
 }
 
 /**
@@ -161,6 +162,7 @@ export async function executeMemoryConsolidate(
         clusterDiagnosisSkippedReason: null,
         clusterRebuildAppliedClusters: 0,
         clusterRebuildSnapshotDir: null,
+        clusterRebuildSnapshotsPruned: 0,
     };
 
     // --- 1. Collect event files based on scope ---
@@ -357,10 +359,13 @@ export async function executeMemoryConsolidate(
             if (keepBoth) {
                 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
                 const gp = graphPaths(workspace);
-                const snapshotRoot = path.join(
+                const snapshotsDir = path.join(
                     workspace,
                     ".memory",
-                    "graph_snapshots",
+                    "graph_snapshots"
+                );
+                const snapshotRoot = path.join(
+                    snapshotsDir,
                     `rebuild_${stamp}`
                 );
                 const preDir = path.join(snapshotRoot, "pre_rebuild");
@@ -372,6 +377,14 @@ export async function executeMemoryConsolidate(
                 fs.cpSync(gp.graphDir, preDir, { recursive: true });
                 writeGraphSnapshotDir(postDir, materialized.graph);
                 report.clusterRebuildSnapshotDir = snapshotRoot;
+                const keepCount = Math.max(
+                    1,
+                    Number(process.env.MEMORY_CLUSTER_REBUILD_SNAPSHOT_KEEP || 2)
+                );
+                report.clusterRebuildSnapshotsPruned = pruneRebuildSnapshots(
+                    snapshotsDir,
+                    keepCount
+                );
             }
 
             if (applyRebuiltGraph) {
@@ -406,6 +419,7 @@ export async function executeMemoryConsolidate(
     }
     if (report.clusterRebuildSnapshotDir) {
         lines.push(`  Cluster Rebuild Snapshots: ${report.clusterRebuildSnapshotDir}`);
+        lines.push(`  Cluster Rebuild Snapshot Retention: pruned ${report.clusterRebuildSnapshotsPruned}, keep latest ${Math.max(1, Number(process.env.MEMORY_CLUSTER_REBUILD_SNAPSHOT_KEEP || 2))}`);
     }
     if (report.clusterDiagnosisSkippedReason) {
         lines.push(`  Cluster Diagnosis Gate: skipped (${report.clusterDiagnosisSkippedReason})`);
@@ -466,6 +480,26 @@ function getJsonlFiles(
 
     // scope === "full"
     return allFiles;
+}
+
+function pruneRebuildSnapshots(rootDir: string, keepCount: number): number {
+    if (!fs.existsSync(rootDir)) return 0;
+    const dirs = fs
+        .readdirSync(rootDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && /^rebuild_\d{4}-\d{2}-\d{2}T/.test(entry.name))
+        .map((entry) => entry.name)
+        .sort((a, b) => b.localeCompare(a));
+
+    if (dirs.length <= keepCount) {
+        return 0;
+    }
+
+    let pruned = 0;
+    for (const stale of dirs.slice(keepCount)) {
+        fs.rmSync(path.join(rootDir, stale), { recursive: true, force: true });
+        pruned += 1;
+    }
+    return pruned;
 }
 
 function generateMemoryIndex(knowledgeDir: string): string {
