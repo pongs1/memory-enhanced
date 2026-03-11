@@ -1,5 +1,7 @@
 import {
     normalizeUserRequest,
+    paths,
+    readFileOr,
     summarizeUserRequestForTask,
     type MemoryEvent,
 } from "../utils.js";
@@ -121,6 +123,29 @@ function sanitizeMemoryText(text: string, maxChars = 320): string {
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, maxChars);
+}
+
+function extractDailyLogFragmentByEventId(markdown: string, eventId: string): string {
+    const normalized = (markdown || "").replace(/\r/g, "").trim();
+    if (!normalized) return "";
+    const marker = `ID: ${eventId}`;
+    const sections = normalized
+        .split(/\n(?=###\s)/)
+        .map((section) => section.trim())
+        .filter(Boolean);
+    const matched = sections.find((section) => section.includes(marker));
+    return matched ? sanitizeMemoryText(matched, 4200) : "";
+}
+
+function stripDailyLogScaffolding(text: string, eventId: string): string {
+    if (!text) return "";
+    const idPattern = new RegExp(`^.*\\bID:\\s*${eventId}\\b.*$`, "im");
+    return sanitizeMemoryText(
+        text
+            .replace(/^###\s.*$/im, " ")
+            .replace(idPattern, " "),
+        4000
+    );
 }
 
 function takeLeadingClause(text: string, maxChars = 96): string {
@@ -277,6 +302,18 @@ function deriveDayKey(event: MemoryEvent): string | null {
     return `${idMatch[1]}-${idMatch[2]}-${idMatch[3]}`;
 }
 
+function resolveEventSourceText(workspace: string, event: MemoryEvent): string {
+    const dayKey = deriveDayKey(event);
+    if (!dayKey) {
+        return event.content || "";
+    }
+    const dailyLogPath = paths(workspace).dailyLog(dayKey);
+    const dailyLogContent = readFileOr(dailyLogPath);
+    const dailyLogFragment = extractDailyLogFragmentByEventId(dailyLogContent, event.id);
+    const cleaned = stripDailyLogScaffolding(dailyLogFragment, event.id);
+    return cleaned || dailyLogFragment || event.content || "";
+}
+
 function deriveEpisodeKey(
     event: MemoryEvent,
     title: string,
@@ -372,6 +409,7 @@ function buildNode(
     bundle: V8MemoryBundle,
     role: V8NodeRole,
     text: string,
+    sourceSeedText: string,
     language: V8MemoryNode["language"],
     dayKey: string | null,
     episodeKey: string | null
@@ -388,7 +426,7 @@ function buildNode(
     const normalizedText = sanitizeMemoryText(text, role === "evidence" ? 220 : 180);
     const bilingual = deriveBilingualNodeNames(normalizedText, [
         bundle.title,
-        sanitizeMemoryText(event.content, 220),
+        sanitizeMemoryText(sourceSeedText || event.content, 220),
         ...event.tags.filter((tag) => !/^(auto-recorded|semantic-candidate)$/i.test(tag)),
         ...event.associations,
     ]);
@@ -455,13 +493,14 @@ function buildEdge(
 export function compileEventToBundle(
     input: CompileEventInput
 ): CompileEventOutput {
-    const { event } = input;
-    const conversationSlices = extractConversationSlices(event.content);
+    const { event, workspace } = input;
+    const sourceText = resolveEventSourceText(workspace, event);
+    const conversationSlices = extractConversationSlices(sourceText);
     const userIntentText =
         sanitizeMemoryText(
-            normalizeUserRequest(conversationSlices.userText || event.content, 320),
+            normalizeUserRequest(conversationSlices.userText || sourceText || event.content, 320),
             320
-        ) || sanitizeMemoryText(event.content, 320);
+        ) || sanitizeMemoryText(sourceText || event.content, 320);
     const assistantEvidenceText = sanitizeMemoryText(conversationSlices.assistantText, 320);
     const normalizedContent = sanitizeMemoryText(
         `${userIntentText} ${assistantEvidenceText}`.trim(),
@@ -531,6 +570,7 @@ export function compileEventToBundle(
                 assistantEvidenceText,
                 intentPhrases
             ),
+            sourceText,
             language,
             dayKey,
             episodeKey

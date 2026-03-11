@@ -134,6 +134,27 @@ function findEventById(workspace: string, eventId: string): MemoryEvent | null {
     return null;
 }
 
+function deriveEventDayKey(event: MemoryEvent): string | null {
+    if (event.timestamp && /^\d{4}-\d{2}-\d{2}/.test(event.timestamp)) {
+        return event.timestamp.slice(0, 10);
+    }
+    const idMatch = event.id.match(/^evt_(\d{4})(\d{2})(\d{2})_/);
+    if (!idMatch) return null;
+    return `${idMatch[1]}-${idMatch[2]}-${idMatch[3]}`;
+}
+
+function extractDailyLogFragmentByEventId(markdown: string, eventId: string): string {
+    const normalized = (markdown || "").replace(/\r/g, "").trim();
+    if (!normalized) return "";
+    const marker = `ID: ${eventId}`;
+    const sections = normalized
+        .split(/\n(?=###\s)/)
+        .map((section) => section.trim())
+        .filter(Boolean);
+    const matched = sections.find((section) => section.includes(marker));
+    return matched ? sanitizeText(matched, 3600) : "";
+}
+
 function formatEventSourceText(event: MemoryEvent): string {
     const lines = [
         `Event ID: ${event.id}`,
@@ -152,10 +173,32 @@ function formatEventSourceText(event: MemoryEvent): string {
     return lines.join("\n");
 }
 
+function formatEventSourceTextWithDailyLog(workspace: string, event: MemoryEvent): string {
+    const dayKey = deriveEventDayKey(event);
+    if (!dayKey) {
+        return formatEventSourceText(event);
+    }
+    const dailyLogPath = paths(workspace).dailyLog(dayKey);
+    const dailyLogFragment = extractDailyLogFragmentByEventId(readFileOr(dailyLogPath), event.id);
+    if (!dailyLogFragment) {
+        return formatEventSourceText(event);
+    }
+    const lines = [
+        `Event ID: ${event.id}`,
+        `Type: ${event.type}`,
+        `Timestamp: ${event.timestamp}`,
+        `Importance: ${event.importance}`,
+        `Daily Log Ref: memory/${dayKey}.md`,
+        "",
+        dailyLogFragment,
+    ];
+    return lines.join("\n");
+}
+
 function loadBundleSourceText(workspace: string, bundle: V8MemoryBundle): string {
     if (bundle.sourceType === "event") {
         const event = findEventById(workspace, bundle.sourceRef);
-        return event ? formatEventSourceText(event) : "";
+        return event ? formatEventSourceTextWithDailyLog(workspace, event) : "";
     }
 
     const filePath = path.join(workspace, bundle.sourceRef);
