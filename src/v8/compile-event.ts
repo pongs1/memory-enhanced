@@ -180,6 +180,38 @@ const INTENT_DOMAIN_PATTERNS = [
     /\bpath\b/i,
     /\berror\b/i,
 ];
+const OBJECT_ANCHOR_PATTERNS = [
+    /字幕文件?/,
+    /二重积分/,
+    /张宇(?:基础)?三十讲(?:第[一二三四五六七八九十\d]+讲)?/,
+    /部署手册|deployment guide/i,
+    /网关断连|gateway disconnected/i,
+    /可视化系统开发|可视化系统/,
+    /focus/i,
+    /stack/i,
+    /图谱|图网|节点|记忆系统/,
+    /仓库|repo/i,
+    /模型|api|接口/i,
+];
+const DATA_ANCHOR_PATTERNS = [
+    /[A-Za-z]:[\\/][^\s,，。；;]+/,
+    /\/(?:mnt|home|var|etc|usr|opt|tmp|data|workspace|downloads)[^\s,，。；;]*/i,
+    /[^\s,，。；;\n]{1,40}\.(?:pdf|md|json|jsonl|srt|log|ts|js|py)\b/i,
+    /evt_\d{8}_\d+/i,
+    /\b\d{4}-\d{2}-\d{2}\b/,
+    /第[一二三四五六七八九十\d]+讲/,
+];
+const LOCATION_ANCHOR_PATTERNS = [
+    /下载目录/,
+    /downloads/i,
+    /workspace/i,
+    /仓库/,
+    /目录/,
+    /路径/,
+    /位置/,
+    /D盘|C盘|E盘/,
+    /\/mnt\/[a-z]/i,
+];
 const INTENT_NOISE_PATTERNS = [
     /latest message is authoritative/i,
     /obey now first/i,
@@ -402,6 +434,25 @@ function normalizePhrase(value: string, maxChars = 48): string {
     );
 }
 
+function collectRegexMatches(text: string, pattern: RegExp, maxMatches = 8): string[] {
+    if (!text || maxMatches <= 0) return [];
+    const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+    const globalPattern = new RegExp(pattern.source, flags);
+    const out: string[] = [];
+    let match: RegExpExecArray | null = null;
+
+    while ((match = globalPattern.exec(text)) !== null) {
+        const value = match[0];
+        if (value) out.push(value);
+        if (out.length >= maxMatches) break;
+        if (match.index === globalPattern.lastIndex) {
+            globalPattern.lastIndex++;
+        }
+    }
+
+    return out;
+}
+
 function isNoisyPhrase(value: string): boolean {
     if (!value) return true;
     if (value.length < 2) return true;
@@ -432,8 +483,11 @@ function scorePhrase(value: string, sourceText: string, indexHint: number, typeH
             typeHint === "quoted" ? 1.2 :
                 typeHint === "action" ? 1.15 :
                     typeHint === "semantic" ? 1.25 :
+                        typeHint === "object" ? 1.32 :
+                            typeHint === "data" ? 1.34 :
+                                typeHint === "location" ? 1.3 :
                     typeHint === "segment" ? 1.05 : 1.0;
-    const domainBoost = /(pdf|srt|json|markdown|repo|github|deploy|patch|openclaw|focus|graph|rebuild|rollback|error|log|二重积分|字幕|部署|回滚|重构|检索|总结|路径)/i.test(value)
+    const domainBoost = /(pdf|srt|json|markdown|repo|github|deploy|patch|openclaw|focus|graph|rebuild|rollback|error|log|二重积分|字幕|部署|回滚|重构|检索|总结|路径|下载目录|workspace|第[一二三四五六七八九十\d]+讲)/i.test(value)
         ? 1.2
         : 1.0;
     const orderPenalty = 1 - Math.min(0.45, indexHint * 0.06);
@@ -582,6 +636,52 @@ function decomposeTaskPhrases(text: string): string[] {
     return deduped;
 }
 
+type SemanticAnchors = {
+    actions: string[];
+    objects: string[];
+    data: string[];
+    locations: string[];
+};
+
+function extractSemanticAnchors(text: string): SemanticAnchors {
+    const cleaned = sanitizeMemoryText(normalizeUserRequest(text, 1200), 1200);
+    const actions = decomposeTaskPhrases(cleaned).filter((phrase) =>
+        /(?:查找|寻找|检索|搜索|上网查找|总结|部署|修复|回滚|更新|测试|排查|重构|阅读|提取|分析)/.test(phrase)
+    );
+
+    const collect = (patterns: RegExp[], maxItems = 8): string[] => {
+        const out: string[] = [];
+        for (const pattern of patterns) {
+            const matches = collectRegexMatches(cleaned, pattern, maxItems);
+            for (const raw of matches) {
+                const phrase = normalizePhrase(raw, 64);
+                if (!phrase || isNoisyPhrase(phrase)) continue;
+                out.push(phrase);
+                if (out.length >= maxItems) break;
+            }
+            if (out.length >= maxItems) break;
+        }
+        const deduped: string[] = [];
+        for (const item of out) {
+            if (deduped.some((value) => value === item || value.includes(item) || item.includes(value))) continue;
+            deduped.push(item);
+            if (deduped.length >= maxItems) break;
+        }
+        return deduped;
+    };
+
+    const objects = collect(OBJECT_ANCHOR_PATTERNS, 8);
+    const data = collect(DATA_ANCHOR_PATTERNS, 8);
+    const locations = collect(LOCATION_ANCHOR_PATTERNS, 6);
+
+    return {
+        actions,
+        objects,
+        data,
+        locations,
+    };
+}
+
 function extractCorePhrases(text: string, maxItems = 8): string[] {
     const cleaned = sanitizeMemoryText(normalizeUserRequest(text, 1200), 1200);
     if (!cleaned) return [];
@@ -611,8 +711,18 @@ function extractCorePhrases(text: string, maxItems = 8): string[] {
     for (const match of cleaned.matchAll(/(?:search|find|summarize|deploy|fix|rollback|update|test|debug|refactor|read|extract|analy[sz]e)\s+[a-z0-9/_-]+(?:\s+[a-z0-9/_-]+){0,2}/ig)) {
         pushCandidate(match[0], "action", idx++);
     }
+    const anchors = extractSemanticAnchors(cleaned);
     for (const phrase of decomposeTaskPhrases(cleaned)) {
         pushCandidate(phrase, "semantic", idx++);
+    }
+    for (const phrase of anchors.objects) {
+        pushCandidate(phrase, "object", idx++);
+    }
+    for (const phrase of anchors.data) {
+        pushCandidate(phrase, "data", idx++);
+    }
+    for (const phrase of anchors.locations) {
+        pushCandidate(phrase, "location", idx++);
     }
 
     const segments = cleaned
@@ -752,9 +862,19 @@ function extractKeywords(
     associations: string[],
     maxItems = 12
 ): string[] {
+    const anchors = extractSemanticAnchors(text);
     const englishWords = text.toLowerCase().match(/[a-z0-9_-]{3,}/g) || [];
     const cjkChunks = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
-    const raw = [...tags, ...englishWords, ...cjkChunks, ...associations];
+    const raw = [
+        ...tags,
+        ...anchors.actions,
+        ...englishWords,
+        ...cjkChunks,
+        ...associations,
+        ...anchors.objects,
+        ...anchors.data,
+        ...anchors.locations,
+    ];
     const seen = new Set<string>();
     const keywords: string[] = [];
 
@@ -871,6 +991,10 @@ function buildRoleText(
     intentPhrases: string[]
 ): string {
     const userFallback = sanitizeMemoryText(userIntentText || normalizedContent, 180) || title;
+    const semanticAnchorsUser = extractSemanticAnchors(userFallback);
+    const semanticAnchorsAll = extractSemanticAnchors(
+        `${userFallback} ${assistantEvidenceText || ""} ${normalizedContent || ""}`
+    );
     const compressWorkflowText = (value: string): string => {
         const text = normalizePhrase(value, 120);
         if (!text) return "";
@@ -917,6 +1041,15 @@ function buildRoleText(
                 !/^\d+(?:[./-]|$)/.test(phrase) &&
                 !/\.(?:srt|pdf|md|json|jsonl|log|ts|js|py)\b/i.test(phrase)
             );
+            const anchorTopic = [
+                ...semanticAnchorsUser.objects,
+                ...semanticAnchorsUser.locations,
+            ]
+                .map((item) => normalizeTopic(item))
+                .find(Boolean);
+            if (anchorTopic) {
+                return anchorTopic;
+            }
             const scoped = nonCommand.filter((phrase) =>
                 /(?:文件|目录|路径|仓库|项目|系统|课程|字幕|积分|pdf|日志|网关|部署|数据库|接口|模型|graph|repo)/i.test(phrase)
             );
@@ -933,6 +1066,13 @@ function buildRoleText(
             return pickRolePhrase("topic", intentPhrases, title);
         }
         case "workflow": {
+            const actionAnchor = semanticAnchorsUser.actions.find((item) =>
+                !/^(?:不要|不能|别|停止)/.test(item)
+            );
+            if (actionAnchor) {
+                const fromAnchor = compressWorkflowText(actionAnchor);
+                if (fromAnchor) return fromAnchor;
+            }
             const workflowShort = pickRolePhrase("workflow", intentPhrases, "");
             const compressedWorkflow = compressWorkflowText(workflowShort);
             if (compressedWorkflow && !/^(?:不要|不能|别|停止)/.test(compressedWorkflow)) {
@@ -952,8 +1092,37 @@ function buildRoleText(
         case "condition":
             return pickRolePhrase("condition", intentPhrases, "");
         case "evidence":
+            {
+                const structuredDataAnchors = semanticAnchorsAll.data.filter((item) =>
+                    /[\\/]/.test(item) ||
+                    /\.(?:pdf|md|json|jsonl|srt|log|ts|js|py)\b/i.test(item) ||
+                    /^evt_\d{8}_\d+$/i.test(item) ||
+                    /^\d{4}-\d{2}-\d{2}$/.test(item)
+                );
+                const anchorEvidence = [
+                    ...semanticAnchorsAll.locations,
+                    ...structuredDataAnchors,
+                ];
+                if (anchorEvidence.length > 0) {
+                    return sanitizeMemoryText(
+                        anchorEvidence.slice(0, 5).join(" ; "),
+                        220
+                    ) || pickRolePhrase("evidence", intentPhrases, userFallback);
+                }
+                const objectEvidence = semanticAnchorsAll.objects.filter((item) =>
+                    /(?:文件|目录|路径|仓库|项目|系统|字幕|积分|pdf|日志|网关|部署|数据库|接口|模型|graph|repo)/i.test(item)
+                );
+                if (objectEvidence.length > 0) {
+                    return sanitizeMemoryText(
+                        objectEvidence.slice(0, 3).join(" ; "),
+                        220
+                    ) || pickRolePhrase("evidence", intentPhrases, userFallback);
+                }
+            }
             return sanitizeMemoryText(
-                assistantEvidenceText || normalizedContent,
+                assistantEvidenceText ||
+                [...semanticAnchorsAll.data, ...semanticAnchorsAll.locations].join(" ; ") ||
+                normalizedContent,
                 220
             ) || pickRolePhrase("evidence", intentPhrases, userFallback);
         case "checkpoint":
