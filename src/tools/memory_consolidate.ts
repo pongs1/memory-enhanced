@@ -680,24 +680,58 @@ Format requirement:
 
     const userPrompt = `Here is the current memory corpus:\n${JSON.stringify(batchPayload, null, 2)}\n\nGenerate the structural edges as a raw JSON array. Do not wrap in markdown code blocks.`;
 
+    const extractContentText = (payload: any): string => {
+        const direct = payload?.choices?.[0]?.message?.content;
+        if (typeof direct === "string") {
+            return direct.trim();
+        }
+        if (Array.isArray(direct)) {
+            return direct
+                .map((part) => {
+                    if (typeof part === "string") return part;
+                    if (part && typeof part.text === "string") return part.text;
+                    return "";
+                })
+                .join("\n")
+                .trim();
+        }
+
+        const alt = payload?.output?.[0]?.content?.[0]?.text;
+        if (typeof alt === "string") {
+            return alt.trim();
+        }
+        return "";
+    };
+
+    const responseFormatEnabled =
+        /^(1|true|yes)$/i.test(process.env.MEMORY_ANNOTATION_RESPONSE_JSON_OBJECT || "");
+
     try {
         console.log(`[Memory V8] Sending ${corpus.length} nodes to ${model} for deep semantic wiring...`);
+        const body: Record<string, unknown> = {
+            model: model,
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt }
+            ],
+            temperature: 0.1,
+        };
+        if (responseFormatEnabled) {
+            body.response_format = { type: "json_object" };
+        }
+
         const data = await postJson({
             url: `${baseUrl.replace(/\/$/, "")}/chat/completions`,
             headers: {
                 "Authorization": `Bearer ${apiKey}`
             },
-            body: {
-                model: model,
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: userPrompt }
-                ],
-                temperature: 0.1,
-                response_format: { type: "json_object" } // if supported, else rely on prompt
-            },
+            body,
         });
-        let rawContent = data.choices[0].message.content.trim();
+        let rawContent = extractContentText(data);
+        if (!rawContent) {
+            console.warn("[Memory V8] Semantic wiring response had no readable content; skipping this round.");
+            return [];
+        }
 
         // Strip markdown blocks if the LLM ignored instructions
         if (rawContent.startsWith("\`\`\`json")) {

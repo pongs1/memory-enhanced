@@ -251,7 +251,14 @@ async function annotateBundle(
 ): Promise<V8OfflineAnnotationRecord | null> {
     const sourceText = sanitizeText(loadBundleSourceText(workspace, bundle), 16000);
     if (!sourceText) {
+        if (/^(1|true|yes)$/i.test(process.env.MEMORY_ANNOTATION_DEBUG_SOURCE || "")) {
+            console.warn(`[Memory V8] Annotation source empty for ${bundle.bundleId} (${bundle.sourceRef})`);
+        }
         return null;
+    }
+    if (/^(1|true|yes)$/i.test(process.env.MEMORY_ANNOTATION_DEBUG_SOURCE || "")) {
+        const preview = sanitizeText(sourceText, 280).replace(/\s+/g, " ");
+        console.log(`[Memory V8] Annotation source ready for ${bundle.bundleId}: ${preview}`);
     }
 
     const promptInput = {
@@ -276,6 +283,9 @@ async function annotateBundle(
     ]);
 
     if (!stage1SceneDraft) {
+        if (/^(1|true|yes)$/i.test(process.env.MEMORY_ANNOTATION_DEBUG_SOURCE || "")) {
+            console.warn(`[Memory V8] Stage1 annotation draft empty for ${bundle.bundleId}`);
+        }
         return null;
     }
 
@@ -289,6 +299,9 @@ async function annotateBundle(
     ]);
 
     if (!stage2RelationDraft) {
+        if (/^(1|true|yes)$/i.test(process.env.MEMORY_ANNOTATION_DEBUG_SOURCE || "")) {
+            console.warn(`[Memory V8] Stage2 annotation draft empty for ${bundle.bundleId}`);
+        }
         return null;
     }
 
