@@ -27,12 +27,12 @@ export interface V8ClusterRebuildPromptMessages {
 function renderNodeTable(nodes: V8MemoryNode[], diagnosis: V8ClusterDiagnosis): string {
     const hitchhikers = new Set(diagnosis.hitchhikerNodeIds);
     const lines = [
-        "| node id | role | zh name | en name | summary | hits | adopts | harms | hint |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| node id | role | kind | source ref | hits | adopts | harms | hint |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ];
     for (const node of nodes) {
         lines.push(
-            `| ${node.id} | ${node.role} | ${node.names.zh} | ${node.names.en} | ${sanitizeText(node.summary || node.text, 96)} | ${node.hitCount} | ${node.adoptCount} | ${node.harmCount} | ${hitchhikers.has(node.id) ? "possible hitchhiker" : ""} |`
+            `| ${node.id} | ${node.role} | ${node.kind} | ${node.sourceRef} | ${node.hitCount} | ${node.adoptCount} | ${node.harmCount} | ${hitchhikers.has(node.id) ? "possible hitchhiker" : ""} |`
         );
     }
     return lines.join("\n");
@@ -73,10 +73,10 @@ function renderRelatedMemorySnippets(
             [
                 `## edge ${item.edgeId} (${item.edgeType})`,
                 `note: ${item.note}`,
-                `src: ${item.srcNodeId} [${item.srcRole}] ${item.srcName} @ ${item.srcSourceRef}`,
-                `src memory: ${sanitizeText(item.srcText, 300)}`,
-                `dst: ${item.dstNodeId} [${item.dstRole}] ${item.dstName} @ ${item.dstSourceRef}`,
-                `dst memory: ${sanitizeText(item.dstText, 300)}`,
+                `src: ${item.srcNodeId} [${item.srcRole}] @ ${item.srcSourceRef}`,
+                `src evidence: ${sanitizeText(item.srcEvidence, 360)}`,
+                `dst: ${item.dstNodeId} [${item.dstRole}] @ ${item.dstSourceRef}`,
+                `dst evidence: ${sanitizeText(item.dstEvidence, 360)}`,
             ].join("\n")
         );
     }
@@ -98,6 +98,7 @@ export function buildClusterScenePrompt(
             "- Stable or core-like nodes should be preserved unless the evidence clearly says otherwise.",
             "- Lack of usage history alone is not proof that the memory should be deleted.",
             "- If the cluster contains factual or potentially reusable content, prefer a smaller sparse rebuild over full deletion.",
+            "- Propose only compact concept structure; avoid copying long phrases from one snippet as node names.",
             "- Use short markdown sections only.",
         ].join("\n"),
         user: [
@@ -124,6 +125,10 @@ export function buildClusterScenePrompt(
             "",
             "Edge-linked memory snippets for second check:",
             renderRelatedMemorySnippets(input.relatedMemorySnippets),
+            "",
+            "Rebuild granularity guideline:",
+            "- target around 3-6 rebuilt nodes for one cluster unless evidence is very sparse",
+            "- one node should represent one durable concept, not a long sentence",
             "",
             "Output only these sections:",
             "",
@@ -159,6 +164,7 @@ export function buildClusterRebuildPrompt(
             "- Do not treat zero-hit history as enough reason to erase factual memory.",
             "- If the source contains durable factual value, output at least 1 rebuilt node that preserves the useful part.",
             "- Complete deletion is a last resort for obvious noise or decorative junk only.",
+            "- Use naming that is concise and reusable; avoid copying a long source sentence as one node name.",
             "- Use short markdown tables only.",
         ].join("\n"),
         user: [
@@ -175,6 +181,10 @@ export function buildClusterRebuildPrompt(
             "Edge-linked memory snippets for second check:",
             renderRelatedMemorySnippets(input.relatedMemorySnippets),
             "",
+            "Rebuild granularity guideline:",
+            "- usually output 3-6 rebuilt nodes and 2-8 rebuilt relations",
+            "- if evidence is truly weak, you may output fewer",
+            "",
             "Output only these sections:",
             "",
             "# Preserve Nodes",
@@ -190,12 +200,12 @@ export function buildClusterRebuildPrompt(
             "# Rebuilt Nodes",
             "| zh name | en name | role | kind | text | summary |",
             "| --- | --- | --- | --- | --- | --- |",
-            "| 更新前清理核心 | pre-patch core cleanup | workflow | procedural | short node text | short summary |",
+            "| <concise zh name> | <concise en name> | topic/workflow/constraint/condition/evidence/checkpoint | episodic/semantic/procedural | short node text | short summary |",
             "",
             "# Rebuilt Relations",
             "| src node | src role | dst node | dst role | relation type | initial weight | why |",
             "| --- | --- | --- | --- | --- | --- | --- |",
-            "| 节点A | workflow | 节点B | condition | valid_when | 0.78 | short reason |",
+            "| <node zh/en name> | role | <node zh/en name> | role | edge type | 0.00-1.00 | short reason |",
             "",
             "# Rationale",
             "- why this rebuilt cluster is better for future recall",

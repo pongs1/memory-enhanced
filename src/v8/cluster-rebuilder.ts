@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { nowISO, readEvents, readFileOr, resolveWorkspace } from "../utils.js";
+import { nowISO, paths, readEvents, readFileOr, resolveWorkspace } from "../utils.js";
 import { postJson } from "../http-client.js";
 import { graphPaths } from "./paths.js";
 import {
@@ -104,13 +104,52 @@ function eventIdToJsonlPath(workspace: string, eventId: string): string | null {
     return path.join(workspace, ".memory", "events", `${match[1]}-${match[2]}-${match[3]}.jsonl`);
 }
 
+function eventIdToDayKey(eventId: string): string | null {
+    const match = eventId.match(/^evt_(\d{4})(\d{2})(\d{2})_/);
+    if (!match) return null;
+    return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
+function eventIdToDailyLogPath(workspace: string, eventId: string): string | null {
+    const dayKey = eventIdToDayKey(eventId);
+    if (!dayKey) return null;
+    return paths(workspace).dailyLog(dayKey);
+}
+
+function extractDailyLogFragmentByEventId(markdown: string, eventId: string): string {
+    const normalized = (markdown || "").replace(/\r/g, "").trim();
+    if (!normalized) return "";
+    const marker = `ID: ${eventId}`;
+    const sections = normalized
+        .split(/\n(?=###\s)/)
+        .map((section) => section.trim())
+        .filter(Boolean);
+    const matched = sections.find((section) => section.includes(marker));
+    return matched ? sanitizeText(matched, 2800) : "";
+}
+
 function loadEventSourceText(workspace: string, eventId: string): string {
     const jsonlPath = eventIdToJsonlPath(workspace, eventId);
-    if (!jsonlPath || !fs.existsSync(jsonlPath)) return "";
-    const event = readEvents(jsonlPath).find((item) => item.id === eventId);
+    const event = jsonlPath && fs.existsSync(jsonlPath)
+        ? readEvents(jsonlPath).find((item) => item.id === eventId)
+        : null;
+
+    const dailyLogPath = eventIdToDailyLogPath(workspace, eventId);
+    const dailyLogContent = dailyLogPath ? readFileOr(dailyLogPath) : "";
+    const dailyLogFragment = extractDailyLogFragmentByEventId(dailyLogContent, eventId);
+    if (dailyLogFragment) {
+        const dayKey = eventIdToDayKey(eventId);
+        return [
+            `Event Index: ${eventId}`,
+            dayKey ? `Daily Log: memory/${dayKey}.md` : "Daily Log: (unknown)",
+            "",
+            dailyLogFragment,
+        ].join("\n");
+    }
+
     if (!event) return "";
     const lines = [
-        `Event ID: ${event.id}`,
+        `Event Index: ${event.id}`,
         `Type: ${event.type}`,
         `Timestamp: ${event.timestamp}`,
         `Importance: ${event.importance}`,
@@ -224,8 +263,6 @@ function buildRelatedMemorySnippets(input: {
         const srcSourceRef = srcEntry?.sourceRef || item.src.sourceRef;
         const dstSourceRef = dstEntry?.sourceRef || item.dst.sourceRef;
 
-        const srcNodeText = sanitizeText(item.src.summary || item.src.text, 180);
-        const dstNodeText = sanitizeText(item.dst.summary || item.dst.text, 180);
         const srcMemory = getSourceText(srcSourceRef);
         const dstMemory = getSourceText(dstSourceRef);
 
@@ -234,13 +271,11 @@ function buildRelatedMemorySnippets(input: {
             edgeType: item.edge.type,
             srcNodeId: item.src.id,
             srcRole: item.src.role,
-            srcName: item.src.names.zh || item.src.names.en || item.src.id,
-            srcText: srcMemory ? `${srcNodeText}\n[Source]\n${srcMemory}` : srcNodeText,
+            srcEvidence: srcMemory || "source snippet unavailable",
             srcSourceRef,
             dstNodeId: item.dst.id,
             dstRole: item.dst.role,
-            dstName: item.dst.names.zh || item.dst.names.en || item.dst.id,
-            dstText: dstMemory ? `${dstNodeText}\n[Source]\n${dstMemory}` : dstNodeText,
+            dstEvidence: dstMemory || "source snippet unavailable",
             dstSourceRef,
             note: item.internal
                 ? "internal established edge"

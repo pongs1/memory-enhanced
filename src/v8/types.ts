@@ -361,13 +361,11 @@ export interface V8ClusterRelatedMemorySnippet {
     edgeType: V8EdgeType;
     srcNodeId: string;
     srcRole: V8NodeRole;
-    srcName: string;
-    srcText: string;
+    srcEvidence: string;
     srcSourceRef: string;
     dstNodeId: string;
     dstRole: V8NodeRole;
-    dstName: string;
-    dstText: string;
+    dstEvidence: string;
     dstSourceRef: string;
     note: string;
 }
