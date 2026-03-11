@@ -6,10 +6,9 @@
   <title>Memory Graph — V8 Neuro-Symbolic</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
 
-  <!-- Graphology + Sigma.js via CDN (WebGL renderer) -->
-  <script src="https://cdn.jsdelivr.net/npm/graphology@0.25.4/dist/graphology.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/sigma@3.0.0-beta.35/build/sigma.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/graphology-layout-forceatlas2@0.10.1/dist/graphology-layout-forceatlas2.min.js"></script>
+  <!-- Graphology + Sigma.js — served locally from ui/lib/ -->
+  <script src="/lib/graphology.umd.min.js"></script>
+  <script src="/lib/sigma.min.js"></script>
 
   <style>
     :root {
@@ -658,21 +657,68 @@ function buildGraphology(nodes, edges, layerFilter) {
   return g;
 }
 
+// Self-contained force-directed layout (no UMD bundle required)
+// Spring-repulsion algorithm — fast enough for < 2k nodes at 300 iterations
 function applyForceLayout(g, onDone) {
   const overlay = document.getElementById('layout-overlay');
   overlay.classList.remove('hidden');
 
-  // Run ForceAtlas2 synchronously for a fixed number of iterations
-  // (sufficient for < 1k nodes; fast)
-  ForceAtlas2 = graphologyLayoutForceAtlas2;
-  ForceAtlas2.assign(g, {
-    iterations: 200,
-    settings: {
-      gravity: 1,
-      scalingRatio: 2,
-      strongGravityMode: false,
-      linLogMode: false,
+  const nodes = g.nodes();
+  const edges = g.edges();
+  const n = nodes.length;
+  if (n === 0) { overlay.classList.add('hidden'); if (onDone) onDone(); return; }
+
+  // Initialise positions randomly in a circle
+  const pos = {};
+  nodes.forEach((id, i) => {
+    const angle = (2 * Math.PI * i) / n;
+    const r = 20 + Math.random() * 10;
+    pos[id] = { x: Math.cos(angle) * r, y: Math.sin(angle) * r, vx: 0, vy: 0 };
+  });
+
+  const ITER    = 300;
+  const REPULSE = 0.5;
+  const ATTRACT = 0.06;
+  const DAMP    = 0.88;
+  const GRAV    = 0.04;
+
+  for (let it = 0; it < ITER; it++) {
+    // Repulsion between all pairs (O(n²) — fine for <2k nodes)
+    for (let i = 0; i < nodes.length; i++) {
+      const a = pos[nodes[i]];
+      for (let j = i + 1; j < nodes.length; j++) {
+        const b = pos[nodes[j]];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist2 = Math.max(dx*dx + dy*dy, 0.01);
+        const force = REPULSE / dist2;
+        a.vx -= dx * force; a.vy -= dy * force;
+        b.vx += dx * force; b.vy += dy * force;
+      }
     }
+    // Spring attraction along edges
+    edges.forEach(eid => {
+      const src = g.source(eid), tgt = g.target(eid);
+      if (!pos[src] || !pos[tgt]) return;
+      const dx = pos[tgt].x - pos[src].x;
+      const dy = pos[tgt].y - pos[src].y;
+      pos[src].vx += dx * ATTRACT; pos[src].vy += dy * ATTRACT;
+      pos[tgt].vx -= dx * ATTRACT; pos[tgt].vy -= dy * ATTRACT;
+    });
+    // Gravity toward center + damping
+    nodes.forEach(id => {
+      const p = pos[id];
+      p.vx += -p.x * GRAV;
+      p.vy += -p.y * GRAV;
+      p.vx *= DAMP; p.vy *= DAMP;
+      p.x  += p.vx; p.y  += p.vy;
+    });
+  }
+
+  // Write final positions back to graphology
+  nodes.forEach(id => {
+    g.setNodeAttribute(id, 'x', pos[id].x);
+    g.setNodeAttribute(id, 'y', pos[id].y);
   });
 
   overlay.classList.add('hidden');

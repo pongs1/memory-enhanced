@@ -20,14 +20,18 @@ function resolveDataDir(workspace) {
 }
 
 function resolveSnapshotsDir(workspace) {
+  const real = path.join(workspace, ".memory", "graph", "snapshots");
+  if (fs.existsSync(real)) return real;
   return path.join(workspace, ".memory", "graph_snapshots");
 }
 
-// Try to detect workspace from env or walk up
+// Try to detect workspace: prefer known WSL path, then env, then walk up
 function detectWorkspace() {
+  const wslNeuro = "/home/pongs/.openclaw/workspace-neuro";
+  if (fs.existsSync(wslNeuro)) return wslNeuro;
   const env = process.env.WORKSPACE_DIR;
   if (env && fs.existsSync(env)) return env;
-  // Walk up from CWD looking for .memory dir
+  // Walk up from CWD
   let dir = process.cwd();
   for (let i = 0; i < 5; i++) {
     if (fs.existsSync(path.join(dir, ".memory"))) return dir;
@@ -87,47 +91,90 @@ const server = http.createServer((req, res) => {
   // ── API routes ──────────────────────────────────────────────
 
   if (pathname === "/api/graph") {
-    const manifest = JSON.parse(
-      fs.existsSync(path.join(DATA_DIR, "manifest.json"))
-        ? fs.readFileSync(path.join(DATA_DIR, "manifest.json"), "utf-8")
-        : "{}"
-    );
+    const manifestPath = path.join(DATA_DIR, "manifest.json");
+    const manifest = fs.existsSync(manifestPath)
+      ? JSON.parse(fs.readFileSync(manifestPath, "utf-8"))
+      : {};
+
+    // Normalise nodes: real schema uses `kind` instead of `layer`,
+    // `names.en` for display, and `hitCount/adoptCount/harmCount` as counts
+    const normalizeNode = (n, layer) => ({
+      id:         n.id,
+      layer:      n.kind || layer,
+      role:       n.role,
+      summary:    n.names?.en || n.summary || n.text || n.id,
+      sourceRef:  n.canonicalRef || n.sourceRef,
+      hit:        n.hitCount   ?? n.hit   ?? 0,
+      adopt:      n.adoptCount ?? n.adopt ?? 0,
+      harm:       n.harmCount  ?? n.harm  ?? 0,
+      importance: n.importance ?? 0.5,
+      tags:       n.keywords   || n.tags  || [],
+      bundleId:   n.bundleId,
+      dayKey:     n.dayKey,
+    });
+
+    // Normalise edges: real schema uses `src`/`dst` instead of `source`/`target`
+    const normalizeEdge = (e, type) => ({
+      source: e.source || e.src,
+      target: e.target || e.dst,
+      weight: e.assocStrength ?? e.weight ?? 0.5,
+      label:  e.type || type,
+      type,
+    });
+
     const nodes = [
-      ...parseJsonl(path.join(DATA_DIR, "nodes_episodic.jsonl")).map((n) => ({ ...n, layer: "episodic" })),
-      ...parseJsonl(path.join(DATA_DIR, "nodes_semantic.jsonl")).map((n) => ({ ...n, layer: "semantic" })),
-      ...parseJsonl(path.join(DATA_DIR, "nodes_procedural.jsonl")).map((n) => ({ ...n, layer: "procedural" })),
+      ...parseJsonl(path.join(DATA_DIR, "nodes_episodic.jsonl")).map(n => normalizeNode(n, "episodic")),
+      ...parseJsonl(path.join(DATA_DIR, "nodes_semantic.jsonl")).map(n => normalizeNode(n, "semantic")),
+      ...parseJsonl(path.join(DATA_DIR, "nodes_procedural.jsonl")).map(n => normalizeNode(n, "procedural")),
     ];
     const edges = [
-      ...parseJsonl(path.join(DATA_DIR, "edges_associative.jsonl")).map((e) => ({ ...e, type: "associative" })),
-      ...parseJsonl(path.join(DATA_DIR, "edges_structural.jsonl")).map((e) => ({ ...e, type: "structural" })),
-      ...parseJsonl(path.join(DATA_DIR, "edges_supersession.jsonl")).map((e) => ({ ...e, type: "supersession" })),
+      ...parseJsonl(path.join(DATA_DIR, "edges_associative.jsonl")).map(e => normalizeEdge(e, "associative")),
+      ...parseJsonl(path.join(DATA_DIR, "edges_structural.jsonl")).map(e => normalizeEdge(e, "structural")),
+      ...parseJsonl(path.join(DATA_DIR, "edges_supersession.jsonl")).map(e => normalizeEdge(e, "supersession")),
     ];
     return serveJson(res, { manifest, nodes, edges, dataDir: DATA_DIR });
   }
 
   if (pathname === "/api/snapshots") {
-    if (!fs.existsSync(SNAPSHOTS_DIR)) return serveJson(res, []);
-    const rebuilds = fs.readdirSync(SNAPSHOTS_DIR).filter((d) =>
-      fs.statSync(path.join(SNAPSHOTS_DIR, d)).isDirectory()
-    );
-    return serveJson(res, rebuilds);
+    const dirs = [];
+    // Check both graph_snapshots/ and graph/snapshots/
+    const snap1 = path.join(WORKSPACE, ".memory", "graph_snapshots");
+    const snap2 = path.join(WORKSPACE, ".memory", "graph", "snapshots");
+    for (const snapDir of [snap1, snap2]) {
+      if (!fs.existsSync(snapDir)) continue;
+      fs.readdirSync(snapDir)
+        .filter(d => fs.statSync(path.join(snapDir, d)).isDirectory())
+        .forEach(d => dirs.push(d));
+    }
+    return serveJson(res, [...new Set(dirs)].sort());
   }
 
   if (pathname.startsWith("/api/diff/")) {
-    const rebuild = pathname.replace("/api/diff/", "");
-    const base = path.join(SNAPSHOTS_DIR, rebuild);
+    const rebuild = decodeURIComponent(pathname.replace("/api/diff/", ""));
+    // Check both graph_snapshots/ and graph/snapshots/
+    const snapBase1 = path.join(WORKSPACE, ".memory", "graph_snapshots", rebuild);
+    const snapBase2 = path.join(WORKSPACE, ".memory", "graph", "snapshots", rebuild);
+    const base = fs.existsSync(snapBase1) ? snapBase1 : snapBase2;
+
+    const normalizeNode = (n, layer) => ({
+      id: n.id, layer: n.kind || layer, summary: n.names?.en || n.summary || n.id,
+    });
+    const normalizeEdge = (e, type) => ({
+      source: e.source || e.src, target: e.target || e.dst, type,
+    });
+
     const load = (sub) => {
       const dir = path.join(base, sub);
       if (!fs.existsSync(dir)) return { nodes: [], edges: [] };
       return {
         nodes: [
-          ...parseJsonl(path.join(dir, "nodes_episodic.jsonl")).map((n) => ({ ...n, layer: "episodic" })),
-          ...parseJsonl(path.join(dir, "nodes_semantic.jsonl")).map((n) => ({ ...n, layer: "semantic" })),
-          ...parseJsonl(path.join(dir, "nodes_procedural.jsonl")).map((n) => ({ ...n, layer: "procedural" })),
+          ...parseJsonl(path.join(dir, "nodes_episodic.jsonl")).map(n => normalizeNode(n, "episodic")),
+          ...parseJsonl(path.join(dir, "nodes_semantic.jsonl")).map(n => normalizeNode(n, "semantic")),
+          ...parseJsonl(path.join(dir, "nodes_procedural.jsonl")).map(n => normalizeNode(n, "procedural")),
         ],
         edges: [
-          ...parseJsonl(path.join(dir, "edges_associative.jsonl")).map((e) => ({ ...e, type: "associative" })),
-          ...parseJsonl(path.join(dir, "edges_structural.jsonl")).map((e) => ({ ...e, type: "structural" })),
+          ...parseJsonl(path.join(dir, "edges_associative.jsonl")).map(e => normalizeEdge(e, "associative")),
+          ...parseJsonl(path.join(dir, "edges_structural.jsonl")).map(e => normalizeEdge(e, "structural")),
         ],
       };
     };
