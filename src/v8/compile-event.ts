@@ -299,6 +299,73 @@ function scorePhrase(value: string, sourceText: string, indexHint: number, typeH
     return freq * 1.5 * positionBoost * typeBoost * domainBoost * cjkLengthPenalty * longPenalty * orderPenalty;
 }
 
+function rerankPhraseScoresWithTextRank(
+    cleanedText: string,
+    merged: Map<string, { phrase: string; score: number }>
+): Array<{ phrase: string; score: number }> {
+    const entries = [...merged.entries()];
+    if (entries.length <= 1) {
+        return entries.map(([, value]) => value);
+    }
+
+    const keys = entries.map(([key]) => key);
+    const keyIndex = new Map(keys.map((key, index) => [key, index]));
+    const contexts = cleanedText
+        .split(/[，,。；;、\n]/)
+        .map((part) => sanitizeMemoryText(part, 180).toLowerCase())
+        .filter(Boolean);
+
+    const graph = Array.from({ length: keys.length }, () => Array(keys.length).fill(0));
+    for (const context of contexts) {
+        const present = keys.filter((key) => context.includes(key));
+        if (present.length < 2) continue;
+        for (let i = 0; i < present.length; i++) {
+            for (let j = i + 1; j < present.length; j++) {
+                const a = keyIndex.get(present[i]);
+                const b = keyIndex.get(present[j]);
+                if (a === undefined || b === undefined) continue;
+                graph[a][b] += 1;
+                graph[b][a] += 1;
+            }
+        }
+    }
+
+    const outWeight = graph.map((row) => row.reduce((sum, value) => sum + value, 0));
+    let rank = Array(keys.length).fill(1);
+    const damping = 0.85;
+    const iterations = 18;
+    for (let step = 0; step < iterations; step++) {
+        const next = Array(keys.length).fill(1 - damping);
+        for (let i = 0; i < keys.length; i++) {
+            let influence = 0;
+            for (let j = 0; j < keys.length; j++) {
+                const wji = graph[j][i];
+                if (wji <= 0) continue;
+                const out = outWeight[j] || 1;
+                influence += rank[j] * (wji / out);
+            }
+            next[i] += damping * influence;
+        }
+        rank = next;
+    }
+
+    const maxRank = Math.max(1e-6, ...rank);
+    const avgBase = Math.max(
+        1e-6,
+        entries.reduce((sum, [, value]) => sum + value.score, 0) / entries.length
+    );
+
+    const reranked = entries.map(([key, value], index) => {
+        const rankNorm = rank[index] / maxRank;
+        return {
+            phrase: value.phrase,
+            score: value.score + rankNorm * avgBase * 0.6,
+        };
+    });
+
+    return reranked.sort((a, b) => b.score - a.score);
+}
+
 function extractCorePhrases(text: string, maxItems = 8): string[] {
     const cleaned = sanitizeMemoryText(normalizeUserRequest(text, 1200), 1200);
     if (!cleaned) return [];
@@ -349,7 +416,7 @@ function extractCorePhrases(text: string, maxItems = 8): string[] {
             merged.set(key, { phrase: item.phrase, score: item.score });
         }
     }
-    const ranked = [...merged.values()].sort((a, b) => b.score - a.score);
+    const ranked = rerankPhraseScoresWithTextRank(cleaned, merged);
     const selected: string[] = [];
     for (const item of ranked) {
         const phrase = item.phrase;
@@ -783,17 +850,40 @@ export function compileEventToBundle(
         ? (topicFromCandidates || fallbackTopic)
         : initialTopic;
     roleTexts.set("topic", topicText);
+    const workflowText = roleTexts.get("workflow") || "";
+    const evidenceText = roleTexts.get("evidence") || "";
+    if (workflowText && evidenceText) {
+        const normalizeDedupeKey = (value: string) =>
+            normalizePhrase(value, 200)
+                .toLowerCase()
+                .replace(/[\s,，。.!?;；:：、'"`“”‘’()\[\]{}\-_/\\]+/g, "");
+        const workflowKey = normalizeDedupeKey(workflowText);
+        const evidenceKey = normalizeDedupeKey(evidenceText);
+        if (
+            workflowKey &&
+            evidenceKey &&
+            (workflowKey.includes(evidenceKey) || evidenceKey.includes(workflowKey))
+        ) {
+            roleTexts.delete("evidence");
+        }
+    }
 
-    const filteredRoles = uniqueRoles.filter((role) => {
+    const filteredRoles: V8NodeRole[] = [];
+    const seenRoleText = new Set<string>();
+    for (const role of uniqueRoles) {
         const text = roleTexts.get(role);
-        if (!text) return false;
-        if (role !== "topic" && text === topicText) return false;
-        if (/^(只回复|回复|在线吗|继续|ok|好的|收到)/i.test(text)) return false;
-        if (role === "checkpoint" && /^(继续|总结|resume|continue|停止|不要|改为|改成)/i.test(text)) return false;
-        return true;
-    });
+        if (!text) continue;
+        if (role !== "topic" && text === topicText) continue;
+        if (/^(只回复|回复|在线吗|继续|ok|好的|收到)/i.test(text)) continue;
+        if (role === "checkpoint" && /^(继续|总结|resume|continue|停止|不要|改为|改成)/i.test(text)) continue;
+        const normalized = normalizePhrase(text, 180).toLowerCase();
+        const dedupeKey = normalized.replace(/[\s,，。.!?;；:：、'"`“”‘’()\[\]{}\-_/\\]+/g, "");
+        if (dedupeKey && seenRoleText.has(dedupeKey)) continue;
+        if (dedupeKey) seenRoleText.add(dedupeKey);
+        filteredRoles.push(role);
+    }
 
-    const nodes = filteredRoles.map((role) =>
+    const draftedNodes = filteredRoles.map((role) =>
         buildNode(
             event,
             bundle,
@@ -805,6 +895,17 @@ export function compileEventToBundle(
             episodeKey
         )
     );
+    const nodes: V8MemoryNode[] = [];
+    const seenNodeName = new Set<string>();
+    for (const node of draftedNodes) {
+        const dedupeName = node.names.zh || node.names.en || "";
+        const dedupeKey = normalizePhrase(dedupeName, 200)
+            .toLowerCase()
+            .replace(/[\s,，。.!?;；:：、'"`“”‘’()\[\]{}\-_/\\]+/g, "");
+        if (dedupeKey && seenNodeName.has(dedupeKey)) continue;
+        if (dedupeKey) seenNodeName.add(dedupeKey);
+        nodes.push(node);
+    }
     bundle.nodeIds = nodes.map((node) => node.id);
 
     const nodeByRole = new Map(nodes.map((node) => [node.role, node]));

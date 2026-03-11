@@ -141,6 +141,20 @@ function collectJsonlFiles(dirPath: string): string[] {
         .map((file) => path.join(dirPath, file));
 }
 
+function buildEventLookup(workspace: string): Map<string, MemoryEvent> {
+    const p = paths(workspace);
+    const eventById = new Map<string, MemoryEvent>();
+    for (const root of [p.eventsDir, p.archiveDir]) {
+        const files = collectJsonlFiles(root);
+        for (const filePath of files) {
+            for (const event of readEvents(filePath)) {
+                eventById.set(event.id, event);
+            }
+        }
+    }
+    return eventById;
+}
+
 function findEventById(workspace: string, eventId: string): MemoryEvent | null {
     const p = paths(workspace);
     for (const root of [p.eventsDir, p.archiveDir]) {
@@ -216,9 +230,13 @@ function formatEventSourceTextWithDailyLog(workspace: string, event: MemoryEvent
     return lines.join("\n");
 }
 
-function loadBundleSourceText(workspace: string, bundle: V8MemoryBundle): string {
+function loadBundleSourceText(
+    workspace: string,
+    bundle: V8MemoryBundle,
+    eventById?: Map<string, MemoryEvent>
+): string {
     if (bundle.sourceType === "event") {
-        const event = findEventById(workspace, bundle.sourceRef);
+        const event = eventById?.get(bundle.sourceRef) || findEventById(workspace, bundle.sourceRef);
         return event ? formatEventSourceTextWithDailyLog(workspace, event) : "";
     }
 
@@ -244,12 +262,47 @@ function buildContextBlocks(bundle: V8MemoryBundle): V8AnnotationContextBlock[] 
     return blocks;
 }
 
-function rankBundlesForAnnotation(bundles: V8MemoryBundle[], maxBundles: number): V8MemoryBundle[] {
+function scoreEventForAnnotation(event: MemoryEvent): number {
+    const typeBoost: Record<string, number> = {
+        correction: 1.25,
+        error: 1.05,
+        decision: 0.95,
+        preference: 0.75,
+        insight: 0.45,
+        observation: 0.35,
+    };
+    let score = (event.importance || 0) * 3.0 + (typeBoost[event.type] || 0.3);
+    const tags = new Set((event.tags || []).map((tag) => tag.toLowerCase()));
+    if (tags.has("auto-recorded")) score -= 0.7;
+    if (tags.has("semantic-candidate")) score -= 0.5;
+    if (/Memory Context \(Live\)|Task Ledger|Working Memory Rule|HEARTBEAT_OK/i.test(event.content || "")) {
+        score -= 1.1;
+    }
+    if (/(?:[A-Za-z]:[\\/]|\/(?:mnt|home|var|etc|usr|opt|tmp|data|workspace|downloads)\/|error|failed|invalid|timeout|报错|失败|不可用|路径)/i.test(event.content || "")) {
+        score += 0.8;
+    }
+    return score;
+}
+
+function rankBundlesForAnnotation(
+    workspace: string,
+    bundles: V8MemoryBundle[],
+    maxBundles: number,
+    eventById: Map<string, MemoryEvent>
+): V8MemoryBundle[] {
     return [...bundles]
         .filter((bundle) => bundle.sourceType === "event" || bundle.sourceType === "knowledge_md" || bundle.sourceType === "skill_md")
         .sort((a, b) => {
-            const aScore = (a.sourceType === "event" ? 3 : 1) + (a.encodingContext ? 1 : 0);
-            const bScore = (b.sourceType === "event" ? 3 : 1) + (b.encodingContext ? 1 : 0);
+            const aEvent = a.sourceType === "event" ? eventById.get(a.sourceRef) : null;
+            const bEvent = b.sourceType === "event" ? eventById.get(b.sourceRef) : null;
+            const aScore =
+                (a.sourceType === "event" ? 2.4 : 1) +
+                (a.encodingContext ? 0.5 : 0) +
+                (aEvent ? scoreEventForAnnotation(aEvent) : 0);
+            const bScore =
+                (b.sourceType === "event" ? 2.4 : 1) +
+                (b.encodingContext ? 0.5 : 0) +
+                (bEvent ? scoreEventForAnnotation(bEvent) : 0);
             if (aScore !== bScore) {
                 return bScore - aScore;
             }
@@ -268,9 +321,10 @@ function normalizeSourceRefFilter(values: string[] | undefined): Set<string> | n
 async function annotateBundle(
     workspace: string,
     bundle: V8MemoryBundle,
-    config: AnnotationApiConfig
+    config: AnnotationApiConfig,
+    eventById: Map<string, MemoryEvent>
 ): Promise<V8OfflineAnnotationRecord | null> {
-    const sourceText = sanitizeText(loadBundleSourceText(workspace, bundle), 16000);
+    const sourceText = sanitizeText(loadBundleSourceText(workspace, bundle, eventById), 16000);
     if (!sourceText) {
         if (/^(1|true|yes)$/i.test(process.env.MEMORY_ANNOTATION_DEBUG_SOURCE || "")) {
             console.warn(`[Memory V8] Annotation source empty for ${bundle.bundleId} (${bundle.sourceRef})`);
@@ -402,6 +456,7 @@ export async function runOfflineBundleAnnotation(
     }
 
     const gp = graphPaths(workspace);
+    const eventById = buildEventLookup(workspace);
     const previous = readJsonlRecords<V8OfflineAnnotationRecord>(gp.offlineAnnotationDrafts);
     const previousByBundle = new Map(previous.map((record) => [record.bundleId, record]));
     const maxBundles = Math.max(
@@ -423,7 +478,7 @@ export async function runOfflineBundleAnnotation(
     const candidateBundles = sourceRefFilter
         ? input.bundles.filter((bundle) => sourceRefFilter.has(bundle.sourceRef))
         : input.bundles;
-    const selected = rankBundlesForAnnotation(candidateBundles, maxBundles);
+    const selected = rankBundlesForAnnotation(workspace, candidateBundles, maxBundles, eventById);
     const nextRecords = [...previous];
     const newRecords: V8OfflineAnnotationRecord[] = [];
     let skipped = Math.max(0, candidateBundles.length - selected.length);
@@ -436,7 +491,7 @@ export async function runOfflineBundleAnnotation(
         }
 
         try {
-            const record = await annotateBundle(workspace, bundle, config);
+            const record = await annotateBundle(workspace, bundle, config, eventById);
             if (!record) {
                 skipped += 1;
                 continue;
