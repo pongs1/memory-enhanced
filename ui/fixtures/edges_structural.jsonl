@@ -1,0 +1,6 @@
+{"source":"ep_001","target":"sm_003","weight":1.0,"label":"distilled-into"}
+{"source":"ep_002","target":"sm_001","weight":1.0,"label":"distilled-into"}
+{"source":"ep_007","target":"sm_006","weight":1.0,"label":"distilled-into"}
+{"source":"ep_008","target":"sm_004","weight":1.0,"label":"distilled-into"}
+{"source":"ep_011","target":"sm_006","weight":0.9,"label":"updates"}
+{"source":"pr_001","target":"sm_001","weight":0.9,"label":"verifies"}

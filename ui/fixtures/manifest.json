@@ -1,0 +1,12 @@
+{
+  "version": "v8",
+  "built_at": "2026-03-11T14:00:00Z",
+  "counts": {
+    "nodes_episodic": 12,
+    "nodes_semantic": 8,
+    "nodes_procedural": 4,
+    "edges_associative": 18,
+    "edges_structural": 6,
+    "edges_supersession": 2
+  }
+}

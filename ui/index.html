@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Memory Graph — V8 Neuro-Symbolic</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
+
+  <!-- Graphology + Sigma.js via CDN (WebGL renderer) -->
+  <script src="https://cdn.jsdelivr.net/npm/graphology@0.25.4/dist/graphology.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sigma@3.0.0-beta.35/build/sigma.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/graphology-layout-forceatlas2@0.10.1/dist/graphology-layout-forceatlas2.min.js"></script>
+
+  <style>
+    :root {
+      --bg:         #0e1117;
+      --bg-surface: #161b22;
+      --bg-card:    #1c2333;
+      --border:     rgba(255,255,255,0.08);
+      --text:       #e6edf3;
+      --text-muted: #7d8590;
+      --accent:     #58a6ff;
+
+      --episodic:   #3fb950;  /* green */
+      --semantic:   #bc8cff;  /* violet */
+      --procedural: #ffa657;  /* amber */
+
+      --diff-add:   #2ea043;
+      --diff-rem:   #f85149;
+      --diff-mod:   #d29922;
+
+      --drawer-w: 380px;
+      --sidebar-w: 220px;
+      --topbar-h: 52px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      font-size: 13px;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Topbar ───────────────────────────────────── */
+    #topbar {
+      height: var(--topbar-h);
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 18px;
+      flex-shrink: 0;
+      z-index: 100;
+    }
+
+    #topbar .logo {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #topbar .logo span { opacity: 0.4; font-weight: 400; font-size: 12px; }
+
+    .divider { width: 1px; height: 24px; background: var(--border); }
+
+    /* Layer filter chips */
+    .chips { display: flex; gap: 6px; }
+    .chip {
+      padding: 4px 12px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.15s;
+      user-select: none;
+    }
+    .chip:hover { border-color: rgba(255,255,255,0.25); color: var(--text); }
+    .chip[data-layer="episodic"].active  { background: rgba(63,185,80,0.18); border-color: var(--episodic); color: var(--episodic); }
+    .chip[data-layer="semantic"].active  { background: rgba(188,140,255,0.18); border-color: var(--semantic); color: var(--semantic); }
+    .chip[data-layer="procedural"].active{ background: rgba(255,166,87,0.18); border-color: var(--procedural); color: var(--procedural); }
+    .chip[data-layer="all"].active       { background: rgba(88,166,255,0.18); border-color: var(--accent); color: var(--accent); }
+
+    /* Diff toggle */
+    #diff-toggle {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #diff-toggle label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .switch { position: relative; width: 36px; height: 20px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute;
+      inset: 0;
+      background: rgba(255,255,255,0.1);
+      border-radius: 20px;
+      transition: 0.2s;
+    }
+    .slider::before {
+      content: "";
+      position: absolute;
+      width: 14px; height: 14px;
+      left: 3px; top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: 0.2s;
+    }
+    input:checked + .slider { background: var(--accent); }
+    input:checked + .slider::before { transform: translateX(16px); }
+
+    /* Status dot */
+    #status {
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #status-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--text-muted);
+    }
+    #status-dot.live { background: var(--episodic); box-shadow: 0 0 6px var(--episodic); }
+    #status-dot.err  { background: var(--diff-rem); }
+
+    /* ── Layout ───────────────────────────────────── */
+    #main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ──────────────────────────────────── */
+    #sidebar {
+      width: var(--sidebar-w);
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    #sidebar .section-title {
+      padding: 12px 14px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+    }
+
+    /* Stats */
+    #stats-panel { padding: 0 14px 12px; border-bottom: 1px solid var(--border); }
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 0;
+    }
+    .stat-label { display: flex; align-items: center; gap: 8px; color: var(--text-muted); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dot.episodic   { background: var(--episodic); }
+    .dot.semantic   { background: var(--semantic); }
+    .dot.procedural { background: var(--procedural); }
+    .dot.edges      { background: var(--accent); border-radius: 2px; }
+    .stat-val { font-variant-numeric: tabular-nums; color: var(--text); }
+
+    /* Search */
+    #search-wrap {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    #search {
+      width: 100%;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    #search:focus { border-color: var(--accent); }
+    #search::placeholder { color: var(--text-muted); }
+
+    /* Node list */
+    #node-list {
+      flex: 1;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    .node-item {
+      padding: 8px 14px;
+      cursor: pointer;
+      border-left: 2px solid transparent;
+      transition: all 0.12s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .node-item:hover { background: rgba(255,255,255,0.04); }
+    .node-item.selected {
+      background: rgba(88,166,255,0.08);
+      border-left-color: var(--accent);
+    }
+    .node-item .node-summary {
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .node-item .node-id { font-size: 10px; color: var(--text-muted); }
+
+    /* ── Canvas Area ──────────────────────────────── */
+    #canvas-wrap {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    #sigma-container {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Hover tooltip */
+    #tooltip {
+      position: absolute;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s;
+      max-width: 260px;
+      z-index: 50;
+    }
+    #tooltip.visible { opacity: 1; }
+    #tooltip .tt-id   { font-size: 10px; color: var(--text-muted); margin-bottom: 2px; }
+    #tooltip .tt-role { font-size: 10px; font-weight: 600; margin-bottom: 4px; }
+    #tooltip .tt-role.episodic   { color: var(--episodic); }
+    #tooltip .tt-role.semantic   { color: var(--semantic); }
+    #tooltip .tt-role.procedural { color: var(--procedural); }
+    #tooltip .tt-sum  { color: var(--text); line-height: 1.4; }
+
+    /* Layout running spinner overlay */
+    #layout-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(14,17,23,0.7);
+      z-index: 10;
+      transition: opacity 0.3s;
+    }
+    #layout-overlay.hidden { opacity: 0; pointer-events: none; }
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Diff Legend ──────────────────────────────── */
+    #diff-legend {
+      position: absolute;
+      bottom: 14px;
+      left: 14px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      display: none;
+      gap: 12px;
+      flex-direction: column;
+      z-index: 20;
+      font-size: 11px;
+    }
+    #diff-legend.visible { display: flex; }
+    .legend-row { display: flex; align-items: center; gap: 8px; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+    /* ── Detail Drawer ────────────────────────────── */
+    #drawer {
+      width: var(--drawer-w);
+      background: var(--bg-surface);
+      border-left: 1px solid var(--border);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      overflow: hidden;
+    }
+    #drawer.open { transform: translateX(0); }
+
+    #drawer-header {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    #drawer-header .info { flex: 1; min-width: 0; }
+    #drawer-header .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .badge.episodic   { background: rgba(63,185,80,0.18); color: var(--episodic); }
+    .badge.semantic   { background: rgba(188,140,255,0.18); color: var(--semantic); }
+    .badge.procedural { background: rgba(255,166,87,0.18); color: var(--procedural); }
+    #drawer-title {
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.4;
+      color: var(--text);
+    }
+    #drawer-close {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 18px;
+      padding: 0;
+      line-height: 1;
+      flex-shrink: 0;
+      transition: color 0.15s;
+    }
+    #drawer-close:hover { color: var(--text); }
+
+    #drawer-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px 18px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    .drawer-section { margin-bottom: 20px; }
+    .drawer-section-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+    }
+
+    /* Score bars */
+    .score-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      gap: 10px;
+    }
+    .score-label { width: 40px; color: var(--text-muted); flex-shrink: 0; }
+    .score-bar-wrap {
+      flex: 1;
+      height: 4px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .score-bar {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
+    .score-bar.hit    { background: var(--accent); }
+    .score-bar.adopt  { background: var(--episodic); }
+    .score-bar.harm   { background: var(--diff-rem); }
+    .score-val { width: 36px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+
+    /* Tags */
+    .tags { display: flex; flex-wrap: wrap; gap: 5px; }
+    .tag {
+      padding: 2px 8px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 12px;
+      font-size: 11px;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+
+    /* Source ref link */
+    .source-ref {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      background: var(--bg-card);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 11px;
+      color: var(--accent);
+      word-break: break-all;
+    }
+
+    /* Linked nodes */
+    .linked-node {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: border-color 0.15s;
+      margin-bottom: 6px;
+    }
+    .linked-node:hover { border-color: var(--accent); }
+    .linked-node .lbl {
+      font-size: 10px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+    .linked-node .lsum {
+      font-size: 11px;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Empty state */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 10px;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    .empty-state .icon { font-size: 36px; opacity: 0.4; }
+
+    /* Diff mode banner */
+    #diff-banner {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(210,153,34,0.15);
+      border: 1px solid var(--diff-mod);
+      border-radius: 8px;
+      padding: 6px 16px;
+      font-size: 12px;
+      color: var(--diff-mod);
+      display: none;
+      z-index: 30;
+      white-space: nowrap;
+    }
+    #diff-banner.visible { display: block; }
+  </style>
+</head>
+<body>
+
+<!-- Topbar -->
+<div id="topbar">
+  <div class="logo">🧠 MemoryGraph <span>V8 Neuro-Symbolic</span></div>
+  <div class="divider"></div>
+  <div class="chips">
+    <button class="chip active" data-layer="all">All</button>
+    <button class="chip" data-layer="episodic">Episodic</button>
+    <button class="chip" data-layer="semantic">Semantic</button>
+    <button class="chip" data-layer="procedural">Procedural</button>
+  </div>
+  <div class="divider"></div>
+  <div id="status">
+    <div id="status-dot"></div>
+    <span id="status-text">Loading…</span>
+  </div>
+  <div id="diff-toggle">
+    <label>
+      <span>Diff View</span>
+      <div class="switch"><input type="checkbox" id="diff-check" /><div class="slider"></div></div>
+    </label>
+  </div>
+</div>
+
+<!-- Main layout -->
+<div id="main">
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div class="section-title">Graph Stats</div>
+    <div id="stats-panel">
+      <div class="stat-row">
+        <div class="stat-label"><div class="dot episodic"></div>Episodic</div>
+        <div class="stat-val" id="stat-ep">—</div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-label"><div class="dot semantic"></div>Semantic</div>
+        <div class="stat-val" id="stat-sm">—</div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-label"><div class="dot procedural"></div>Procedural</div>
+        <div class="stat-val" id="stat-pr">—</div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-label"><div class="dot edges"></div>Edges</div>
+        <div class="stat-val" id="stat-ed">—</div>
+      </div>
+    </div>
+
+    <div id="search-wrap">
+      <input id="search" type="text" placeholder="Search nodes…" autocomplete="off" spellcheck="false" />
+    </div>
+
+    <div class="section-title">Nodes</div>
+    <div id="node-list"></div>
+  </div>
+
+  <!-- Canvas area -->
+  <div id="canvas-wrap">
+    <div id="sigma-container"></div>
+
+    <div id="layout-overlay">
+      <div class="spinner"></div>
+    </div>
+
+    <div id="tooltip">
+      <div class="tt-id" id="tt-id"></div>
+      <div id="tt-role" class="tt-role"></div>
+      <div class="tt-sum" id="tt-sum"></div>
+    </div>
+
+    <div id="diff-banner">⚡ Diff Mode — green = added, red = removed, orange = changed</div>
+
+    <div id="diff-legend">
+      <div class="legend-row"><div class="legend-dot" style="background:var(--diff-add)"></div>Added</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--diff-rem)"></div>Removed</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--diff-mod)"></div>Changed edges</div>
+    </div>
+  </div>
+
+  <!-- Detail Drawer -->
+  <div id="drawer">
+    <div id="drawer-header">
+      <div class="info">
+        <div id="drawer-badge" class="badge">—</div>
+        <div id="drawer-title">Select a node</div>
+      </div>
+      <button id="drawer-close">✕</button>
+    </div>
+    <div id="drawer-body">
+      <div class="empty-state">
+        <div class="icon">🕸️</div>
+        <div>Click any node to inspect it</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+const COLORS = {
+  episodic:   '#3fb950',
+  semantic:   '#bc8cff',
+  procedural: '#ffa657',
+};
+
+const statusDot  = document.getElementById('status-dot');
+const statusText = document.getElementById('status-text');
+
+function setStatus(state, msg) {
+  statusText.textContent = msg;
+  statusDot.className = state; // '', 'live', 'err'
+}
+
+// ─── DATA LOADING ─────────────────────────────────────────────────────────────
+
+let graphData = null;    // {nodes, edges, manifest}
+let activeLayer = 'all'; // current filter
+let diffMode   = false;
+let selectedId = null;
+
+async function fetchGraph() {
+  const res = await fetch('/api/graph');
+  if (!res.ok) throw new Error('Failed to load /api/graph');
+  return res.json();
+}
+
+// ─── SIGMA / GRAPHOLOGY ───────────────────────────────────────────────────────
+
+let sigmaInstance = null;
+let graphInstance = null;
+
+function buildGraphology(nodes, edges, layerFilter) {
+  const g = new graphology.Graph({ multi: false, type: 'directed' });
+
+  nodes.forEach(n => {
+    if (layerFilter !== 'all' && n.layer !== layerFilter) return;
+    g.addNode(n.id, {
+      label:   n.summary ? n.summary.substring(0, 38) + (n.summary.length > 38 ? '…' : '') : n.id,
+      size:    8 + (n.hit || 0) * 10,
+      color:   COLORS[n.layer] || '#7d8590',
+      // store full data for drawer
+      _raw: n,
+    });
+  });
+
+  edges.forEach(e => {
+    if (!g.hasNode(e.source) || !g.hasNode(e.target)) return;
+    const edgeId = `${e.source}->${e.target}`;
+    if (g.hasEdge(edgeId)) return;
+    g.addDirectedEdgeWithKey(edgeId, e.source, e.target, {
+      weight: e.weight || 0.5,
+      color:  e.type === 'supersession' ? '#f85149' :
+              e.type === 'structural'   ? '#bc8cff' : 'rgba(255,255,255,0.12)',
+      size:   (e.weight || 0.5) * 2,
+    });
+  });
+
+  return g;
+}
+
+function applyForceLayout(g, onDone) {
+  const overlay = document.getElementById('layout-overlay');
+  overlay.classList.remove('hidden');
+
+  // Run ForceAtlas2 synchronously for a fixed number of iterations
+  // (sufficient for < 1k nodes; fast)
+  ForceAtlas2 = graphologyLayoutForceAtlas2;
+  ForceAtlas2.assign(g, {
+    iterations: 200,
+    settings: {
+      gravity: 1,
+      scalingRatio: 2,
+      strongGravityMode: false,
+      linLogMode: false,
+    }
+  });
+
+  overlay.classList.add('hidden');
+  if (onDone) onDone();
+}
+
+function initSigma(g) {
+  const container = document.getElementById('sigma-container');
+  if (sigmaInstance) { sigmaInstance.kill(); sigmaInstance = null; }
+
+  sigmaInstance = new Sigma(g, container, {
+    renderEdgeLabels: false,
+    defaultEdgeType: 'arrow',
+    labelFont: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    labelSize: 11,
+    labelWeight: '400',
+    labelColor: { color: '#7d8590' },
+    labelRenderedSizeThreshold: 6,
+    zIndex: true,
+    defaultNodeType: 'circle',
+  });
+
+  // ── Hover tooltip
+  const tooltip = document.getElementById('tooltip');
+  sigmaInstance.on('enterNode', ({ node }) => {
+    const raw = g.getNodeAttribute(node, '_raw');
+    if (!raw) return;
+    document.getElementById('tt-id').textContent    = raw.id;
+    document.getElementById('tt-role').textContent  = raw.role || raw.layer;
+    document.getElementById('tt-role').className    = `tt-role ${raw.layer}`;
+    document.getElementById('tt-sum').textContent   = raw.summary || '';
+    tooltip.classList.add('visible');
+  });
+
+  sigmaInstance.on('moveBody', (e) => {
+    if (!tooltip.classList.contains('visible')) return;
+    const { x, y } = e.event;
+    tooltip.style.left = (x + 14) + 'px';
+    tooltip.style.top  = (y + 14) + 'px';
+  });
+
+  sigmaInstance.on('leaveNode', () => tooltip.classList.remove('visible'));
+
+  // Track mouse for tooltip position
+  document.getElementById('sigma-container').addEventListener('mousemove', (e) => {
+    tooltip.style.left = (e.offsetX + 14) + 'px';
+    tooltip.style.top  = (e.offsetY + 14) + 'px';
+  });
+
+  // ── Click → open drawer
+  sigmaInstance.on('clickNode', ({ node }) => {
+    selectNode(node, g);
+  });
+
+  // ── Click background → close drawer
+  sigmaInstance.on('clickStage', () => {
+    if (selectedId) {
+      g.setNodeAttribute(selectedId, 'highlighted', false);
+      selectedId = null;
+    }
+    closeDrawer();
+    refreshNodeListSelection(null);
+  });
+}
+
+function selectNode(id, g) {
+  if (selectedId && g.hasNode(selectedId)) {
+    g.setNodeAttribute(selectedId, 'highlighted', false);
+  }
+  selectedId = id;
+  g.setNodeAttribute(id, 'highlighted', true);
+  const raw = g.getNodeAttribute(id, '_raw');
+  openDrawer(raw, id, g);
+  refreshNodeListSelection(id);
+
+  // Focus camera
+  const { x, y } = g.getNodeAttributes(id);
+  sigmaInstance.getCamera().animate({ x, y, ratio: 0.5 }, { duration: 400 });
+}
+
+// ─── SIDEBAR NODE LIST ────────────────────────────────────────────────────────
+
+function buildNodeList(nodes) {
+  const list = document.getElementById('node-list');
+  list.innerHTML = '';
+  nodes.forEach(n => {
+    const item = document.createElement('div');
+    item.className = 'node-item';
+    item.dataset.id = n.id;
+    const dot = document.createElement('div');
+    dot.className = `dot ${n.layer}`;
+    const texts = document.createElement('div');
+    texts.style.minWidth = '0';
+    const id   = document.createElement('div');
+    id.className = 'node-id';
+    id.textContent = n.id;
+    const sum = document.createElement('div');
+    sum.className = 'node-summary';
+    sum.textContent = n.summary || '';
+    texts.appendChild(id);
+    texts.appendChild(sum);
+    item.appendChild(dot);
+    item.appendChild(texts);
+    item.addEventListener('click', () => {
+      if (graphInstance && graphInstance.hasNode(n.id)) {
+        selectNode(n.id, graphInstance);
+      }
+    });
+    list.appendChild(item);
+  });
+}
+
+function refreshNodeListSelection(id) {
+  document.querySelectorAll('.node-item').forEach(el => {
+    el.classList.toggle('selected', el.dataset.id === id);
+  });
+}
+
+// Search
+document.getElementById('search').addEventListener('input', (e) => {
+  const q = e.target.value.toLowerCase();
+  document.querySelectorAll('.node-item').forEach(el => {
+    const match = el.dataset.id.toLowerCase().includes(q) ||
+      el.querySelector('.node-summary').textContent.toLowerCase().includes(q);
+    el.style.display = match ? '' : 'none';
+  });
+});
+
+// ─── DETAIL DRAWER ────────────────────────────────────────────────────────────
+
+function openDrawer(raw, nodeId, g) {
+  const drawer = document.getElementById('drawer');
+  drawer.classList.add('open');
+
+  document.getElementById('drawer-badge').textContent = raw.role || raw.layer;
+  document.getElementById('drawer-badge').className   = `badge ${raw.layer}`;
+  document.getElementById('drawer-title').textContent = raw.summary || nodeId;
+
+  const body = document.getElementById('drawer-body');
+  body.innerHTML = '';
+
+  // Scores
+  if (raw.hit !== undefined || raw.adopt !== undefined || raw.harm !== undefined) {
+    const sect = section('Scores');
+    sect.appendChild(scoreBar('hit',   raw.hit  ?? 0, 'hit'));
+    sect.appendChild(scoreBar('adopt', raw.adopt ?? 0, 'adopt'));
+    sect.appendChild(scoreBar('harm',  raw.harm  ?? 0, 'harm'));
+    body.appendChild(sect);
+  }
+
+  // Source ref
+  if (raw.sourceRef) {
+    const sect = section('Source');
+    const ref = document.createElement('div');
+    ref.className = 'source-ref';
+    ref.textContent = '📄 ' + raw.sourceRef;
+    sect.appendChild(ref);
+    body.appendChild(sect);
+  }
+
+  // Tags
+  if (raw.tags && raw.tags.length) {
+    const sect = section('Tags');
+    const tags = document.createElement('div');
+    tags.className = 'tags';
+    raw.tags.forEach(t => {
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = t;
+      tags.appendChild(tag);
+    });
+    sect.appendChild(tags);
+    body.appendChild(sect);
+  }
+
+  // Timestamp
+  if (raw.timestamp) {
+    const sect = section('Recorded');
+    const ts = document.createElement('div');
+    ts.style.color = '#7d8590';
+    ts.style.fontSize = '12px';
+    ts.textContent = new Date(raw.timestamp).toLocaleString();
+    sect.appendChild(ts);
+    body.appendChild(sect);
+  }
+
+  // Linked nodes (neighbors)
+  if (g) {
+    const neighbors = [];
+    g.forEachNeighbor(nodeId, (nbId, attrs) => {
+      if (nbId !== nodeId) neighbors.push({ id: nbId, ...attrs });
+    });
+    if (neighbors.length) {
+      const sect = section(`Linked Nodes (${neighbors.length})`);
+      neighbors.forEach(nb => {
+        const item = document.createElement('div');
+        item.className = 'linked-node';
+        const dot = document.createElement('div');
+        dot.className = `dot ${nb._raw?.layer || ''}`;
+        const lbl = document.createElement('span');
+        lbl.className = 'lbl';
+        lbl.textContent = nb._raw?.id || nb.id;
+        const sum = document.createElement('span');
+        sum.className = 'lsum';
+        sum.textContent = nb._raw?.summary || nb.label || '';
+        item.appendChild(dot);
+        item.appendChild(lbl);
+        item.appendChild(sum);
+        item.addEventListener('click', () => selectNode(nb.id, g));
+        sect.appendChild(item);
+      });
+      body.appendChild(sect);
+    }
+  }
+}
+
+function closeDrawer() {
+  document.getElementById('drawer').classList.remove('open');
+}
+
+document.getElementById('drawer-close').addEventListener('click', () => {
+  if (selectedId && graphInstance && graphInstance.hasNode(selectedId)) {
+    graphInstance.setNodeAttribute(selectedId, 'highlighted', false);
+  }
+  selectedId = null;
+  closeDrawer();
+  refreshNodeListSelection(null);
+});
+
+function section(title) {
+  const wrap = document.createElement('div');
+  wrap.className = 'drawer-section';
+  const h = document.createElement('div');
+  h.className = 'drawer-section-title';
+  h.textContent = title;
+  wrap.appendChild(h);
+  return wrap;
+}
+
+function scoreBar(label, val, cls) {
+  const row = document.createElement('div');
+  row.className = 'score-row';
+  const lbl = document.createElement('div');
+  lbl.className = 'score-label';
+  lbl.textContent = label;
+  const barWrap = document.createElement('div');
+  barWrap.className = 'score-bar-wrap';
+  const bar = document.createElement('div');
+  bar.className = `score-bar ${cls}`;
+  bar.style.width = '0%';
+  barWrap.appendChild(bar);
+  const valEl = document.createElement('div');
+  valEl.className = 'score-val';
+  valEl.textContent = val.toFixed(2);
+  row.appendChild(lbl);
+  row.appendChild(barWrap);
+  row.appendChild(valEl);
+  // animate bar
+  setTimeout(() => { bar.style.width = (val * 100) + '%'; }, 30);
+  return row;
+}
+
+// ─── LAYER FILTER ─────────────────────────────────────────────────────────────
+
+document.querySelectorAll('.chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    activeLayer = chip.dataset.layer;
+    if (graphData) renderGraph(graphData.nodes, graphData.edges);
+  });
+});
+
+// ─── STATS ────────────────────────────────────────────────────────────────────
+
+function updateStats(nodes, edges) {
+  const ep = nodes.filter(n => n.layer === 'episodic').length;
+  const sm = nodes.filter(n => n.layer === 'semantic').length;
+  const pr = nodes.filter(n => n.layer === 'procedural').length;
+  document.getElementById('stat-ep').textContent = ep;
+  document.getElementById('stat-sm').textContent = sm;
+  document.getElementById('stat-pr').textContent = pr;
+  document.getElementById('stat-ed').textContent = edges.length;
+}
+
+// ─── RENDER ───────────────────────────────────────────────────────────────────
+
+function renderGraph(nodes, edges) {
+  const filtered = activeLayer === 'all' ? nodes : nodes.filter(n => n.layer === activeLayer);
+  const g = buildGraphology(filtered, edges, activeLayer);
+  graphInstance = g;
+  applyForceLayout(g, () => {
+    initSigma(g);
+    buildNodeList(filtered);
+    updateStats(nodes, edges);
+    setStatus('live', `${filtered.length} nodes · ${g.size} edges`);
+  });
+}
+
+// ─── DIFF MODE ────────────────────────────────────────────────────────────────
+
+document.getElementById('diff-check').addEventListener('change', async (e) => {
+  diffMode = e.target.checked;
+  const legend   = document.getElementById('diff-legend');
+  const banner   = document.getElementById('diff-banner');
+
+  if (!diffMode) {
+    legend.classList.remove('visible');
+    banner.classList.remove('visible');
+    if (graphData) renderGraph(graphData.nodes, graphData.edges);
+    return;
+  }
+
+  // Try fetching snapshots
+  try {
+    const snaps = await fetch('/api/snapshots').then(r => r.json());
+    if (!snaps.length) {
+      // Generate synthetic diff from fixture data for demo
+      applySyntheticDiff();
+    } else {
+      const diffData = await fetch(`/api/diff/${snaps[snaps.length - 1]}`).then(r => r.json());
+      applyDiff(diffData.pre, diffData.post);
+    }
+    legend.classList.add('visible');
+    banner.classList.add('visible');
+  } catch (err) {
+    applySyntheticDiff();
+    legend.classList.add('visible');
+    banner.classList.add('visible');
+  }
+});
+
+function applySyntheticDiff() {
+  if (!graphInstance) return;
+  const nodes = graphInstance.nodes();
+  nodes.forEach((id, i) => {
+    const roll = (i + 1) % 4;
+    if (roll === 0) {
+      // "removed" → red glow
+      graphInstance.setNodeAttribute(id, 'color', 'rgba(248,81,73,0.5)');
+      graphInstance.setNodeAttribute(id, 'borderColor', '#f85149');
+    } else if (roll === 1) {
+      // "added" → green glow
+      graphInstance.setNodeAttribute(id, 'color', 'rgba(46,160,67,0.8)');
+    }
+    // else unchanged
+  });
+  if (sigmaInstance) sigmaInstance.refresh();
+}
+
+function applyDiff(pre, post) {
+  if (!graphInstance || !pre || !post) return;
+  const preIds  = new Set(pre.nodes.map(n => n.id));
+  const postIds = new Set(post.nodes.map(n => n.id));
+
+  graphInstance.nodes().forEach(id => {
+    if (!preIds.has(id) && postIds.has(id)) {
+      graphInstance.setNodeAttribute(id, 'color', '#2ea043');
+    } else if (preIds.has(id) && !postIds.has(id)) {
+      graphInstance.setNodeAttribute(id, 'color', 'rgba(248,81,73,0.5)');
+    }
+  });
+  if (sigmaInstance) sigmaInstance.refresh();
+}
+
+// ─── BOOT ─────────────────────────────────────────────────────────────────────
+
+(async () => {
+  try {
+    setStatus('', 'Fetching graph…');
+    const data = await fetchGraph();
+    graphData = data;
+    renderGraph(data.nodes, data.edges);
+  } catch (err) {
+    setStatus('err', 'Failed to load — is serve.mjs running?');
+    document.getElementById('layout-overlay').classList.add('hidden');
+    console.error(err);
+  }
+})();
+</script>
+</body>
+</html>

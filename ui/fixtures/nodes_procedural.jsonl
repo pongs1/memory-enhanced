@@ -1,0 +1,4 @@
+{"id":"pr_001","role":"skill","summary":"Fix ESM __dirname: use import.meta.url + fileURLToPath + dirname","sourceRef":"memory/skills/verified/fix-esm-dirname/SKILL.md","hit":0.90,"adopt":0.92,"harm":0.00,"tags":["nodejs","esm","fix"]}
+{"id":"pr_002","role":"skill","summary":"Patch OpenClaw core: add wrap_stream_fn to attempt.ts and types.ts","sourceRef":"memory/skills/verified/openclaw-patch/SKILL.md","hit":0.88,"adopt":0.85,"harm":0.05,"tags":["openclaw","patch"]}
+{"id":"pr_003","role":"skill","summary":"pnpm install in WSL then link extension with openclaw plugins install -l","sourceRef":"memory/skills/verified/openclaw-install/SKILL.md","hit":0.72,"adopt":0.75,"harm":0.00,"tags":["pnpm","install"]}
+{"id":"pr_004","role":"skill","summary":"Run memory_consolidate scope=full after knowledge distillation session","sourceRef":"memory/skills/verified/consolidation-flow/SKILL.md","hit":0.80,"adopt":0.82,"harm":0.00,"tags":["memory","sop"]}
