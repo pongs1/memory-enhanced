@@ -655,7 +655,9 @@ function persistGraph(output: BuildGraphOutput, workspace: string) {
     appendJsonl(gp.edgesAssociative, associativeEdges);
     appendJsonl(gp.edgesStructural, structuralEdges);
     appendJsonl(gp.edgesSupersession, supersessionEdges);
-    fs.writeFileSync(gp.updateQueue, "", "utf-8");
+    if (!fs.existsSync(gp.updateQueue)) {
+        fs.writeFileSync(gp.updateQueue, "", "utf-8");
+    }
     fs.writeFileSync(gp.triggerLexicon, JSON.stringify(output.triggerLexicon, null, 2), "utf-8");
     fs.writeFileSync(gp.dayIndex, JSON.stringify(output.dayIndex, null, 2), "utf-8");
     fs.writeFileSync(gp.sourceIndex, JSON.stringify(output.sourceIndex, null, 2), "utf-8");

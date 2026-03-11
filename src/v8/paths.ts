@@ -7,6 +7,7 @@ export interface V8GraphPaths {
     manifest: string;
     offlineAnnotationDrafts: string;
     feedbackLog: string;
+    clusterRebuildDrafts: string;
     nodesEpisodic: string;
     nodesSemantic: string;
     nodesProcedural: string;
@@ -35,6 +36,7 @@ export function graphPaths(workspace: string): V8GraphPaths {
         manifest: path.join(graphDir, "manifest.json"),
         offlineAnnotationDrafts: path.join(graphDir, "offline_annotation_drafts.jsonl"),
         feedbackLog: path.join(graphDir, "feedback_log.jsonl"),
+        clusterRebuildDrafts: path.join(graphDir, "cluster_rebuild_drafts.jsonl"),
         nodesEpisodic: path.join(graphDir, "nodes_episodic.jsonl"),
         nodesSemantic: path.join(graphDir, "nodes_semantic.jsonl"),
         nodesProcedural: path.join(graphDir, "nodes_procedural.jsonl"),

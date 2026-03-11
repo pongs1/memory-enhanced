@@ -16,6 +16,12 @@ import { applyDecay, ageInDays } from "../decay.js";
 import { postJson } from "../http-client.js";
 import { buildV8Graph } from "../v8/compiler.js";
 import { runOfflineBundleAnnotation } from "../v8/offline-annotator.js";
+import { runClusterRebuild } from "../v8/cluster-rebuilder.js";
+import {
+    diagnoseAssociativeClusters,
+    selectRebuildCandidates,
+    syncClusterDiagnosisQueue,
+} from "../v8/rebuild.js";
 
 /** Parameter schema for memory_consolidate tool. */
 export const MemoryConsolidateParams = Type.Object({
@@ -72,6 +78,11 @@ interface ConsolidationReport {
     offlineAnnotationModel: string | null;
     explorationAddedEdges: number;
     explorationJitteredEdges: number;
+    clusterDiagnoses: number;
+    clusterRebuildCandidates: number;
+    clusterRebuildDrafts: number;
+    clusterRebuildSkipped: number;
+    clusterRebuildModel: string | null;
 }
 
 /**
@@ -135,6 +146,11 @@ export async function executeMemoryConsolidate(
         offlineAnnotationModel: null,
         explorationAddedEdges: 0,
         explorationJitteredEdges: 0,
+        clusterDiagnoses: 0,
+        clusterRebuildCandidates: 0,
+        clusterRebuildDrafts: 0,
+        clusterRebuildSkipped: 0,
+        clusterRebuildModel: null,
     };
 
     // --- 1. Collect event files based on scope ---
@@ -245,6 +261,20 @@ export async function executeMemoryConsolidate(
         report.v8GraphEdges = v8Graph.edges.length;
         report.explorationAddedEdges = v8Graph.explorationStats?.addedEdges ?? 0;
         report.explorationJitteredEdges = v8Graph.explorationStats?.jitteredEdges ?? 0;
+        const stableNodeIds = [
+            ...(v8Graph.hardCoreIndex.agent_identity_core || []),
+            ...(v8Graph.hardCoreIndex.inter_agent_protocol_core || []),
+        ];
+        const diagnoses = diagnoseAssociativeClusters(
+            {
+                nodes: v8Graph.nodes,
+                edges: v8Graph.edges,
+            },
+            stableNodeIds
+        );
+        const clusterQueueRun = syncClusterDiagnosisQueue(workspace, diagnoses, new Date().toISOString());
+        report.clusterDiagnoses = clusterQueueRun.diagnoses;
+        report.clusterRebuildCandidates = clusterQueueRun.queued;
 
         const annotationRun = await runOfflineBundleAnnotation({
             workspace,
@@ -255,6 +285,14 @@ export async function executeMemoryConsolidate(
         report.offlineAnnotatedBundles = annotationRun.records.length;
         report.offlineAnnotationSkipped = annotationRun.skipped;
         report.offlineAnnotationModel = annotationRun.model;
+
+        const rebuildRun = await runClusterRebuild({
+            workspace,
+            diagnoses: selectRebuildCandidates(diagnoses),
+        });
+        report.clusterRebuildDrafts = rebuildRun.records.length;
+        report.clusterRebuildSkipped = rebuildRun.skipped;
+        report.clusterRebuildModel = rebuildRun.model;
     }
 
     // --- Format report ---
@@ -269,8 +307,10 @@ export async function executeMemoryConsolidate(
         `  Semantic Corpus: ${report.semanticCorpusEntries} events compiled for offline LLM annotation`,
         `  Associative Graph: ${report.associativeGraphNodes} fast nodes, ${report.associativeGraphEdges} structural edges`,
         `  V8 Graph: ${report.v8GraphBundles} bundles, ${report.v8GraphNodes} nodes, ${report.v8GraphEdges} edges`,
-        `  V8 Exploration Noise: +${report.explorationAddedEdges} sparsity-biased weak edges, ${report.explorationJitteredEdges} jittered associative edges`,
+        `  V8 Exploration Noise: +${report.explorationAddedEdges} exploratory weak edges, ${report.explorationJitteredEdges} jittered associative edges`,
         `  Offline Annotation Drafts: ${report.offlineAnnotatedBundles} new, ${report.offlineAnnotationSkipped} skipped${report.offlineAnnotationModel ? ` (${report.offlineAnnotationModel})` : " (no model configured)"}`,
+        `  Cluster Diagnosis: ${report.clusterDiagnoses} clusters checked, ${report.clusterRebuildCandidates} queued for rebuild`,
+        `  Cluster Rebuild Drafts: ${report.clusterRebuildDrafts} new, ${report.clusterRebuildSkipped} skipped${report.clusterRebuildModel ? ` (${report.clusterRebuildModel})` : " (disabled or no model configured)"}`,
     ];
 
     if (report.unconsolidated > 0) {

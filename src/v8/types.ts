@@ -340,6 +340,17 @@ export interface V8ClusterRebuildDraft {
     rationale: string[];
 }
 
+export interface V8ClusterRebuildRecord {
+    clusterId: string;
+    diagnosis: V8ClusterDiagnosis;
+    sourceRefs: string[];
+    stage1SceneDraft: string;
+    stage2RebuildDraft: string;
+    rebuiltDraft: V8ClusterRebuildDraft;
+    model: string;
+    createdAt: string;
+}
+
 export interface V8HardeningConfig {
     identityCoreMinHits: number;
     identityCoreMinAdoptRate: number;
@@ -445,6 +456,20 @@ export interface V8OfflineAnnotationRunInput {
 
 export interface V8OfflineAnnotationRunOutput {
     records: V8OfflineAnnotationRecord[];
+    skipped: number;
+    model: string | null;
+}
+
+export interface V8ClusterRebuildRunInput {
+    workspace: string;
+    diagnoses: V8ClusterDiagnosis[];
+    maxClusters?: number;
+    force?: boolean;
+    clusterIds?: string[];
+}
+
+export interface V8ClusterRebuildRunOutput {
+    records: V8ClusterRebuildRecord[];
     skipped: number;
     model: string | null;
 }

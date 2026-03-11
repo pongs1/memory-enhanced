@@ -1,8 +1,11 @@
+import * as fs from "node:fs";
 import type {
     V8ClusterDiagnosis,
     V8MemoryEdge,
     V8MemoryNode,
+    V8UpdateQueueItem,
 } from "./types.js";
+import { graphPaths } from "./paths.js";
 
 function clamp01(value: number): number {
     return Math.max(0, Math.min(1, value));
@@ -95,14 +98,33 @@ function classifyCluster(
     return { zone: "plastic_zone", reasons };
 }
 
+function readJsonl<T>(filePath: string): T[] {
+    try {
+        const content = fs.readFileSync(filePath, "utf-8").trim();
+        if (!content) return [];
+        return content.split(/\r?\n/).filter(Boolean).map((line: string) => JSON.parse(line) as T);
+    } catch {
+        return [];
+    }
+}
+
+function writeJsonl<T>(filePath: string, items: T[]): void {
+    fs.writeFileSync(
+        filePath,
+        items.length > 0 ? `${items.map((item) => JSON.stringify(item)).join("\n")}\n` : "",
+        "utf-8"
+    );
+}
+
 export function diagnoseAssociativeClusters(graph: {
     nodes: V8MemoryNode[];
     edges: V8MemoryEdge[];
-}): V8ClusterDiagnosis[] {
+}, stableNodeIds: Iterable<string> = []): V8ClusterDiagnosis[] {
     const associativeEdges = graph.edges.filter((edge) => edge.type === "associative");
     const adjacency = buildAssociativeAdjacency(associativeEdges);
     const components = connectedComponents(adjacency);
     const nodeMap = new Map(graph.nodes.map((node) => [node.id, node]));
+    const stableNodeIdSet = new Set(stableNodeIds);
 
     return components
         .filter((component) => component.length >= 2)
@@ -139,6 +161,21 @@ export function diagnoseAssociativeClusters(graph: {
             const hitchhikerRatio =
                 clusterNodes.length > 0 ? hitchhikerNodeIds.length / clusterNodes.length : 0;
 
+            if (clusterNodes.some((node) => stableNodeIdSet.has(node.id))) {
+                return {
+                    clusterId: `mc_${String(index + 1).padStart(4, "0")}_${bundleIds.slice(0, 2).join("_")}`,
+                    nodeIds: clusterNodes.map((node) => node.id),
+                    bundleIds,
+                    zone: "stable_core" as const,
+                    avgHitCount,
+                    avgAdoptRate,
+                    avgHarmRate,
+                    internalAssociativeDensity,
+                    hitchhikerNodeIds,
+                    reasons: ["contains hard-core protected node"],
+                } satisfies V8ClusterDiagnosis;
+            }
+
             const classification = classifyCluster(
                 clusterNodes.length,
                 avgHitCount,
@@ -167,4 +204,53 @@ export function selectRebuildCandidates(
     diagnoses: V8ClusterDiagnosis[]
 ): V8ClusterDiagnosis[] {
     return diagnoses.filter((item) => item.zone === "rebuild_queue");
+}
+
+export function buildClusterQueueItems(
+    diagnoses: V8ClusterDiagnosis[],
+    observedAt: string
+): V8UpdateQueueItem[] {
+    return selectRebuildCandidates(diagnoses).map((diagnosis, index) => ({
+        id: `uq_cluster_${diagnosis.clusterId}_${Date.parse(observedAt)}_${index + 1}`,
+        targetType: "cluster",
+        targetId: diagnosis.clusterId,
+        reason: diagnosis.reasons.some((reason) => reason.includes("hitchhiker"))
+            ? "hitchhiker"
+            : diagnosis.reasons.some((reason) => reason.includes("dense associative"))
+                ? "cluster_resonance"
+                : "needs_rebuild",
+        evidence: [
+            `bundleIds=${diagnosis.bundleIds.join(",")}`,
+            `avgHitCount=${diagnosis.avgHitCount.toFixed(2)}`,
+            `avgAdoptRate=${diagnosis.avgAdoptRate.toFixed(2)}`,
+            `avgHarmRate=${diagnosis.avgHarmRate.toFixed(2)}`,
+            `internalAssociativeDensity=${diagnosis.internalAssociativeDensity.toFixed(2)}`,
+            ...diagnosis.reasons,
+        ],
+        createdAt: observedAt,
+        status: "pending",
+    }));
+}
+
+export function syncClusterDiagnosisQueue(
+    workspace: string,
+    diagnoses: V8ClusterDiagnosis[],
+    observedAt: string
+): { queued: number; diagnoses: number } {
+    const gp = graphPaths(workspace);
+    const existing = readJsonl<V8UpdateQueueItem>(gp.updateQueue);
+    const freshItems = buildClusterQueueItems(diagnoses, observedAt);
+    const freshByTarget = new Map(
+        freshItems.map((item) => [`${item.targetType}:${item.targetId}`, item])
+    );
+    const kept = existing.filter((item) => {
+        if (item.targetType !== "cluster") return true;
+        return !freshByTarget.has(`${item.targetType}:${item.targetId}`);
+    });
+    const nextQueue = [...kept, ...freshItems];
+    writeJsonl(gp.updateQueue, nextQueue);
+    return {
+        queued: freshItems.length,
+        diagnoses: diagnoses.length,
+    };
 }
