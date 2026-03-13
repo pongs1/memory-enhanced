@@ -191,6 +191,9 @@ export class V8GraphScanner {
         const nodeTokens = new Map<string, Set<string>>();
         for (const node of nodes) {
             nodesById.set(node.id, node);
+            if (node.memoryType === "evidence") {
+                continue;
+            }
             const tokens = tokenize(
                 [node.canonicalLabel, ...(node.aliases || [])].join(" ")
             );
