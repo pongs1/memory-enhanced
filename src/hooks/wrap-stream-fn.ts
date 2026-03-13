@@ -834,6 +834,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                                     goal: anchors.goal,
                                     activeTask: anchors.activeTask,
                                     latestUserRequest: anchors.latestUserRequest,
+                                    mode: v8Scanner.getMode(),
                                 },
                                 loadRecallAssemblyContext(workspace)
                             );
