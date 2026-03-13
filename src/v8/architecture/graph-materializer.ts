@@ -405,6 +405,7 @@ export function materializeGraph(
     }
 
     const mesoLinkSeen = new Set<string>();
+    const mesoAbstractSeen = new Set<string>();
     for (const node of nodes) {
         if (node.primaryLayer !== "micro") continue;
         if (!node.id.startsWith("node_sem_")) {
@@ -444,10 +445,29 @@ export function materializeGraph(
                     validity,
                 },
             });
+            if (!mesoAbstractSeen.has(key)) {
+                mesoAbstractSeen.add(key);
+                pushEdge({
+                    type: "micro_fact_abstracted_as_block",
+                    src: node.id,
+                    dst: mesoNodeId,
+                    layer: "cross",
+                    originType: originType as V8MemoryOriginType,
+                    sourceItemIds,
+                    evidenceSpanIds: [spanId],
+                    qualifiers: {},
+                    confidence: Math.min(0.65, confidence),
+                    state: {
+                        scope,
+                        validity,
+                    },
+                });
+            }
         }
     }
 
     const edgeMesoSeen = new Set<string>();
+    const edgeAbstractSeen = new Set<string>();
     for (const item of items) {
         if (item.itemType === "discourse_unit") continue;
         const edgeNodeId = nodeIdByItemId.get(item.id);
@@ -479,6 +499,24 @@ export function materializeGraph(
                     validity: item.validity,
                 },
             });
+            if (!edgeAbstractSeen.has(key)) {
+                edgeAbstractSeen.add(key);
+                pushEdge({
+                    type: "micro_fact_abstracted_as_block",
+                    src: edgeNodeId,
+                    dst: mesoNodeId,
+                    layer: "cross",
+                    originType: item.originType as V8MemoryOriginType,
+                    sourceItemIds: [item.id],
+                    evidenceSpanIds: [spanId],
+                    qualifiers: {},
+                    confidence: Math.min(0.6, item.confidence),
+                    state: {
+                        scope: item.scope,
+                        validity: item.validity,
+                    },
+                });
+            }
         }
     }
 
