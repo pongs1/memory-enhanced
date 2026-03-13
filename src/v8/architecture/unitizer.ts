@@ -2,14 +2,22 @@ import type { V8SourceRecord, V8Unit } from "../types_v8.js";
 
 export interface UnitizerConfig {
     microMaxChars?: number;
+    mesoMaxSentences?: number;
+    mesoMinSentences?: number;
     mesoMaxChars?: number;
+    macroTargetMesoUnits?: number;
+    macroMaxMesoUnits?: number;
     macroTargetChars?: number;
     macroMaxChars?: number;
 }
 
 const DEFAULT_CONFIG: Required<UnitizerConfig> = {
     microMaxChars: 320,
+    mesoMaxSentences: 8,
+    mesoMinSentences: 2,
     mesoMaxChars: 2000,
+    macroTargetMesoUnits: 4,
+    macroMaxMesoUnits: 8,
     macroTargetChars: 6000,
     macroMaxChars: 12000,
 };
@@ -26,7 +34,12 @@ export function unitizeSourceRecords(
         if (!text) continue;
 
         const mesoOffsets = new Map<string, { cleanStart: number; cleanEnd: number }>();
-        const mesoUnits: V8Unit[] = splitParagraphs(text, cfg.mesoMaxChars).map(
+        const mesoUnits: V8Unit[] = splitParagraphs(text, {
+            microMaxChars: cfg.microMaxChars,
+            mesoMaxSentences: cfg.mesoMaxSentences,
+            mesoMinSentences: cfg.mesoMinSentences,
+            mesoMaxChars: cfg.mesoMaxChars,
+        }).map(
             (segment, idx): V8Unit => {
                 const range = mapCleanRangeToRaw(
                     record.cleanMap,
@@ -102,7 +115,15 @@ export function unitizeSourceRecords(
     return units;
 }
 
-function splitParagraphs(text: string, maxChars: number) {
+function splitParagraphs(
+    text: string,
+    config: {
+        microMaxChars: number;
+        mesoMaxSentences: number;
+        mesoMinSentences: number;
+        mesoMaxChars: number;
+    }
+) {
     const segments: Array<{ text: string; start: number; end: number }> = [];
     const blocks = text.split(/\n{2,}/);
     let cursor = 0;
@@ -114,18 +135,40 @@ function splitParagraphs(text: string, maxChars: number) {
         }
         const start = text.indexOf(block, cursor);
         const end = start + block.length;
-        if (block.length <= maxChars) {
+        const sentences = splitSentences(block, config.microMaxChars);
+        const needsSplit =
+            sentences.length > config.mesoMaxSentences ||
+            block.length > config.mesoMaxChars;
+
+        if (!needsSplit) {
             segments.push({ text: block, start, end });
         } else {
-            const slices = sliceByLength(block, maxChars);
-            let offset = start;
-            for (const slice of slices) {
+            const groups: Array<{ start: number; end: number }> = [];
+            for (let i = 0; i < sentences.length; i += config.mesoMaxSentences) {
+                const chunk = sentences.slice(i, i + config.mesoMaxSentences);
+                if (chunk.length === 0) continue;
+                groups.push({
+                    start: chunk[0].start,
+                    end: chunk[chunk.length - 1].end,
+                });
+            }
+            const lastSize =
+                sentences.length % config.mesoMaxSentences ||
+                config.mesoMaxSentences;
+            if (groups.length > 1 && lastSize < config.mesoMinSentences) {
+                const last = groups.pop();
+                if (last) {
+                    groups[groups.length - 1].end = last.end;
+                }
+            }
+
+            for (const group of groups) {
+                const slice = block.slice(group.start, group.end);
                 segments.push({
                     text: slice,
-                    start: offset,
-                    end: offset + slice.length,
+                    start: start + group.start,
+                    end: start + group.end,
                 });
-                offset += slice.length;
             }
         }
         cursor = end;
@@ -135,7 +178,7 @@ function splitParagraphs(text: string, maxChars: number) {
 
 function splitSentences(text: string, maxChars: number) {
     const segments: Array<{ text: string; start: number; end: number }> = [];
-    const sentenceRegex = /[^。！？!?]+[。！？!?]?/g;
+    const sentenceRegex = /[^.!?。！？]+(?:[。！？!?](?!\d)|\.(?=\s|$))?/g;
     let match: RegExpExecArray | null;
     while ((match = sentenceRegex.exec(text))) {
         const segmentText = match[0].trim();
@@ -207,11 +250,17 @@ function buildMacroUnits(
             continue;
         }
 
+        const projectedCount = current.length + 1;
         const projectedLength = currentEnd - currentStart + (meso.charEnd - meso.charStart);
-        if (
-            projectedLength > cfg.macroMaxChars ||
-            currentEnd - currentStart >= cfg.macroTargetChars
-        ) {
+        const currentLength = currentEnd - currentStart;
+
+        const hitCountLimit = projectedCount > cfg.macroMaxMesoUnits;
+        const hitCharLimit = projectedLength > cfg.macroMaxChars;
+        const hitTarget =
+            current.length >= cfg.macroTargetMesoUnits &&
+            currentLength >= cfg.macroTargetChars;
+
+        if (hitCountLimit || hitCharLimit || hitTarget) {
             flush();
             current = [meso];
             currentStart = meso.charStart;
