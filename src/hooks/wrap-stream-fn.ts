@@ -1,10 +1,6 @@
 import * as fs from "node:fs";
 import { AssociativeScanner } from "../stream/associative-scanner.js";
 import {
-    clearPendingSessionRecalls,
-    registerDeliveredRecalls,
-} from "../v8/feedback.js";
-import {
     hasMeaningfulTaskOverlap,
     isIdleTask,
     summarizeUserRequestForTask,
@@ -12,10 +8,11 @@ import {
     syncLatestUserRequest,
     type WorkingMemoryState,
 } from "../utils.js";
-import { graphPaths } from "../v8/paths.js";
+import { v8StorePaths } from "../v8/paths_v8.js";
 import { assembleRecallPrompts, loadRecallAssemblyContext } from "../v8/recall.js";
+import { recordSessionRecalls } from "../v8/feedback-runtime.js";
 import { V8GraphScanner } from "../v8/scanner.js";
-import type { V8ControlAnchors, V8SceneSignal } from "../v8/types.js";
+import type { V8ControlAnchors, V8SceneSignal } from "../v8/types_v8.js";
 
 // A global registry for active scanners per session
 const scanners = new Map<string, AssociativeScanner>();
@@ -66,8 +63,8 @@ function isV8GraphRecallEnabled(pluginConfig: any, workspace: string): boolean {
     if (!pluginConfig?.enableV8GraphRecall) {
         return false;
     }
-
-    return fs.existsSync(graphPaths(workspace).manifest);
+    const store = v8StorePaths(workspace);
+    return fs.existsSync(store.graphNodes);
 }
 
 function buildControlAnchors(workingState: WorkingMemoryState): V8ControlAnchors {
@@ -108,7 +105,8 @@ function summarizeObservationValue(value: any, maxChars = 320): string {
     }
 
     if (typeof value === "string") {
-        return value.replace(/\s+/g, " ").trim().slice(0, maxChars);
+        const stripped = stripUntrustedObservation(value);
+        return stripped.replace(/\s+/g, " ").trim().slice(0, maxChars);
     }
 
     if (Array.isArray(value)) {
@@ -134,6 +132,19 @@ function summarizeObservationValue(value: any, maxChars = 320): string {
     }
 
     return String(value).slice(0, maxChars);
+}
+
+function stripUntrustedObservation(text: string): string {
+    if (!text) return text;
+    return text
+        .replace(
+            /SECURITY NOTICE:[\s\S]*?(?=<<<EXTERNAL_UNTRUSTED_CONTENT|$)/g,
+            ""
+        )
+        .replace(
+            /<<<EXTERNAL_UNTRUSTED_CONTENT[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT[\s\S]*?>>>/g,
+            ""
+        );
 }
 
 function extractToolSceneSignals(event: any): V8SceneSignal[] {
@@ -818,7 +829,8 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                                     "memory-enhanced v8 graph recall"
                                 );
                                 if (didInterrupt) {
-                                    registerDeliveredRecalls(workspace, sid, prompts);
+                                    const recalledNodeIds = prompts.flatMap((prompt) => prompt.nodeIds);
+                                    recordSessionRecalls(sid, recalledNodeIds);
                                     return;
                                 }
 
@@ -943,6 +955,5 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
         outputWatchdogs.delete(sid);
         scanners.delete(sid);
         v8Scanners.delete(sid);
-        clearPendingSessionRecalls(sid);
     });
 }
