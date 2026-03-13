@@ -22,7 +22,6 @@ export function materializeGraph(
 
     const nodeIdByItemId = new Map<string, string>();
     const itemByNodeId = new Map<string, V8MemoryItem>();
-    const mentionTargetsBySpan = new Map<string, string[]>();
     const discourseUnitBySpan = new Map<string, string>();
     const semanticNodeByKey = new Map<string, V8GraphNode>();
     let semanticNodeSeq = 0;
@@ -59,11 +58,7 @@ export function materializeGraph(
                 if (!discourseUnitBySpan.has(spanId)) {
                     discourseUnitBySpan.set(spanId, nodeId);
                 }
-                continue;
             }
-            const list = mentionTargetsBySpan.get(spanId) || [];
-            list.push(nodeId);
-            mentionTargetsBySpan.set(spanId, list);
         }
     }
 
@@ -272,26 +267,6 @@ export function materializeGraph(
             });
         }
 
-        const mentionTargets = mentionTargetsBySpan.get(span.id) || [];
-        for (const targetNodeId of mentionTargets) {
-            const item = itemByNodeId.get(targetNodeId);
-            if (!item) continue;
-            pushEdge({
-                type: "mention_maps_to_micro_node",
-                src: evidenceNodeId,
-                dst: targetNodeId,
-                layer: "cross",
-                originType: item.originType as V8MemoryOriginType,
-                sourceItemIds: [item.id],
-                evidenceSpanIds: [span.id],
-                qualifiers: {},
-                confidence: Math.min(span.score, item.confidence),
-                state: {
-                    scope: item.scope,
-                    validity: item.validity,
-                },
-            });
-        }
     }
 
     for (const node of nodes) {
