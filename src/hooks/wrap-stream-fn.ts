@@ -16,7 +16,7 @@ import {
     type V8RecallTrace,
 } from "../v8/feedback-runtime.js";
 import { V8GraphScanner } from "../v8/scanner.js";
-import { recordFeedback } from "../v8/feedback-store.js";
+import { recordFeedback, recordFeedbackRecords } from "../v8/feedback-store.js";
 import { readJsonl } from "../v8/architecture/io.js";
 import type {
     V8ControlAnchors,
@@ -30,10 +30,14 @@ const scanners = new Map<string, AssociativeScanner>();
 const v8Scanners = new Map<string, V8GraphScanner>();
 const outputWatchdogs = new Map<string, OutputWatchdogState>();
 const toolFeedbackCooldowns = new Map<string, number>();
+const toolSuccessCooldowns = new Map<string, number>();
+const modelFeedbackCooldowns = new Map<string, number>();
 const nodeLabelCache = new Map<string, { mtime: number; labels: Map<string, NodeLabelEntry> }>();
 
 const TOOL_FEEDBACK_COOLDOWN_MS = 2 * 60 * 1000;
+const TOOL_SUCCESS_COOLDOWN_MS = 2 * 60 * 1000;
 const MODEL_FEEDBACK_WINDOW_MS = 8 * 60 * 1000;
+const MODEL_FEEDBACK_COOLDOWN_MS = 10 * 60 * 1000;
 const TOOL_FEEDBACK_WINDOW_MS = 2 * 60 * 1000;
 const MODEL_ADOPTION_THRESHOLD = 0.22;
 
@@ -444,6 +448,11 @@ function applyModelAdoptionFeedback(
     if (recallTraces.length === 0) return;
     const labelMap = loadNodeLabels(workspace);
     for (const trace of recallTraces) {
+        const cooldownKey = `${sessionId}:${trace.traceId}`;
+        const lastApplied = modelFeedbackCooldowns.get(cooldownKey) || 0;
+        if (Date.now() - lastApplied < MODEL_FEEDBACK_COOLDOWN_MS) {
+            continue;
+        }
         const nodeIds = collectTraceNodeIds(trace);
         if (nodeIds.length === 0) continue;
         const matched = evaluateRecallAdoption(recentOutput, nodeIds, labelMap);
@@ -462,6 +471,7 @@ function applyModelAdoptionFeedback(
                 label: "memory_helped",
             }))
         );
+        modelFeedbackCooldowns.set(cooldownKey, Date.now());
     }
 }
 
@@ -1169,6 +1179,30 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                     );
                 }
                 toolFeedbackCooldowns.set(sid, now);
+            }
+            const lastSuccess = toolSuccessCooldowns.get(sid) || 0;
+            if (
+                now - lastSuccess > TOOL_SUCCESS_COOLDOWN_MS &&
+                !detectToolFailure(event)
+            ) {
+                const recallTraces = getRecentRecallTraces(sid, TOOL_FEEDBACK_WINDOW_MS);
+                for (const trace of recallTraces) {
+                    const nodeIds = collectTraceNodeIds(trace);
+                    if (nodeIds.length === 0) continue;
+                    recordFeedbackRecords(workspace, [
+                        {
+                            targets: nodeIds,
+                            label: "memory_helped",
+                            polarity: "positive",
+                            scope: "scene",
+                            reason: "tool_success_after_recall",
+                            sessionId: sid,
+                            recallTraceId: trace.traceId,
+                            source: "tool" as const,
+                        },
+                    ]);
+                }
+                toolSuccessCooldowns.set(sid, now);
             }
         }
 
