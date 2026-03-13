@@ -111,8 +111,10 @@ If you are testing on OpenClaw 3.1 and checkpoint steering never changes the rep
       "memory-enhanced": {
         "enabled": true,
         "config": {
-          "halfLifeDays": 30,         // Decay rate for events
-          "archiveThreshold": 0.2,    // Score at which memories move to archive
+          "enableV8GraphRecall": true,
+          "v8CleanSlateMode": true,
+          "v8SessionTraceDir": "/home/pongs/.openclaw/agents/main/sessions",
+          "v8PackCacheTtlDays": 7,
           "outputCheckpointChars": 1600,
           "outputCheckpointCooldownChars": 1000,
           "outputCheckpointBoundarySlackChars": 320,
@@ -150,15 +152,15 @@ If you are testing on OpenClaw 3.1 and checkpoint steering never changes the rep
 Inside your active project workspace (`$WORKSPACE`), run the following commands to create the 4-layer directory structure:
 
 ```bash
-# 1. Searchable Layers (Public to Agent tools)
+# 1. Optional curated outputs (not ingested by clean-slate)
 mkdir -p memory/knowledge
 mkdir -p memory/skills/verified
 mkdir -p memory/skills/drafts
 
 # 2. System Metadata Layers (Hidden, Plugin-only access)
 mkdir -p .memory/active
-mkdir -p .memory/events
-mkdir -p .memory/archive
+mkdir -p .memory/graph
+mkdir -p .memory/raw/sessions
 ```
 
 ### Upgrade Cleanup for Older Installs
@@ -167,7 +169,7 @@ If this workspace previously used V5/V6/V7 drafts, clean the instruction layer b
 
 1. Replace old workspace prompt fragments that mention `memory_focus`, `memory_scratchpad`, `memory_status`, or manual editing of `MEMORY.md`.
 2. Remove old heartbeat routines that try to maintain focus/task state. Heartbeat should only do memory distillation and cleanup.
-3. Keep `.memory/events/` and `memory/knowledge/` if they contain useful history, but expect `.memory/active/focus_stack.json` to be auto-migrated to the new schema on the first `memory_working` write.
+3. Keep `memory/knowledge/` and `memory/skills/` only if they contain useful notes. The clean-slate graph will be rebuilt from session traces, and `.memory/graph/` can be deleted safely.
 4. If behavior still looks haunted by old instructions, temporarily move the old workspace `AGENTS.md`, `USER.md`, and `HEARTBEAT.md` aside, then re-apply the snippets from Step 5 and Step 6 exactly.
 
 ### Initial State Files
@@ -217,13 +219,11 @@ You possess a 4-layer memory system. **DO NOT manually edit text files in the me
 - **To manage tasks:** Use `memory_working`. It maintains a passive task ledger (`Goal / Active / Next / Deferred / Done Recently`) that is injected every turn.
 - **Idle capture:** If the ledger is waiting for work, the newest user request is automatically promoted into `Active`.
 - **Priority rule:** The latest user request is always authoritative. Stored tasks are resumable backlog, not hard commands.
-- **To record insights:** Use `memory_record`. This triggers dual-write episodic encoding.
-- **To explore associations:** Use `memory_explore` when you need to follow semantic "linkages".
-- **To perform maintenance:** Use `memory_consolidate`. This applies decay to old events and regenerates your memory map.
+- **To build the memory graph:** Use `memory_consolidate`. It ingests raw session traces and materializes the clean-slate graph.
+- **Do not hand-edit** `.memory/graph/`. Treat it as a generated store.
 
-### 🧠 MEMORY_INDEX.md - Your Long-Term Gateway
-- **DO NOT edit MEMORY_INDEX.md manually.** It is an auto-generated index maintained by `memory_consolidate`.
-- To update knowledge, update files in `memory/knowledge/` and run consolidation.
+### 🧠 MEMORY_INDEX.md - Optional Reference
+- `MEMORY_INDEX.md` is optional in clean-slate mode. If you maintain curated notes in `memory/knowledge/`, treat them as post-hoc outputs rather than sources.
 ```
 
 ### 2. Update `$WORKSPACE/USER.md`
@@ -232,9 +232,7 @@ Modify the `## Context` section to prevent the LLM from bloating the file:
 ```markdown
 ## Context & Preferences (Managed)
 
-> **IMPORTANT**: Use `memory_record` to capture new user preferences. Do not append them manually here.
-> The background `agent_end` hook also auto-sniffs preferences.
-> Periodically distill insights into `memory/knowledge/user-prefs.md`.
+> **IMPORTANT**: Do not manually append preferences here. The clean-slate graph is built from raw session traces, and curated notes are optional post-hoc outputs.
 ```
 
 ---
@@ -246,20 +244,20 @@ Add this to `$WORKSPACE/HEARTBEAT.md` to ensure the agent cleans up while idle:
 
 ```markdown
 # HEARTBEAT.md
-- **Memory Check**: 
-  1. Check the telemetry in the system prompt or inspect `.memory/events/*.jsonl`.
-  2. If unconsolidated events > 3: Distill knowledge to `memory/knowledge/*.md` then run `memory_consolidate scope="session"`.
+- **Memory Check**:
+  1. Run `memory_consolidate` to rebuild the clean-slate graph from session traces.
+  2. If the workspace is heavy, prune or archive optional `memory/knowledge/` notes manually (they are not sources).
 ```
 
 ### 2. Deep Sleep Cleanup (Cron)
-Add a daily cron job to `openclaw.json` for deep archiving:
+Add a daily cron job to `openclaw.json` for a clean-slate rebuild:
 
 ```jsonc
 {
   "cron": [
     {
       "schedule": "0 3 * * *",
-      "prompt": "Execute Tier 3 Full Consolidation: 1) Read ALL unconsolidated events. 2) Distill knowledge. 3) Call memory_consolidate scope=full. Reply NO_REPLY.",
+      "prompt": "Run memory_consolidate to rebuild the clean-slate graph. Reply NO_REPLY.",
       "agentId": "default"
     }
   ]
@@ -283,8 +281,8 @@ pnpm openclaw:overlay:check -- --openclaw-dir /home/pongs/openclaw
 Then start a session and run this sequence:
 
 1.  **Status**: `"Run memory_working action='status'"` → Should show the passive task ledger from Step 4.
-2.  **Episodic Check**: `"Run memory_record content='User likes dark mode' type='preference'"` → Check if `memory/2026-XX-XX.md` is updated.
+2.  **Graph Build Check**: `"Run memory_consolidate"` → Verify `.memory/graph/graph_nodes.jsonl` and `.memory/graph/graph_edges.jsonl` are populated.
 3.  **Reprioritization Check**: `"Run memory_working action='reprioritize' focus='Handle a new urgent request'"` → The new active task should move to the top and the previous task should fall back into `Next`.
-4.  **Consolidation Check**: `"Run memory_consolidate scope='session'"` → Check if `MEMORY_INDEX.md` is regenerated.
+4.  **Recall Check (optional)**: Enable `enableV8GraphRecall` and ensure live recall injects a memory block during a long answer.
 
 **Congratulations! Your Agent now has a functional, evolving mind.**

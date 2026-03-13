@@ -1,895 +1,1553 @@
-# V8 Schema and Pipeline Draft
+# V8 Schema and Pipeline
 
-Status: draft  
+Status: rewrite target  
 Depends on: [V8_ARCHITECTURE.md](./V8_ARCHITECTURE.md)
 
 Interface and migration companion:
 
 - [V8_TYPES_AND_MIGRATION.md](./V8_TYPES_AND_MIGRATION.md)
 
-This document turns the V8 architecture into an implementable design.
-It defines:
+This document defines the implementable V8 data flow.
+It replaces the older `event/md -> bundle/node/edge` pipeline with an evidence-backed memory pipeline while preserving V8's online ignition layer as a first-class design concern.
 
-- the graph data model
-- the compilation pipeline from `event` and `md` into graph bundles
-- the online scanner and recall assembly flow
-- the feedback, sleep, and hardening pipeline
-- cluster diagnosis and true local rebuild
-- a migration path from the current prototype
+## 1. Pipeline Overview
 
-This is still a design document, not a claim that the current code already implements it.
+The new write path is:
 
-## 1. Design Principles
+`raw or curated source -> source normalization -> unitization -> evidence span extraction -> memory IR extraction -> graph materialization + summary/state materialization`
 
-V8 should satisfy these constraints:
+The new read path is:
 
-- graph is a compiled layer, not the only source of truth
-- `event` nodes are included by default
-- episodic activation stays local in time unless reactivated
-- recalled memory is assembled from node bundles back to source `md` / `event`
-- online scanning must be cheap enough for stream-time use
-- learning must distinguish "wrong" from "irrelevant" from "outdated"
-- some memories may harden into durable agent identity or inter-agent protocol cores
+`query -> graph/state/summary retrieval -> evidence backtrace -> context assembly`
 
-## 2. Storage Layout
+The new live-generation fast path is:
 
-Proposed graph directory:
+`stream window + control anchors + scene signals -> ignition scan -> graph propagation -> activated bundles -> context assembly`
+
+The new observation/feedback side path is:
+
+`recall delivery + user/model/tool outcomes -> runtime observation ledger -> attribution -> flash/scene/durable updates + optional source promotion`
+
+This side path is not a return to the old `event` system.
+It is an append-only runtime trace used for attribution, correction, and fact validation.
+
+The architecture has six write-path stages:
+
+1. `source ingestion`
+2. `source normalization`
+3. `unitization`
+4. `evidence span extraction`
+5. `memory IR extraction`
+6. `product materialization`
+
+And four read-path stages:
+
+1. `ignition scan`
+2. `graph propagation`
+3. `bundle ranking`
+4. `context assembly`
+
+## 2. Source Policy (Clean-Slate Mode)
+
+V8 runs in **clean-slate mode** by default.
+Only raw session/log evidence is ingested.
+
+### 2.1 Raw evidence sources
+
+Examples:
+
+- session traces (raw message records)
+- raw user turns
+- raw assistant turns
+- assistant `toolCall` blocks and persisted `toolResult` messages when present in the transcript
+- daily logs in `memory/YYYY-MM-DD.md` (optional, off by default)
+
+Rules:
+
+- authoritative
+- append-only
+- offsets must remain valid
+- never discarded after higher-level products are built
+- transcript-level tool records are useful but may be incomplete; missing execution metadata must be recovered from runtime observation hooks instead of assumed from the transcript alone
+
+### 2.2 Runtime observation channels
+
+OpenClaw exposes runtime hooks that are not equivalent to plain conversation messages.
+V8 should treat them as append-only raw observation channels, not as derived `event` artifacts.
+
+Primary observation surfaces:
+
+- `message_received`: inbound user text only
+- `after_tool_call`: tool name, params, sanitized result or error, duration
+- `tool_result_persist`: `toolResult` message before transcript persistence
+- `before_message_write`: any message before session JSONL write
+- `llm_input`: final prompt, system prompt, full `historyMessages`, image count
+- `llm_output`: assistant texts, last assistant message, usage
+- `agent_end`: final message snapshot plus success/error and duration
+
+Rules:
+
+- `message_received` is the user-feedback channel, not the fact channel
+- fact-based feedback must come from tool and LLM observation hooks
+- observation records are raw runtime traces and stay append-only
+- when live hooks are unavailable, session transcript replay may backfill observations, but hook records remain the preferred source
+
+### 2.3 Curated sources (disabled)
+
+Curated documents are not ingested in clean-slate mode.
+They are treated as post-hoc outputs (packs), not sources.
+
+Examples:
+
+- `memory/knowledge/*.md`
+- `memory/skills/verified/*.md`
+- `memory/skills/drafts/*.md`
+
+### 2.4 Legacy derived sources (disabled)
+
+Legacy artifacts are not ingested:
+
+- `.memory/events/*.jsonl`
+- old bundle-like draft records
+- older graph-derived files
+
+Do not emit new `event` artifacts. Episodic views should be derived from the canonical graph or assembled at runtime.
+
+## 3. Source Normalization Policy
+
+Normalization does not mean semantic rewriting.
+It means turning heterogeneous sources into a stable source contract while preserving evidence value.
+
+### 3.1 Keep
+
+Keep these fields or reconstruct them if possible:
+
+- source path or source id
+- session id, turn id, message id when available
+- speaker
+- timestamp
+- char offsets or line offsets
+- original raw text
+
+### 3.2 Clean
+
+Session traces often include injected markers or control tags.
+Normalization must produce a cleaned text stream for unitization while preserving provenance.
+
+Rules:
+
+- strip prompt scaffolding, tool wrappers, and injected memory blocks
+- preserve a span map so evidence spans can still backtrace to raw offsets
+- keep both `raw_text` and `clean_text`
+- transcript replay must route `toolCall` and `toolResult` records into observation normalization instead of dropping them blindly or flattening them into ordinary user/assistant text
+
+### 3.3 Strip or downgrade
+
+Downgrade these into non-authoritative hints:
+
+- legacy event type labels
+- old node roles
+- old prompt-injected summaries
+- historical scaffolding strings
+- prompt noise and control boilerplate
+
+These fields may still be stored as `legacyHints`, but they must not be treated as first-class memory facts.
+
+### 3.4 Observation promotion rules
+
+Not every runtime observation becomes a source record.
+V8 needs an explicit promotion contract between OpenClaw observations and the extraction path.
+
+Rules:
+
+- persist every raw observation first
+- promote only stable, provenance-complete observations into `source_records`, `evidence_spans`, or runtime feedback traces
+- do not flatten every tool result into the same text stream as user or assistant turns
+- session transcript `toolResult` blocks are fallback provenance, not the only detection path
+
+Special rule for the built-in `read` tool:
+
+- capture `tool_name`, `tool_call_id`, `path|file_path`, `offset`, `limit`, `duration_ms`, and `error`
+- persist a bounded result excerpt plus `truncated`, `result_kind`, and media flags
+- treat `params.path` or `params.file_path` as the authoritative file locator because the returned result may omit path details
+- if the path resolves to a stable workspace or local document and policy allows, create a document-source ref so V8 can later ingest the underlying file directly instead of depending only on the possibly truncated tool result
+- image or binary reads should remain observation/media records unless a separate OCR or document adapter promotes them into text evidence
+
+Implementation note:
+
+- `message_received` alone is insufficient because it never contains tool results
+- `after_tool_call` and `tool_result_persist` must be part of the canonical observation path
+- session transcript `assistant/toolCall` and `toolResult` records should be replayed into the same observation pipeline when rebuilding from disk
+
+### 3.5 Observation cleaning policy
+
+Observation cleaning should stay deliberately shallow.
+Its job is only to remove obvious junk and preserve enough structure for later unitization and LLM extraction.
+It is not a second semantic summarization layer.
+
+Required pre-clean steps:
+
+- preserve structured metadata first: tool name, params, path, cwd, command, touched files, exit code, error class, duration, status
+- strip obvious wrappers and noise: ANSI escapes, transport envelopes, duplicated metadata shells, injected memory blocks, schema echoes, retry wrappers
+- cap oversized payloads with deterministic truncation
+- keep high-signal regions such as errors, warnings, verdict lines, selected excerpts, result heads/tails
+- leave semantic denoising to the later unit/IR stage instead of trying to fully solve it here
+
+Practical rule:
+
+- high-density natural-language tool output may pass through almost unchanged after wrapper stripping
+- noisy operational output should be trimmed to metadata plus a small high-signal excerpt
+- control/lifecycle text should usually keep only structured fields and minimal user-visible text
+
+Required output per observation:
+
+- `raw_payload_ref`
+- `clean_text` or `null`
+- `structured_fields`
+- `contamination_flags`
+- `truncation_info`
+
+Do not introduce a second persistent "clean then summarize again" layer before unitization.
+The unitizer and later LLM extraction are expected to ignore the remaining irrelevant content.
+
+### 3.6 Prompt contamination guard
+
+Tool and agent lifecycle observations are especially vulnerable to prompt contamination.
+V8 must keep "what the system told the model" separate from "what happened in the world".
+
+Never promote these raw surfaces as ordinary memory text:
+
+- injected memory blocks
+- task-ledger or control overlays
+- tool schemas or parameter help
+- approval notices and wrapper instructions
+- system prompt fragments
+- retry scaffolding
+- model self-instruction copied into tool payloads
+
+Guard rules:
+
+- `llm_input` is attribution-only by default
+- `agent_end` is reconciliation-only by default
+- if `agent_end` or `llm_output` text is used for memory, only user-visible assistant content may be considered, never hidden prompt scaffolding
+- if a tool output contains echoed prompt text or injected memory blocks, strip them before any promotion or attribution
+- contamination flags should block durable promotion until the observation is revalidated by cleaner evidence
+
+## 4. Storage Layout
+
+Recommended graph-adjacent layout:
 
 ```text
-.memory/graph/
-  manifest.json
-  nodes_episodic.jsonl
-  nodes_semantic.jsonl
-  nodes_procedural.jsonl
-  edges_associative.jsonl
-  edges_structural.jsonl
-  edges_supersession.jsonl
-  bundles.jsonl
-  offline_annotation_drafts.jsonl
-  update_queue.jsonl
-  trigger_lexicon.json
-  day_index.json
-  source_index.json
-  hard_core_index.json
-  embedding_index/
-    nodes.f32
-    ids.json
-    metadata.json
+.memory/
+  raw/
+    sessions/
+    normalized_sources/
+    observations/
+      message_feedback.jsonl
+      tool_observations.jsonl
+      llm_io_traces.jsonl
+      read_artifacts.jsonl
+  runtime/
+    recall_traces.jsonl
+    feedback_records.jsonl
+    feedback_overrides.jsonl
+    feedback_attribution.jsonl
+    review_windows.jsonl
+  graph/
+    manifest.json
+    source_records.jsonl
+    units.jsonl
+    evidence_spans.jsonl
+    memory_items.jsonl
+    graph_nodes.jsonl
+    graph_edges.jsonl
+    summary_packs.jsonl
+    state_packs.jsonl
+    trigger_lexicon.json
+    day_index.json
+    source_index.json
+    embedding_index/
 ```
 
-### File roles
+The old split files such as `nodes_episodic.jsonl` may still exist during migration, but they are legacy compatibility artifacts, not the target storage model.
 
-- `manifest.json`
-  - schema version
-  - compiler version
-  - embedding model id
-  - last rebuild time
-- `nodes_*.jsonl`
-  - node store split by substrate
-- `edges_*.jsonl`
-  - sparse edges split by role
-- `bundles.jsonl`
-  - maps source memory -> bundle members
-- `offline_annotation_drafts.jsonl`
-  - staged sleep-phase outputs preserved for review before any future merge into the main graph
-- `update_queue.jsonl`
-  - staleness suspicion, contradiction, resonance, or rebuild candidates
+The ignition layer still depends on compact read-time indexes:
+
 - `trigger_lexicon.json`
-  - compact lexical trigger index for online use
 - `day_index.json`
-  - episodic date windows and day-to-node mapping
 - `source_index.json`
-  - source ref -> nodes / bundle / md location
-- `hard_core_index.json`
-  - agent identity core and inter-agent protocol core entries
 
-## 3. Common IDs
+## 5. Source and Observation Contracts
 
-Recommended ids:
+### 5.1 Source record contract
 
-- bundle id: `mb_<date>_<seq>`
-- node id: `mn_<date>_<seq>`
-- edge id: `me_<date>_<seq>`
-- update queue id: `mq_<date>_<seq>`
-
-Recommended source references:
-
-- event source: `evt_20260310_003`
-- md source block: `memory/knowledge/openclaw.md#mn_block_04`
-- daily log source: `memory/2026-03-10.md#evt_20260310_003`
-
-## 4. Bundle Model
-
-One source memory compiles to one bundle.
-
-Bundle shape:
-
-```json
-{
-  "bundle_id": "mb_20260310_001",
-  "source_type": "event|knowledge_md|skill_md",
-  "source_ref": "evt_20260310_003",
-  "kind": "episodic|semantic|procedural",
-  "title": "OpenClaw overlay update workflow",
-  "node_ids": [
-    "mn_20260310_011",
-    "mn_20260310_012",
-    "mn_20260310_013"
-  ],
-  "canonical_ref": "memory/knowledge/openclaw.md#workflow_overlay_update",
-  "summary_ref": "memory/knowledge/openclaw.md",
-  "day_key": "2026-03-10",
-  "episode_key": "openclaw-update-incident",
-  "encoding_context": {
-    "goal": "恢复插件更新后的运行环境",
-    "activeTask": "排查网关断连原因",
-    "lastUserRequest": "先排查为什么更新插件后网关断连",
-    "topNextTasks": ["梳理部署手册安装步骤"],
-    "scopeHints": ["workspace-neuro", "openclaw", "memory-enhanced"],
-    "recordedAt": "2026-03-10T08:41:22.000Z"
-  },
-  "created_at": "2026-03-10T08:41:22.000Z",
-  "updated_at": "2026-03-10T08:41:22.000Z"
-}
-```
-
-### Why bundles exist
-
-- recall should not inject isolated nodes blindly
-- online matching works on nodes, but insertion often needs the local bundle
-- bundle is the bridge from fast graph math back to human-readable source memory
-- `encoding_context` is a side-channel summary of the task stack at record time, not part of node text
-
-### Encoding context rule
-
-`encoding_context` should stay compact and side-channel only.
-
-Use it for:
-
-- scene reconstruction
-- context-fit scoring
-- detecting when current scene drift is too far from the original encoding scene
-- stage-1 offline annotation as a weak historical cue
-
-Do not use it as the main memory content.
-Do not dump the full historical stack into node text.
-
-Offline sleep-phase annotation drafts should be stored separately from the main graph payload:
-
-- `.memory/graph/offline_annotation_drafts.jsonl`
-
-Each line should preserve:
-
-- the source bundle id and refs
-- stage-1 scene reconstruction markdown
-- stage-2 relation scoring markdown
-- the sanitized draft produced by code
-
-## 5. Node Schema
-
-Base node shape:
-
-```json
-{
-  "id": "mn_20260310_011",
-  "bundle_id": "mb_20260310_001",
-  "kind": "episodic|semantic|procedural",
-  "role": "topic|workflow|constraint|condition|evidence|checkpoint",
-  "names": {
-    "zh": "网关断连恢复",
-    "en": "gateway recovery"
-  },
-  "aliases": ["网关恢复", "gateway disconnected recovery"],
-  "text": "overlay update should restore clean core before patch reapply",
-  "summary": "short normalized summary for retrieval",
-  "keywords": ["overlay", "update", "clean core", "patch"],
-  "language": "zh|en|mixed",
-  "source_ref": "evt_20260310_003",
-  "canonical_ref": "memory/knowledge/openclaw.md#workflow_overlay_update",
-  "confidence": 0.86,
-  "importance": 0.82,
-  "hit_count": 0,
-  "adopt_count": 0,
-  "reject_count": 0,
-  "harm_count": 0,
-  "last_used_at": "2026-03-10T08:41:22.000Z",
-  "last_verified_at": "2026-03-10T08:41:22.000Z",
-  "cooldown_until": null,
-  "day_key": "2026-03-10",
-  "episode_key": "openclaw-update-incident"
-}
-```
-
-### Required fields
-
-- `bundle_id`
-- `kind`
-- `role`
-- `text`
-- `source_ref`
-- `canonical_ref`
-
-### Notes
-
-- `names.zh` and `names.en` point to the same node identity and should both be indexed for trigger matching
-- `aliases` are optional equivalent labels, shorthand, or bilingual variants
-- `text` is optimized for fast matching, not full recall insertion
-- `canonical_ref` is where assembled recall should ultimately read from
-- `cooldown_until` prevents short-term repeated firing
-- `day_key` and `episode_key` help build small episodic subgraphs
-
-## 6. Edge Schema
-
-Base edge shape:
-
-```json
-{
-  "id": "me_20260310_014",
-  "type": "associative|causal|constraint|workflow_next|same_topic|supersedes|valid_when|invalid_when",
-  "src": "mn_20260310_011",
-  "dst": "mn_20260310_013",
-  "assoc_strength": 0.74,
-  "utility": 0.88,
-  "trust": 0.81,
-  "freshness": 0.93,
-  "context_fit": 0.79,
-  "evidence_count": 3,
-  "activation_count": 0,
-  "adopt_count": 0,
-  "reject_count": 0,
-  "last_updated_at": "2026-03-10T08:41:22.000Z",
-  "last_verified_at": "2026-03-10T08:41:22.000Z"
-}
-```
-
-### Score meanings
-
-- `assoc_strength`
-  - how strongly one node should activate the other
-- `utility`
-  - how often the edge led to useful recall
-- `trust`
-  - whether the relationship has remained reliable
-- `freshness`
-  - whether the relation still appears current
-- `context_fit`
-  - whether it fits the present repo / task / environment
-
-### Effective propagation score
-
-At runtime, edge propagation can use:
-
-```text
-prop_score = assoc_strength * utility * trust * freshness * context_fit
-```
-
-This can later be weighted rather than purely multiplied.
-The important point is that one failed condition should not collapse the whole memory.
-
-## 7. Indexes
-
-### 7.1 Trigger lexicon
-
-`trigger_lexicon.json` should map normalized triggers to candidate node ids.
+Each ingested source becomes a normalized source record.
 
 Example:
 
 ```json
 {
-  "overlay": ["mn_20260310_011"],
-  "gateway disconnected": ["mn_20260310_021", "mn_20260310_045"],
-  "字幕": ["mn_20260310_051"]
-}
-```
-
-This is the fast lexical ignition path.
-
-### 7.2 Day index
-
-`day_index.json` should map dates to episodic nodes and episodes.
-
-Example:
-
-```json
-{
-  "2026-03-10": {
-    "node_ids": ["mn_20260310_011", "mn_20260310_012"],
-    "episode_keys": ["openclaw-update-incident"]
+  "source_record_id": "src_20260312_001",
+  "source_class": "raw|curated|legacy",
+  "source_type": "session_log|daily_log|knowledge_md|skill_md|event_jsonl",
+  "source_ref": "memory/2026-03-12.md#session-14",
+  "speaker": "user",
+  "timestamp": "2026-03-12T09:11:02.000Z",
+  "raw_text": "....",
+  "language": "zh",
+  "metadata": {
+    "conversation_id": "conv_001",
+    "turn_id": "turn_142"
   }
 }
 ```
 
-This supports the "silent unless activated" episodic rule.
+### 5.2 Observation record contract
 
-### 7.3 Source index
-
-`source_index.json` maps `source_ref` to:
-
-- bundle ids
-- canonical md file
-- related daily log path
-- related event ids
-
-This lets the recall assembler rehydrate from source quickly.
-
-### 7.4 Hard core index
-
-`hard_core_index.json` contains hardened durable memory.
+Observation records are append-only runtime facts captured from OpenClaw hooks.
+They are not graph nodes and not source records by default.
 
 Example:
 
 ```json
 {
-  "agent_identity_core": ["mn_20260310_111", "mn_20260310_117"],
-  "inter_agent_protocol_core": ["mn_20260310_211", "mn_20260310_219"]
+  "observation_id": "obs_20260312_044",
+  "observation_type": "tool_result",
+  "hook": "after_tool_call",
+  "run_id": "run_817",
+  "session_id": "sess_22",
+  "tool_name": "read",
+  "tool_call_id": "call_9F",
+  "params": {
+    "path": "src/v8/scanner.ts",
+    "offset": 1
+  },
+  "raw_payload_ref": "raw://observations/tool_observations.jsonl#44",
+  "result_excerpt": "export class V8GraphScanner ...",
+  "clean_text": "read src/v8/scanner.ts from offset 1; scanner class declaration observed",
+  "structured_fields": {
+    "path": "src/v8/scanner.ts",
+    "offset": 1,
+    "result_kind": "text"
+  },
+  "contamination_flags": [],
+  "truncation_info": null,
+  "result_kind": "text",
+  "truncated": false,
+  "is_error": false,
+  "timestamp": "2026-03-12T09:14:21.000Z",
+  "transcript_ref": "/home/pongs/.openclaw/agents/main/sessions/...jsonl#142"
 }
 ```
 
-## 8. Compilation Pipeline
+Observation records are used for:
 
-### 8.1 Inputs
+- runtime scene refresh
+- recall attribution
+- fact feedback
+- optional promotion into source records or evidence spans
 
-Compiler reads from:
+Rules:
 
-- `.memory/events/*.jsonl`
-- `memory/knowledge/*.md`
-- optionally `memory/skills/**/*.md`
+- observations keep structured metadata even when `clean_text` is empty
+- an observation may remain useful for attribution without ever becoming a unit
+- code-family observations often contribute metadata and evidence refs more than large text spans
 
-It should not compile directly from raw chat unless raw chat was already promoted into `event`.
+### 5.3 Read observation contract
 
-### 8.2 Event compilation
+The built-in `read` tool must be treated as a first-class observation source.
 
-Event memories are included by default.
+Example:
 
-Why:
-
-- `event` has already been filtered once compared with raw logs
-- many useful recalls begin with recent failures, discoveries, checkpoints, and user constraints
-
-Default event pipeline:
-
-1. load event
-2. normalize text
-3. extract bundle title
-4. detect candidate roles:
-   - topic
-   - constraint
-   - checkpoint
-   - workflow
-   - evidence
-5. build `2-6` nodes depending on structure
-6. create bundle record
-7. update day index and source index
-
-### 8.3 MD compilation
-
-Long-term md should be compiled from explicit structured blocks when possible.
-
-Preferred authoring pattern:
-
-```md
-<!-- memory-node
-kind: procedural
-role: workflow
-confidence: 0.88
-importance: 0.83
-source_refs: [evt_20260310_003]
-name_zh: 网关断连恢复
-name_en: gateway recovery
-aliases: [网关恢复, gateway disconnected recovery]
--->
-OpenClaw overlay update should restore clean core before patch reapply.
-<!-- /memory-node -->
+```json
+{
+  "observation_id": "obs_read_20260312_009",
+  "observation_type": "read_artifact",
+  "tool_name": "read",
+  "tool_call_id": "call_9F",
+  "path": "src/v8/scanner.ts",
+  "offset": 1,
+  "limit": 200,
+  "result_kind": "text",
+  "excerpt": "export class V8GraphScanner ...",
+  "truncated": true,
+  "duration_ms": 48,
+  "workspace_ref": "workspace://src/v8/scanner.ts"
+}
 ```
 
-The compiler may also fall back to heuristic extraction from headings and short sections, but explicit blocks are preferred.
-The offline annotator should fill `name_zh`, `name_en`, and optional `aliases` whenever it can do so reliably.
+Rules:
 
-### 8.4 Node bundle sizing
+- path metadata comes from tool params, not from user text
+- excerpt text is for runtime attribution and lightweight recall only
+- durable extraction should prefer the underlying file or document source when it is stable and re-readable
+- if `read` returns image content, keep the media ref and MIME info even when no usable text is available
 
-Bundle sizing should be adaptive, not fixed.
+### 5.4 Tool-call and lifecycle memory policy
 
-Default rule:
+Tool-call and lifecycle records are memory-relevant, but not as raw transcript prose.
 
-- short simple memory: `2-3` nodes
-- medium memory: `3-6` nodes
-- long structured memory: more than `6` only if each node keeps a clean role boundary
+They should be preserved in three layers:
 
-Decision heuristics:
+- `operation metadata`
+  - tool name, params, duration, status, path, command, target, exit code
+- `operation evidence text`
+  - cleaned high-signal excerpts only
+- `operation attribution links`
+  - which recall pack, state, or decision this operation validated, contradicted, or depended on
 
-- number of clauses
-- number of constraints
-- number of artifacts or evidence references
-- whether there is a restart point or handoff payload
+Promotion rules:
 
-## 9. Online Scanner
+- tool-call metadata may produce memory items when it establishes stable workflow facts, external state, document provenance, or repeated procedure patterns
+- raw `agent_end` text should not become memory evidence directly
+- `agent_end` may emit derived lifecycle facts such as success, failure, abort, timeout, unresolved error, or completion of a branch
+- if session transcripts lack complete tool execution details, runtime hook observations are canonical for those fields
 
-### 9.1 Stream windows
+### 5.5 Assembled operation text view
 
-The scanner should maintain three rolling char windows:
+For unitization, V8 may assemble one high-density text view from:
+
+- session transcript `assistant/toolCall`
+- session transcript `toolResult`
+- live `after_tool_call` observation
+- selected lifecycle metadata such as `status`, `duration`, `exit_code`, `error`
+
+This assembled view is a unitization aid, not a replacement for the underlying structured records.
+
+Session-grounded source shape (observed in real traces):
+
+- assistant message with `content[].type = toolCall`, carrying `id`, `name`, and `arguments`
+- following message with `role = toolResult`, carrying `toolCallId`, `toolName`, `content[]`, optional `details`, and `isError`
+
+Recommended Markdown form (natural language first, not rigid key-value):
+
+```text
+### Tool Execution Snapshot
+
+The assistant called `read` on `src/v8/scanner.ts` from offset `1`.
+The call completed successfully in about `48ms`.
+
+The returned content starts with:
+
+`export class V8GraphScanner ...`
+```
+
+Rules:
+
+- build it by `tool_call_id` when available, otherwise by local execution order
+- use cleaned params/result text plus structured metadata
+- exclude hidden prompt scaffolding, wrapper text, and internal control strings
+- keep a span map from assembled text back to the contributing observation fields
+- use this assembled Markdown text as the preferred unitizer input for tool operations because it is denser and easier to segment than raw fragmented transcript records
+- do not force unrelated lifecycle records into the same assembled text block
+
+## 6. Unitization
+
+All source records are segmented into `micro`, `meso`, and `macro` units.
+
+### 6.1 Definitions
 
 - `micro`
+  - smallest semantically coherent evidence span that can carry a local cue, comparison, condition, or relation, often close to one sentence or short span
 - `meso`
+  - stable semantic segment that can support one coherent proposition cluster or discourse function, usually within `≈300-1500` Chinese chars or `≈150-800` English tokens
 - `macro`
+  - topic, section, or time-window context, usually within `≈2k-20k` tokens
+
+### 6.2 Rules
+
+- offsets are first-class
+- unit text is derived from the source record, not from old event summaries
+- unit boundaries are driven primarily by semantic and discourse closure:
+  - speaker-turn boundaries
+  - sentence and clause completion
+  - paragraph and list-item boundaries
+  - heading, section, code-fence, or block boundaries
+- unit size should roughly match the relation/discourse range it needs to carry:
+  - `micro` should usually hold only a small local relation neighborhood
+  - `meso` should usually hold one coherent reasoning step, proposition cluster, or discourse role block
+  - `macro` should usually hold one stable topic or phase window
+- the report's size ranges are secondary envelopes for semantic capacity, not the primary segmentation rule
+- character length is only a fallback guardrail when semantic boundaries are too loose or when a source block grows beyond the intended `meso` or `macro` range
+- unitization is source-aware:
+  - session and daily logs rely on message and paragraph boundaries
+  - knowledge and skill documents also respect markdown headings and block structure
+- tool observations are unitized only after observation cleaning and promotion
+- `event` is not a unit type and not the base segmentation model
+- runtime scan windows may remain char-based, but those windows are not storage units
+
+### 6.4 Observation unitization policy
+
+Not every observation should become a text unit.
+
+Rules:
+
+- ordinary user and assistant text go through normal `micro/meso/macro` unitization
+- tool observations first remain structured observation records
+- only promoted observations with meaningful cleaned text become units
+- when a tool operation has both transcript fragments and runtime observation fields, unitize the assembled operation text view rather than the raw fragments independently
+- promoted code-family observations usually become `micro` evidence units or structured state updates, not large `meso` text blocks
+- promoted high-density non-code observations may become `micro` or `meso` units when the cleaned text carries stable facts or state transitions
+- lifecycle records such as `agent_end` usually become state/attribution updates, not text units
+
+This prevents noisy tool payloads from polluting the unit layer while still preserving memory-relevant operational facts.
+
+### 6.3 Unit example
+
+```json
+{
+  "unit_id": "unit_20260312_013",
+  "source_record_id": "src_20260312_001",
+  "layer": "meso",
+  "ordinal": 3,
+  "char_start": 186,
+  "char_end": 266,
+  "text": "raw should come from session logs rather than event records ...",
+  "language": "zh",
+  "parent_unit_id": "unit_20260312_macro_01"
+}
+```
+
+## 7. Evidence Span Extraction
+
+Units are not enough.
+V8 also needs narrower evidence spans.
+
+Example evidence types:
+
+- explicit preference wording
+- direct constraint wording
+- decision phrases
+- path or file mentions
+- procedure step boundaries
+- error messages
+
+Evidence spans should be extracted before IR so that:
+
+- graph nodes can stay compact
+- graph edges can still resolve back to exact wording
+- inferred items can cite support evidence instead of pretending direct quotation
+
+Example:
+
+```json
+{
+  "evidence_span_id": "es_20260312_021",
+  "source_record_id": "src_20260312_001",
+  "unit_id": "unit_20260312_013",
+  "char_start": 202,
+  "char_end": 223,
+  "text": "不要接 event",
+  "speaker": "user",
+  "score": 0.94
+}
+```
+
+## 8. Extraction IR
+
+The extraction IR is the evidence-backed candidate layer between raw text and durable memory.
+It is not identical to the runtime memory graph.
+
+### 8.1 IR requirements
+
+Each item must include:
+
+- `item_type`
+- `subject`
+- `predicate`
+- `object`
+- `qualifiers`
+- `origin_type`
+- `evidence_refs`
+- `scope`
+- `validity`
+- `confidence`
+
+### 8.2 Item families
+
+For raw conversational sources, common item types are:
+
+- `preference`
+- `constraint`
+- `goal`
+- `decision`
+- `claim`
+- `open_question`
+- `conversation_act`
+- `session_state`
+
+For curated knowledge sources:
+
+- `concept`
+- `claim`
+- `context`
+- `evidence`
+- `method`
+- `discourse_unit`
+
+For curated skill sources:
+
+- `method`
+- `workflow_step`
+- `precondition`
+- `constraint`
+- `checkpoint`
+- `failure_mode`
+- `recovery`
+
+### 8.3 Origin types
+
+Use explicit origin labels:
+
+- `asserted`
+  - directly stated in source text
+- `aggregated`
+  - merged from several asserted items
+- `inferred`
+  - system- or model-derived relation based on support evidence
+
+### 8.4 IR example
+
+```json
+{
+  "memory_item_id": "mi_20260312_004",
+  "source_record_id": "src_20260312_001",
+  "source_ref": "memory/2026-03-12.md#session-14",
+  "item_type": "constraint",
+  "origin_type": "asserted",
+  "subject": "v8_rewrite",
+  "predicate": "exclude_raw_source",
+  "object": "event_records",
+  "qualifiers": {
+    "scope": "global_v8_design",
+    "validity": "active"
+  },
+  "evidence_refs": ["es_20260312_021"],
+  "confidence": 0.96
+}
+```
+
+### 8.5 Text-to-points extraction surfaces
+
+The report's full-text model should stay explicit in V8.
+IR is not produced by one flat extractor.
+It comes from four coordinated extraction surfaces:
+
+- lexical extraction: keywords, keyphrases, trigger phrases, cue terms
+- object extraction: normalized entities, concepts, methods, metrics, contexts
+- proposition extraction: typed relations plus open relations when needed
+- discourse extraction: paragraph or segment function such as definition, evidence, contrast, conclusion, or recommendation
+
+This matters because V8 is not only building a fact graph.
+It is trying to preserve how full text functions, including comparisons, conditions, recommendations, and discourse structure.
+
+The discourse surface should also carry an explicit engineering role set, not an implicit free-form label:
+
+- `definition`, `background`, `event`, `cause`, `outcome`
+- `condition`, `purpose`, `evidence`, `comparison`, `contrast`
+- `opinion`, `recommendation`, `conclusion`, `procedure_steps`, `exception`
+
+A practical extraction stack remains tiered:
+
+- cue-based rules first
+- lightweight classifier second
+- LLM only for low-confidence or high-value meso units
+
+### 8.6 Layer-scoped IR
+
+Extraction IR is not one shared ontology across all three layers.
+
+`micro` IR should describe object/fact structure:
+
+- entities, concepts, methods, events, claims, evidence
+- object/fact relations inside the bounded `Core 32 + Extended 6` scope
+
+`meso` IR should describe local scene/block structure:
+
+- scene blocks, local objectives, problems, strategies, procedures, decisions, shifts, outcomes
+- scene/block relations such as grounding, response, constraint, reframing, culmination, and setup
+
+`macro` IR should describe arc/structure movement:
+
+- arcs, threads, phases, regimes, themes, patterns, turning points, global states
+- arc/structure relations such as phase transition, branching, convergence, payoff, foreshadowing, and regime shift
+
+This is the key correction from the earlier draft:
+`meso` and `macro` are not enlarged `micro` graphs.
+
+Additional contract:
+
+- `Core 32 + Extended 6` defines the allowed `micro` relation range during extraction.
+- it is not a "per-unit checklist" and not a post-extraction candidate pruning stage.
+- each unit should emit only relations directly supported in that unit's evidence scope.
+- normalization may merge, denoise, or reject weak output, but should not reinterpret this bounded range as a second-stage taxonomy filter.
+
+### 8.7 Normalization and consolidation
+
+V8 should still add an explicit normalization step between extraction IR and graph materialization, but this step is not a type-level pruning pass.
+
+Its job is to:
+
+- deduplicate and normalize extraction instances
+- merge aliases and repeated evidence-backed relations
+- reject noisy or weakly supported outputs
+- consolidate durable memory objects without collapsing the three layer ontologies into one
+
+This is the key separation between `what the raw text instantiated here` and `how V8 consolidates it into stable memory`.
+
+## 9. Graph Materialization
+
+The graph consumes normalization and consolidation outputs derived from extraction IR, not raw text directly.
+
+### 9.1 Layer policy
+
+Graph materialization should preserve the report's three graph layers:
+
+- `micro`: object graph for mentions, cues, objects, facts, and local relations
+- `meso`: scene/block graph for local structure and workflow movement
+- `macro`: arc/structure graph for threads, phases, and long-range global movement
+
+The layers should not be collapsed into one flat adjacency space.
+Different retrieval and recall behaviors depend on this separation.
+
+### 9.2 Node policy
+
+Graph nodes should represent layer-specific normalized structures:
+
+| Layer | Families | Intended meaning |
+|---|---|---|
+| `micro` | `Entity`, `Concept`, `Method`, `Event`, `Attribute`, `Metric`, `Claim`, `Evidence`, `Context`, `DiscourseUnit` | object/fact graph: concrete objects, abstract concepts, mechanisms, facts, evidence, context, and discourse roles |
+| `meso` | `SceneBlock`, `SituationFrame`, `ObjectiveBlock`, `ProblemBlock`, `StrategyBlock`, `ProcedureBlock`, `InteractionBlock`, `DecisionBlock`, `EvidenceFrame`, `ShiftBlock`, `OutcomeBlock`, `BlockFunction` | scene/block graph: one coherent local structure, workflow block, interaction block, or reasoning block |
+| `macro` | `Arc`, `Thread`, `Phase`, `GlobalSceneType`, `Regime`, `ObjectiveLine`, `ConflictLine`, `RelationshipArc`, `MethodLine`, `Theme`, `Pattern`, `TurningPoint`, `GlobalState` | arc/structure graph: long-range lines, stages, regimes, patterns, and structural turning points |
+| overlay | `Preference`, `Goal`, `Constraint`, `Decision`, `OpenQuestion`, `ConversationAct`, `SessionState`, `TopicState`, `RelationshipState`, `WorkflowValidityState`, `CompatibilityState`, `PreferenceState`, `BeliefState`, `RiskState` | control and state overlay: explicit memory-control slots plus evolving validity and correction states |
+
+Nodes should not store long raw sentences as primary identity.
+They should store:
+
+- canonical label
+- type
+- primary layer or layer membership
+- state metadata
+- evidence refs
+- support counts
+
+### 9.3 Layer-specific bounded taxonomies
+
+The report no longer supports one shared relation taxonomy for all three layers.
+
+Instead:
+
+- `micro` uses the bounded object/fact vocabulary: `Core 32 + Extended 6`
+- `meso` uses a scene/block relation vocabulary
+- `macro` uses an arc/structure relation vocabulary
+
+The operational groups are:
+
+| Layer | Group | Relations |
+|---|---|---|
+| `micro` | ontology | `is_a`, `instance_of`, `part_of`, `has_part`, `belongs_to`, `equivalent_to` |
+| `micro` | participation | `performs`, `acts_on`, `uses`, `produces`, `targets` |
+| `micro` | event structure | `initiates`, `involves`, `occurs_at`, `results_in_event` |
+| `micro` | causality and condition | `causes`, `caused_by`, `enables`, `prevents`, `requires`, `conditioned_on` |
+| `micro` | time and evolution | `before`, `after`, `simultaneous_with`, `evolves_to` |
+| `micro` | comparison | `better_than`, `worse_than`, `similar_to`, `differs_from` |
+| `micro` | support | `supports`, `contradicts`, `cites` |
+| `micro` | discourse | `elaborates`, `summarizes`, `contrasts`, `explains`, `concludes`, `recommends` |
+| `meso` | anchoring and composition | `grounded_in`, `oriented_to`, `focuses_on`, `realized_by`, `evidenced_by_block`, `functions_as` |
+| `meso` | local dynamics | `triggered_by`, `responds_to`, `constrained_by`, `attempts_to_resolve`, `escalates`, `mitigates`, `reframes`, `revises` |
+| `meso` | local transformation | `culminates_in`, `leads_to`, `produces_shift`, `stabilizes`, `destabilizes`, `opens`, `closes` |
+| `meso` | block organization | `precedes_block`, `branches_to`, `merges_into`, `parallels`, `contrasts_with_block`, `echoes`, `sets_up`, `mirrors_locally` |
+| `macro` | global structure | `unfolds_through`, `spans_phase`, `organized_as`, `governed_by`, `centered_on_line`, `dominated_by` |
+| `macro` | long-range evolution | `transitions_to_phase`, `evolves_to`, `branches_into`, `converges_with`, `interrupted_by`, `resumes_after`, `culminates_at`, `resolved_by` |
+| `macro` | global state and constraint | `produces_state`, `shifts_regime`, `stabilizes_state`, `destabilizes_state`, `constrains`, `enables` |
+| `macro` | long-range interaction | `competes_with`, `reinforces`, `undermines`, `mirrors`, `recurs_as`, `foreshadows`, `pays_off`, `recontextualizes`, `opens_arc`, `closes_arc` |
+
+Within each layer, the correct rule is sparse instantiation:
+
+- only instantiate the relations actually supported by the local evidence
+- do not emit absent relation types
+- do not introduce free-form relation labels outside the bounded layer vocabulary unless explicitly versioned as an extension
+
+Every promoted graph edge must carry either direct evidence refs or support evidence refs.
+High-value relations should also reserve normalized qualifiers:
+
+- `aspect`
+- `time`
+- `context`
+- `polarity`
+- `certainty`
+- `evidence_unit_ids`
+
+The full-feature expansion path remains preserved in `memory-enhanced/V9_FULL_FEATURE_REFERENCE.md`.
+
+### 9.4 Vertical mappings and state-overlay taxonomy
+
+Not every promoted relation belongs equally to every layer.
+The expected runtime placement is still:
+
+- `micro`: objects, facts, evidence, and local relation cues
+- `meso`: scene blocks, local objectives, strategies, decisions, and block-to-block structure
+- `macro`: phases, arcs, threads, regimes, patterns, and turning points
+
+But horizontal placement is only half of the contract.
+The graph also needs explicit vertical edges.
+These edges define semantics only.
+Whether runtime energy propagates through them is a separate scanner policy.
+
+| Kind | Edge | Src -> Dst | Strength | Meaning |
+|---|---|---|---|---|
+| evidence_anchor | `span_in_micro_unit` | `Span -> MicroUnit` | hard | exact evidence span belongs to a micro unit |
+| evidence_anchor | `mention_maps_to_micro_node` | `Span -> MicroNode` | hard | mention resolves to a concrete micro object or concept node |
+| evidence_anchor | `micro_edge_evidenced_by_span` | `MicroEdge -> Span` | hard | micro relation is directly supported by a span |
+| evidence_anchor | `meso_block_evidenced_by_span_set` | `MesoBlock -> SpanSet` | hard | meso block is supported by a contiguous or near-contiguous evidence set |
+| evidence_anchor | `macro_node_evidenced_by_span_set` | `MacroNode -> SpanSet` | soft | macro structure is supported by a distributed evidence set |
+| evidence_anchor | `state_evidenced_by_block` | `StateNode -> MesoBlock` | soft | state is supported by a concrete local block rather than a raw span only |
+| containment | `micro_unit_in_meso_unit` | `MicroUnit -> MesoBlock` | hard | a micro unit belongs to one meso block |
+| containment | `micro_node_in_meso_block` | `MicroNode -> MesoBlock` | hard | a micro node participates in a specific meso block |
+| containment | `micro_edge_in_meso_block` | `MicroEdge -> MesoBlock` | hard | a micro relation belongs structurally to a meso block |
+| containment | `meso_unit_in_macro_unit` | `MesoBlock -> MacroNode` | hard | a meso block belongs to one macro structure |
+| containment | `meso_block_in_phase` | `MesoBlock -> Phase` | hard | a meso block occurs inside a phase |
+| containment | `phase_in_arc` | `Phase -> Arc/Thread` | hard | a phase belongs to a larger arc or thread |
+| abstraction | `micro_fact_abstracted_as_block` | `MicroNode/MicroEdge -> MesoBlock` | soft | local facts are lifted into a scene or workflow block |
+| abstraction | `micro_claim_summarized_by_block` | `Claim/Evidence/Context -> MesoBlock` | soft | one or more claims or evidence objects are summarized by a meso block |
+| abstraction | `block_instantiates_global_type` | `MesoBlock -> GlobalSceneType` | soft | local block realizes a reusable macro scene type |
+| abstraction | `block_summarized_by_topic` | `MesoBlock -> Theme/Thread` | soft | local block is summarized by a higher-level theme or thread |
+| abstraction | `block_contributes_to_pattern` | `MesoBlock -> Pattern` | soft | local block is one instance of a recurring pattern |
+| abstraction | `line_summarized_by_theme` | `Arc/Thread/MethodLine/... -> Theme` | soft | long-running line is summarized by a theme |
+| line_binding | `local_goal_in_objective_line` | `ObjectiveBlock/OutcomeBlock -> ObjectiveLine` | soft | local goal belongs to a long-running goal line |
+| line_binding | `local_conflict_in_conflict_line` | `ProblemBlock/InteractionBlock -> ConflictLine` | soft | local conflict belongs to a long-running conflict line |
+| line_binding | `local_method_in_method_line` | `StrategyBlock/ProcedureBlock -> MethodLine` | soft | local strategy or procedure belongs to a method evolution line |
+| line_binding | `local_relationship_in_relationship_arc` | `InteractionBlock/ShiftBlock -> RelationshipArc` | soft | local interaction or shift belongs to a relationship arc |
+| line_binding | `local_event_in_thread` | `SceneBlock/Event/EvidenceFrame -> Thread` | soft | local event block belongs to a recurring issue thread |
+| line_binding | `local_shift_to_turning_point` | `ShiftBlock/OutcomeBlock -> TurningPoint` | soft | local shift contributes to a larger turning point |
+| scope_anchor | `state_valid_in_phase` | `StateNode -> Phase` | hard | state is only valid during a specific phase |
+| scope_anchor | `state_valid_in_timewindow` | `StateNode -> TimeWindow` | hard | state is only valid during a concrete time window |
+| scope_anchor | `block_scoped_to_regime` | `MesoBlock -> Regime` | hard | local block is constrained by a version, environment, or operating regime |
+| scope_anchor | `block_scoped_to_topicstate` | `MesoBlock -> TopicState` | hard | local block belongs to a specific topic branch state |
+| scope_anchor | `thread_spans_timewindow` | `Thread/Arc -> TimeWindow` | soft | a long-running line spans a time range |
+| scope_anchor | `block_updates_global_state` | `MesoBlock -> GlobalState` | soft | local block updates the global state |
+| change | `state_supersedes_state` | `StateNode -> StateNode` | hard | new state replaces old state without deleting history |
+| change | `state_refines_state` | `StateNode -> StateNode` | soft | new state narrows or qualifies the previous state |
+| change | `state_changed_by_event` | `StateNode -> Event/TurningPoint` | hard | a state changes because of an event or turning point |
+| change | `state_opened_by_block` | `StateNode -> MesoBlock` | hard | a local block opens or activates a state |
+| change | `state_closed_by_block` | `StateNode -> MesoBlock` | hard | a local block closes a state |
+| change | `state_invalidated_under_regime` | `StateNode -> Regime/Version` | hard | a state becomes invalid under a regime or version |
+| change | `state_reactivated_under_regime` | `StateNode -> Regime/Version` | hard | a state becomes valid again under a new regime |
+| change | `correction_propagates_to_line` | `StateNode/MesoBlock -> Thread/MethodLine/RelationshipArc` | soft | a correction affects a larger line and marks related structures for review |
+
+Cross-layer mapping edges must remain explicit and typed.
+Do not collapse containment, abstraction, scope, and change into one generic `cross-layer` bucket.
+
+### 9.5 Graph ingestion rules
+
+- merge by canonical identity and type, not by raw string equality only
+- do not merge conflicting active states without explicit supersession logic
+- preserve `scope`, `validity`, `confidence`, qualifiers, and provenance
+- separate asserted and inferred relations
+- keep discourse relations separate from memory-state edges even when both affect recall
+- require direct evidence refs for `evidence_anchor` edges and support evidence refs for abstraction or line-binding edges
+- keep `kind`, `strength`, `requires_scope`, and `stateful` as first-class metadata for vertical edges
+- do not infer scope or change semantics from edge names alone; store the corresponding phase, time-window, regime, or topic-state ids explicitly
+- allow runtime to ignore propagation over a vertical edge without changing the graph type system
+
+The machine-readable source of truth for this section now lives at:
+
+- `memory-enhanced/schema/v8-edge-catalog.schema.json`
+- `memory-enhanced/schema/v8-edge-catalog.json`
+
+### 9.6 Runtime projections
+
+The scanner should not consume raw extraction-IR items directly.
+It should consume runtime projections derived from the graph materialization step:
+
+- ignition node projections
+- ignition edge projections
+- recall bundles or packs
+- trigger lexicon
+- day index
+- source index
+- hard-core index
+
+This keeps the architecture clean:
+
+`raw source -> unit/span -> extraction IR -> normalization/consolidation -> graph -> runtime projections -> ignition -> recall assembly`
+
+The graph remains the canonical relation layer.
+The runtime projections are optimized views for fast matching and sparse propagation.
+
+### 9.7 Incremental update contract
+
+The report's `open window` rule should be preserved.
+V8 should not rebuild the whole corpus for every append.
+Instead it should reprocess only the affected neighborhood around changed source ranges.
+
+Recommended rule:
+
+- append raw source records immutably
+- identify touched `micro / meso / macro` units by source offsets
+- reopen a bounded neighborhood around the touched units
+- rerun extraction and graph materialization only inside that open window
+- preserve stable ids and evidence refs outside the window
+
+This is what keeps long-lived graph ids, evidence refs, and recall bundles stable under continuous updates.
+
+### 9.8 Multi-path retrieval contract
+
+The report also requires multi-path retrieval.
+V8 should not depend on one retrieval channel.
+The serving side should preserve at least:
+
+- lexical retrieval over units, trigger terms, and canonical names
+- vector retrieval over meso and macro units
+- structural retrieval over objects, propositions, and graph neighbors
+- evidence-span alignment back to `micro` units before final recall assembly
+
+The practical retrieval flow is:
+
+1. coarse recall at `macro` and `meso`
+2. object- and proposition-centric graph expansion
+3. rerank by structural fit and current task anchors
+4. align final candidates back to evidence spans
+
+### 9.9 Edge participation profiles for runtime
+
+Edge typing and runtime propagation are separate, but runtime still needs a stable participation contract.
+
+| Edge kind | Runtime role | Spread behavior |
+|---|---|---|
+| semantic/discourse (horizontal) | associative activation | normal sparse spread |
+| containment | structure bridge | stronger bidirectional spread |
+| abstraction and line_binding | cross-scale linking | upward-biased spread with stricter damping |
+| scope_anchor | validity slicing | no spread, gate/filter only |
+| change | state transition control | no generic spread, reweight lineage states |
+| evidence_anchor | provenance | no spread, backtrace only |
+
+This resolves the old conflict where all edges were treated as one propagation family.
+The scanner can still tune numeric gains, but the above role split should not change per run.
+
+Machine-readable defaults live in:
+
+- `memory-enhanced/schema/v8-edge-runtime-policy.json`
+
+### 9.10 Recall mode contract
+
+Serving should support explicit recall slicing modes:
+
+- `profile`: prioritize "what is active now" with superseded states suppressed
+- `trajectory`: prioritize lifecycle and historical evolution through change and scope edges
+- `oblique`: prioritize side-line and cross-line associations through abstraction/line-binding edges
+- `audit`: prioritize provenance and evidence lineage over compression
+
+Recommended request contract:
+
+```json
+{
+  "query": "...",
+  "mode": "profile|trajectory|oblique|audit",
+  "time_slice": "optional phase/timewindow anchor",
+  "topic_slice": "optional topic-state anchor",
+  "max_packs": 3
+}
+```
 
 Recommended defaults:
 
-```json
-{
-  "micro_chars_zh": 20,
-  "micro_chars_en": 40,
-  "meso_chars_zh": 96,
-  "meso_chars_en": 144,
-  "macro_chars_zh": 256,
-  "macro_chars_en": 384
-}
-```
+- ordinary QA and live generation: `profile`
+- "how did this evolve / what changed / timeline" queries: `trajectory`
+- "what related lines or hidden links matter" queries: `oblique`
+- debugging/compliance/memory validation: `audit`
 
-Checks should run on:
+Mode selection must happen before treating a mismatch as a memory error.
+Temporal or state-shift anchors such as `之前`, `前面`, `前几章`, `前几步`, `一开始`, `后来`, `现在`, `改了`, `变成`, `从头到尾`, and `完整脉络` should bias recall toward `trajectory` or `audit`.
+If the user is asking for a historical slice or a state transition, returning a non-current state is not automatically a memory failure.
+
+### 9.11 Hypothesis exploration contract
+
+V8 may generate exploratory associations when context limits prevent direct co-reading of distant evidence.
+These outputs must stay non-canonical until validated.
+
+Rules:
+
+- store exploratory links as `hypothesis` records, not canonical graph edges
+- hypotheses require support evidence refs and an extraction or inference trace
+- hypotheses remain excluded from default `profile` recall
+- `oblique` mode may include hypotheses only with explicit support evidence in the returned pack
+- promotion to canonical `inferred` edges happens in consolidation after validation checks
+- unsupported hypotheses decay and are removed from active runtime projections
+
+## 10. Online Ignition Pipeline
+
+This is the runtime path that makes V8's graph useful during generation instead of only after the fact.
+
+### 10.1 Inputs
+
+The ignition scan should consume:
+
+- control anchors from the focus stack
+- recent live stream text
+- latest user request
+- tool observations, warnings, and errors
+- compact graph indexes
+- recall bundles or packs already materialized from graph-backed IR
+
+Concrete runtime inputs should include:
+
+- `triggerLexicon` for lexical ignition
+- `dayIndex` for episodic locality
+- `sourceIndex` for raw and curated source backtrace
+- `hardCoreIndex` for tier escalation
+- ignition node projections with names, aliases, short summary text, and bundle membership
+
+### 10.2 Trigger windows
+
+Recommended scan windows remain char-based:
+
+| Window | English heuristic | Chinese heuristic | Purpose |
+|---|---|---|---|
+| `micro` | `24-48` chars | `12-24` chars | lexical ignition |
+| `meso` | `96-192` chars | `64-128` chars | sentence or clause semantics |
+| `macro` | `256-512` chars | `192-384` chars | rolling scene state |
+
+These are scan windows, not storage units.
+
+The current implementation in `src/v8/scanner.ts` gives a reasonable default profile:
+
+- `microCharsZh = 20`, `microCharsEn = 40`
+- `mesoCharsZh = 96`, `mesoCharsEn = 144`
+- `macroCharsZh = 256`, `macroCharsEn = 384`
+- `scanIntervalChars = 24`
+
+### 10.3 Boundary policy
+
+The scanner should run at:
 
 - punctuation boundaries
 - code fence boundaries
-- hard char intervals
+- paragraph boundaries
+- hard char thresholds
 
-### 9.2 Injection gates
+The practical runtime loop is:
 
-For each node:
+1. pre-excite from the initial prompt
+2. refresh scene signals from control, prompt, and tool channels
+3. accumulate a rolling macro window from the live stream
+4. only scan on boundary or interval
+5. decay previous activation before the new injection pass
 
-```text
-u_i = a * g_lex + b * g_emb + c * g_ctrl + d * g_time
-```
+### 10.4 Node ignition score
 
-Where:
+Direct chunk injection should remain explicit.
 
-- `g_lex`
-  - lexical or phrase hit from trigger lexicon
-- `g_emb`
-  - local embedding similarity against micro/meso/macro windows
-- `g_ctrl`
-  - alignment with `goal`, `active_task`, `last_user_request`
-- `g_time`
-  - episodic recency, resumption hint, or day-window bonus
+Recommended form:
 
-### 9.3 Episodic day window
-
-Episodic nodes are globally stored but not globally active.
-
-Default policy:
-
-- scanner opens a rolling day window over recent event days
-- if a day or episode cluster is not activated by current cues, nodes from that cluster stay silent
-- semantic and procedural nodes remain globally eligible
-
-This keeps event recall local without discarding event memory.
-
-### 9.4 Propagation
-
-Suggested update:
-
-```text
-h(t+1) = lambda * h(t) + U(t) + P * h(t) - I * h(t) + C(t)
-```
+`u_i = baseGain * (a * g_lex + b * max(g_scene, g_ctrl) + c * g_time)`
 
 Where:
 
-- `lambda`
-  - passive decay
-- `U(t)`
-  - new gate injection
-- `P * h(t)`
-  - forward propagation
-- `I * h(t)`
-  - inhibition, hub penalty, and competition
-- `C(t)`
-  - coincidence bonus when multiple distinct cues converge
+- `g_lex` comes from trigger lexicon hits
+- `g_scene` comes from overlap between the rolling window and ignition node projection text
+- `g_ctrl` comes from overlap with control anchors
+- `g_time` encodes temporal availability and episodic day locality
+- `baseGain` is higher during initial prompt pre-excitation
 
-### 9.5 Stability controls
+The current implementation is already close to this contract:
 
-The scanner must include:
+- `0.45 * g_lex`
+- `0.35 * max(g_scene, g_ctrl)`
+- `0.20 * g_time`
+- `baseGain = 1.4` for initial prompt and `1.0` otherwise
 
-- top-k propagation per node
-- node cooldown
-- bundle cooldown
-- hub penalty
-- refractory period after fire
-- max injected recall count per window
+Scene refresh should stay separate from direct chunk injection.
+Its current form is a bias field, not the same score path:
 
-### 9.6 Recall thresholding
+- `0.60 * lexicalSceneHit`
+- `0.25 * max(sceneOverlap, g_ctrl)`
+- `0.15 * g_time`
 
-When many nodes exceed threshold:
+This separation is important because V8 uses both immediate lexical ignition and slower scene carry.
 
-1. group them by bundle
-2. score bundles by max or aggregate energy
-3. inject only top `k` bundles first
-4. if later checkpoints still show strong energy in suppressed bundles, inject them as second-wave recall
+### 10.5 Propagation
 
-This preserves delayed insight without flooding the prompt.
+Propagation should remain sparse:
 
-## 10. Recall Assembly
+- stronger forward spread for likely continuation
+- weaker reverse spread for reminder and backtracking
+- hub or degree penalty to suppress generic nodes
+- decay over time
 
-The scanner never injects raw node text directly unless the node itself is the whole intended payload.
+The runtime should also preserve:
 
-Default recall assembly:
+- `topKEdges` restriction in both directions
+- distinct node and bundle cooldown windows
+- separate scene-bias decay from activation decay
+- second-wave recall after one propagation pass
 
-1. get top activated bundle ids
-2. resolve each bundle through `source_index.json`
-3. read the canonical `md` or `event`
-4. build an insertion block based on delivery tier
-5. inject only the compact assembled recall
+The current implementation gives useful defaults:
 
-### Delivery tiers
+- `forwardGain = 0.30`
+- `reverseGain = 0.15`
+- `hubPenaltyPower = 0.50`
+- `topKEdges = 6`
+- `decayLambda = 0.95`
+- `sceneDecayLambda = 0.985`
 
-- `critical`
-  - validated workflow
-  - hard constraint
-  - known fix
-  - checkpoint / handoff
-- `decision`
-  - prior decision, stable preference, durable policy
-- `background`
-  - supporting context
+Second-wave recall should remain in the architecture because many relevant memories are one sparse hop away from the direct lexical match.
 
-### Tier selection signals
+### 10.6 Episodic gating
 
-Tier should be derived from:
+Episodic memory should activate locally:
 
-- node roles present in the bundle
-- hard-core membership
-- source type
-- prior adoption / harm profile
-- optional LLM annotation
+- by day overlap
+- by episode overlap
+- by source overlap
+- by scene overlap
 
-## 11. Feedback Pipeline
+Semantic and procedural memory remain globally available, but episodic activation should stay quiet unless justified by the current scene.
 
-### 11.1 Outcome classes
+The active day set is the key runtime bridge here.
+When a live chunk or scene signal touches an episodic node, its `dayKey` becomes eligible for that scan window.
+Propagation into episodic nodes outside the active day set should be suppressed.
 
-Every recall attempt should be classified into one of:
+### 10.7 Delivery unit
 
-- `accepted`
-- `ignored`
-- `not_reached`
-- `misapplied`
-- `contradicted`
-- `superseded`
-- `harmful`
+Ignition may score at node level, but recall should be delivered at bundle or pack level.
+That is how V8 preserves coherent source-backed recall instead of spraying isolated node fragments into context.
 
-### 11.2 Signals
+Bundle or pack selection should follow this order:
 
-Signals may come from:
+1. aggregate node activation and scene bias to bundle energy
+2. classify bundle tier after aggregation
+3. apply per-tier thresholds
+4. suppress bundles still inside cooldown
+5. select only a very small top-k set for insertion
 
-- model adopts recall and changes behavior
-- model updates `memory_working`
-- user explicitly rejects output
-- tool execution succeeds or fails after recall
-- later correction or rollback event is recorded
+The current implementation exposes the right architectural defaults:
 
-### 11.3 Update actions
+- `criticalThreshold = 0.82`
+- `decisionThreshold = 0.74`
+- `backgroundThreshold = 0.68`
+- `secondWaveThreshold = 0.78`
+- `maxInjectedBundles = 2`
 
-Outcome should map to one of:
+Tier remains a recall insertion policy.
+It must not leak backward into graph ontology.
 
-- edge score update
-- node / bundle cooldown adjustment
-- update queue enqueue
-- `supersedes` edge creation
-- `valid_when` / `invalid_when` edge creation
+### 10.8 New graph interface alignment
 
-### 11.4 Important rule
+The new graph interface does not remove bundle-first recall.
+It changes where bundles come from.
 
-Do not punish the whole workflow just because one invocation failed.
+Old model:
 
-Often the correct action is:
+- compiler creates bundles first, then nodes and edges
 
-- lower `context_fit`
-- lower `freshness`
-- enqueue review
-- add a condition edge
+New model:
 
-Not "delete the memory".
+- IR creates canonical graph objects first
+- runtime materialization groups them into ignition bundles or recall packs
+- packs carry evidence refs, source refs, best summary text, and the node ids that made them hot
 
-## 12. Update Queue
+This keeps the graph canonical while preserving the old V8 runtime strength.
 
-`update_queue.jsonl` stores suspicious or review-worthy items.
+### 10.9 Recall trace and review window
 
-Example item:
+Whenever V8 injects recall, it should append a `recall_trace` record and open a short review window.
+
+Minimum trace payload:
+
+- `run_id`, `session_id`
+- `mode` (`profile|trajectory|oblique|audit`)
+- delivered pack ids
+- delivered node ids
+- delivered evidence ids
+- active time/topic slice
+- control-anchor snapshot
+- prompt hash or prompt ref
+
+Review-window rules:
+
+- open for the next `1-2` user turns and the immediately following tool/assistant cycle
+- only feedback that can be resolved back to delivered recall objects may adjust memory weights
+- free-form approval or disapproval without recall alignment should be treated as execution feedback, not memory feedback
+
+### 10.10 Feedback attribution stack
+
+V8 must not map one user sentence directly to a durable weight change.
+It should reconstruct an attribution chain from runtime observations.
+
+Observation sources:
+
+- `user_feedback`: later user turns, especially inside the review window
+- `model_adoption_feedback`: `llm_input` plus `llm_output`
+- `fact_outcome_feedback`: `after_tool_call`, `tool_result_persist`, and final `agent_end` snapshot
+
+Before attribution, each source must be normalized with its family-specific cleaner.
+Attribution must consume cleaned observations plus structured metadata, not raw payload blobs.
+
+Fast-path requirement:
+
+- the default attribution path should be code-only and non-LLM
+- use recall-trace alignment, structured metadata, simple lexical matching, and explicit user feedback cues first
+- only when attribution remains ambiguous should V8 call a lightweight LLM judge
+- the LLM fallback should receive only a small local slice: delivered recall summary, one or two user turns, and compact tool/outcome snippets
+
+Recommended internal attribution fields:
+
+- `M_present`: was the memory or pack actually delivered
+- `M_surface`: did the model surface or paraphrase it
+- `M_used`: did the model plan or tool behavior depend on it
+- `M_consistent`: did later tool or textual facts support it under the active scope
+- `O_delta`: did the outcome improve, degrade, or stay neutral
+
+Recommended internal attribution labels:
+
+- `memory_content_error`
+- `memory_scope_selection_error`
+- `task_stack_drift`
+- `memory_induced_execution_error`
+- `memory_helped`
+- `memory_ignored_neutral`
+- `memory_missed_relevant`
+
+### 10.10.1 Feedback record contract
+
+Feedback should be recorded explicitly before any weight change is applied.
+
+Recommended record:
 
 ```json
 {
-  "id": "mq_20260310_004",
-  "target_type": "node|edge|bundle",
-  "target_id": "mb_20260310_001",
-  "reason": "staleness_suspected|contradicted|high_harm|distribution_shift|cluster_resonance|hitchhiker|needs_rebuild",
-  "evidence": [
-    "recalled 5 times in 2 days",
-    "adopted once",
-    "contradicted by evt_20260310_021"
-  ],
-  "created_at": "2026-03-10T09:00:00.000Z",
-  "status": "pending|reviewed|resolved"
+  "feedback_id": "fb_20260313_021",
+  "session_id": "sess_22",
+  "run_id": "run_817",
+  "recall_trace_id": "rt_20260313_004",
+  "source": "user|tool|model",
+  "label": "memory_content_error",
+  "polarity": "negative",
+  "targets": ["node:rel_192", "pack:pk_12"],
+  "scope": "flash|scene|durable",
+  "evidence_refs": ["es_20260312_021"],
+  "reason": "user correction aligned to delivered recall",
+  "timestamp": "2026-03-13T12:03:22.000Z"
 }
 ```
 
-### Staleness suspicion signals
+Rules:
 
-Recommended queue trigger when multiple signals co-occur:
+- always link back to the `recall_trace_id` when available
+- do not apply weight changes directly from raw user text
+- store enough provenance to replay or undo a feedback decision
 
-- trigger distribution shifts significantly
-- node is frequently recalled but rarely adopted
-- adopted recalls increasingly fail
-- newer evidence repeatedly conflicts with it
-- nearby bundles capture most of its former activations
+### 10.10.2 Fast-path detection logic
 
-### Resonance and rebuild signals
+The fast path should be deterministic and cheap.
 
-Recommended additional queue triggers:
+Minimum logic:
 
-- a cluster stays active mainly by internal mutual excitation
-- a cluster has high hit count but poor adoption rate
-- high-energy clusters repeatedly inject irrelevant hitchhiker nodes
-- a useful cluster appears too large and should be split into cleaner reusable parts
+1. Check review window and the last `recall_trace`.
+2. Align user or tool feedback to delivered packs or nodes using:
+   - explicit ids, if present
+   - lexical overlap with delivered summaries
+   - evidence span overlap when available
+3. Classify into one of the attribution labels.
+4. Emit `feedback record`, then apply `flash` or `scene` updates.
 
-These should not be solved by blind deletion.
-They should enter a true rebuild path.
+If alignment fails, record `memory_ignored_neutral` and do not change durable weights.
 
-## 13. Cluster Diagnosis and Rebuild
+### 10.10.3 Weight update rules
 
-V8 should support diagnosis of associative clusters before rebuild.
+Use a two-step rule:
 
-### 13.1 Three stability zones
+- `flash` or `scene` updates may be applied immediately
+- `durable` updates require repeated aligned feedback or strong fact confirmation
 
-- `stable_core`
-  - validated long-term structures
-  - allow only score updates by default
-- `plastic_zone`
-  - normal evolving memory
-  - may gain or lose edges and conditions
-- `rebuild_queue`
-  - suspicious or overgrown clusters that need LLM-assisted restructuring
+Recommended safeguards:
 
-### 13.2 Diagnosis metrics
+- clamp deltas to a small range
+- never apply `durable` updates from a single ambiguous signal
+- allow later feedback to neutralize earlier mistaken deltas
 
-Recommended metrics:
+### 10.10.4 Fact feedback from tools
 
-- average hit count
-- average adopt rate
-- average harm rate
-- internal associative density
-- external-trigger ratio
-- hitchhiker score
-- cluster purity
+Tool outcomes are the primary fact channel.
 
-Some of these can be approximated early and refined later.
+Rules:
 
-### 13.3 Rebuild input
+- `after_tool_call` errors should bias toward `memory_induced_execution_error` unless a recall was explicitly used as a fact claim
+- structured tool success that contradicts a recalled claim is `memory_content_error`
+- tool success that indicates a different time slice or state is `memory_scope_selection_error`
+- tool output that merely adds detail without contradiction is `memory_helped` or `memory_ignored_neutral`
 
-A rebuild job should gather:
+### 10.10.5 Minimal feedback dataflow example
 
-- bundle ids and node ids in the target cluster
-- recent feedback outcomes
-- relevant source refs
-- compact encoding context
-- conflicting or superseding evidence
-- stable core members that must be preserved
+```text
+1) Recall injection
+   - V8 injects pack `pk_12` with nodes [`node:rel_192`, `node:claim_44`]
+   - recall trace `rt_20260313_004` is recorded
 
-### 13.4 Rebuild output
+2) Observation
+   - user says: "你记错了，我们没有用 Redis"
+   - or tool returns: "grep found no redis usage"
 
-The LLM rebuild job should not edit the whole graph.
+3) Fast-path alignment
+   - feedback aligns to `pk_12` and `node:rel_192`
+   - classify as `memory_content_error`
 
-It should emit a local cluster draft that can:
+4) Feedback record
+   - write `feedback_record` with `recall_trace_id`, targets, label, polarity
 
-- preserve some existing nodes
-- split or drop hitchhiker nodes
-- rewrite relation types and initial weights
-- create new `valid_when`, `invalid_when`, or `supersedes` edges
-- leave stable core members untouched unless explicitly overridden
+5) Weight updates
+   - apply `flash`/`scene` suppress on `node:rel_192`
+   - schedule `durable` change only after repeated aligned evidence
+```
 
-### 13.5 Important rule
+This keeps the feedback path explicit and replayable without requiring a heavy LLM judge in the normal case.
 
-If a cluster is repeatedly useful, prefer:
+### 10.10.6 Persistence and application model
 
-- keeping the internal structure in storage
-- compiling a smaller reusable summary for insertion
+Feedback should be stored in two layers:
 
-Do not inject the whole cluster just because it is important.
+- `feedback_records.jsonl`
+  - append-only facts about what feedback was observed and how it was classified
+- `feedback_overrides.jsonl`
+  - append-only applied deltas or state overrides used by runtime recall
 
-## 14. Sleep Pipeline
+Recommended override record:
 
-Sleep should keep three jobs separate:
+```json
+{
+  "override_id": "fo_20260313_011",
+  "feedback_id": "fb_20260313_021",
+  "target_id": "node:rel_192",
+  "layer": "flash|scene|durable",
+  "operation": "reinforce|suppress|scope_shift|clear",
+  "delta": -0.25,
+  "ttl_sec": 86400,
+  "created_at": "2026-03-13T12:03:22.000Z"
+}
+```
 
-### 13.1 Raw cleanup
+Rules:
 
-- decay and archive low-value events
-- remove obvious noise
+- runtime scanners should consume overrides, not recompute feedback every turn
+- `flash` overrides are session-local and may stay in memory or a lightweight session file
+- `scene` overrides should persist briefly and expire by TTL
+- `durable` overrides should persist until superseded, neutralized, or consolidated into graph state
 
-### 13.2 Graph consolidation
+### 10.10.7 Priority and conflict rules
 
-- rebuild or incrementally update bundles
-- refresh bilingual node identity:
-  - backfill `name_zh`
-  - backfill `name_en`
-  - normalize `aliases`
-- refresh indexes
-- recompute or revise edge scores
-- materialize new `supersedes` and condition edges
-- diagnose suspicious clusters and enqueue rebuild jobs when needed
+When multiple feedback sources disagree, apply this priority order:
 
-### 14.3 Cluster rebuild
+1. explicit aligned user correction
+2. strong structured tool fact
+3. repeated model-adoption evidence
+4. weak textual or ambiguous signals
 
-Sleep-phase rebuild should:
+Conflict rules:
 
-1. select cluster candidates from the update queue
-2. reconstruct the local scene and evidence
-3. run local LLM rebuild only for that cluster
-4. stage the rebuilt cluster draft
-5. preserve stable-core members by default
+- user correction wins over weak model-adoption evidence
+- strong tool contradiction wins over model self-consistency
+- scope-shift evidence should not erase older valid states; it should bias mode selection or state validity instead
+- ambiguous feedback should degrade to `memory_ignored_neutral`, not force a content-error label
 
-### 14.4 Hardening
+### 10.10.8 Replay, rollback, and consolidation
 
-Promote some memories into durable cores.
+Feedback must be replayable and reversible.
 
-#### Agent identity core
+Replay rules:
+
+- rebuilding a workspace should replay `feedback_records` into `feedback_overrides`
+- expired `flash` and `scene` overrides should be skipped during replay
+- replay order must follow `created_at`
+
+Rollback rules:
+
+- a later corrective feedback record may emit `clear` or opposite-sign overrides
+- rollback should target prior `override_id` or the same `target_id` plus layer
+- the system must be able to rebuild the effective feedback state by replay alone
+
+Consolidation rules:
+
+- `durable` overrides may periodically consolidate into graph-side weight/state fields
+- consolidation must keep the original `feedback_records` and `feedback_overrides`
+- after consolidation, replay must still be deterministic
+
+### 10.10.9 Feedback storage footprint and retention
+
+Feedback data must stay small and bounded.
+
+Rules:
+
+- `feedback_records.jsonl` keeps compact records only; avoid duplicating large tool outputs
+- `feedback_overrides.jsonl` stores only applied deltas and short TTLs for `flash` and `scene`
+- expired `flash` and `scene` overrides should be pruned during replay or compaction
+- `durable` overrides should be sparse; if they grow too large, consolidate them into graph state
+
+Suggested defaults:
+
+- `flash` TTL: session lifetime only
+- `scene` TTL: 1 to 7 days
+- `durable` TTL: none (until superseded or consolidated)
+
+### 10.10.10 Feedback-driven recall tuning
+
+Feedback should also influence recall behavior, not only node weights.
+
+Rules:
+
+- repeated `memory_scope_selection_error` should bias mode selection toward `trajectory` or `audit` for related topics
+- repeated `memory_induced_execution_error` should down-weight aggressive recall for the affected tool or topic
+- repeated `memory_helped` should increase pack priority for similar queries
+- these adjustments should be implemented as lightweight runtime biases, not graph rewrites
+
+Weight updates must remain layered:
+
+- `flash_weight`: current answer or current tool cycle only
+- `scene_weight`: next `1-2` turns of ignition and recall
+- `durable_weight`: long-lived graph adjustment only after repeated evidence or strong fact confirmation
+
+Interpretation rules:
+
+- explicit user correction inside the review window may adjust `flash_weight` and `scene_weight` immediately
+- plain agreement or disagreement that is not tied to the delivered recall should not move durable graph weights
+- a mismatch caused by asking for `before/after/earlier/later` slices should prefer `trajectory` or `audit` recall, not direct suppression
+- fact-based feedback can strengthen or weaken memory even when the user never explicitly says "you remembered this wrong"
+- tool noise must not be mistaken for fact contradiction; shallow pre-clean plus structured metadata is enough for the fast path
+- control-family observations may support attribution but should not directly produce durable factual memory without an external or user-visible grounding source
+
+### 10.11 OpenClaw integration contract
+
+OpenClaw's runtime surfaces should be used with distinct roles:
+
+- `message_received`: user-intent and explicit feedback detection only
+- `after_tool_call`: real-time tool observation, including `read` results and execution errors
+- `tool_result_persist`: canonical transcript-side copy of tool results before write
+- `before_message_write`: last interception point before session persistence
+- `llm_input`: what context, including prior tool results, actually reached the model
+- `llm_output`: what the model actually produced after recall injection
+- `agent_end`: final reconciliation snapshot
+
+The current clean-slate code path already uses `after_tool_call` for transient scene refresh, but the target architecture requires durable observation logging in addition to that transient use.
+Likewise, session normalization must not rely only on user or assistant text when tool outcomes are required for fact feedback or lifecycle reconstruction.
+Session replay should also stop treating transcript text as complete tool evidence: transcript `toolCall/toolResult` records, live `after_tool_call`, and lifecycle hooks must be merged into one observation ledger with source-priority rules.
+
+## 11. Summary and State Materialization
+
+The same IR should generate two runtime-friendly products.
+
+### 11.1 Summary packs
 
 Examples:
 
-- stable execution habits
-- durable preference patterns
-- persistent working style that defines the agent's operating character
+- user preference summary
+- project background summary
+- topic summary
 
-#### Inter-agent protocol core
+Purpose:
+
+- compression
+- stable long-term reuse
+- low-token recall
+
+### 11.2 State packs
 
 Examples:
 
-- shared coordination language
-- handoff conventions
-- durable multi-agent agreement terms
+- active goal
+- current constraints
+- unresolved questions
+- conflict and resolution state
 
-### Hardening criteria
+Purpose:
 
-Hardening is not based on semantic fit alone.
+- task continuity
+- branch control
+- scope-sensitive recall
 
-Minimum conditions:
+### 11.3 Pack cache (default persistence)
 
-- hit count above threshold
-- adopt rate above threshold
-- low harm rate
-- stable across multiple sessions
-- consistent with declared agent identity or protocol role
+Summary/state packs are assembled at runtime.
+To avoid repeated LLM cost, persist packs by default even for low-frequency bundles.
 
-## 15. Configuration Surface
+Default retention policy:
 
-V8 should expose scanner and graph config explicitly.
+- TTL = 7 days
+- do not expire if explicitly marked as required by the user or LLM
 
-Recommended config groups:
+### 11.3 Decay scope
 
-### 14.1 Scanner
+Decay only targets runtime weights and projections:
 
-```json
-{
-  "microCharsZh": 20,
-  "microCharsEn": 40,
-  "mesoCharsZh": 96,
-  "mesoCharsEn": 144,
-  "macroCharsZh": 256,
-  "macroCharsEn": 384,
-  "scanIntervalChars": 24,
-  "maxInjectedBundles": 2
-}
-```
+- node/edge activation weights, recency features, cooldowns
+- hypothesis edges and exploratory artifacts
+- bundle/pack hotness caches
 
-### 14.2 Propagation
+Decay must not alter raw sources, units, or evidence spans.
 
-```json
-{
-  "forwardGain": 0.30,
-  "reverseGain": 0.15,
-  "decayLambda": 0.95,
-  "hubPenaltyPower": 0.5,
-  "topKEdges": 6,
-  "nodeCooldownMs": 15000,
-  "bundleCooldownMs": 30000
-}
-```
+## 12. Context Assembly
 
-`reverseGain` should remain configurable and tuned by smoke tests.
+Runtime recall should assemble from three sources:
 
-### 14.3 Recall
+- `RawEvidencePack`
+- `MemorySummaryPack`
+- `StructuredStatePack`
 
-```json
-{
-  "criticalThreshold": 0.82,
-  "decisionThreshold": 0.74,
-  "backgroundThreshold": 0.68,
-  "secondWaveThreshold": 0.78
-}
-```
+Selection policy:
 
-### 14.4 Hardening
+- prefer raw evidence when wording matters
+- prefer summary when stable background matters
+- prefer state when branch control or conflict resolution matters
 
-```json
-{
-  "identityCoreMinHits": 8,
-  "identityCoreMinAdoptRate": 0.75,
-  "protocolCoreMinHits": 10,
-  "protocolCoreMinAdoptRate": 0.80,
-  "maxHarmRate": 0.10
-}
-```
+The graph helps select candidates.
+Evidence backtrace provides the final grounding.
 
-## 16. Migration from Current Prototype
+## 13. Role of Offline Annotation
 
-Current prototype:
+Offline annotation remains in V8, but its job changes.
 
-- single-file `.memory/_associative_graph.json`
-- scalar edge `weight`
-- mixed node store
-- whitespace-biased scanner
-- recall assembled directly from file path hit
+It is used for:
 
-Migration path:
+- low-confidence meso units
+- ambiguous relation extraction
+- conflict resolution suggestions
+- graph cleanup and rebuild proposals
 
-1. add new `.memory/graph/` directory alongside existing files
-2. compile current graph nodes into `bundles + nodes + edges`
-3. keep reading legacy graph as fallback during migration
-4. switch scanner to new indexes
-5. switch consolidate to build new graph layout
-6. remove legacy graph after stability window
+It is not used for:
 
-### Legacy mapping
+- defining raw authority
+- inventing the primary segmentation
+- replacing evidence-backed IR
+- replacing the online ignition layer
 
-- old node -> one provisional bundle with one node
-- old `weight` -> initialize:
-  - `assoc_strength = weight`
-  - `utility = 0.7`
-  - `trust = 0.7`
-  - `freshness = 0.8`
-  - `context_fit = 0.8`
+## 14. Migration Notes
 
-This is only a bootstrap heuristic.
+The old V8 pipeline treated these as first-class compilers:
 
-## 17. Implementation Order
+- `compile-event`
+- `compile-knowledge-md`
+- `compile-skill-md`
 
-Recommended coding order:
+The new V8 should instead use:
 
-1. define JSONL schema types in TypeScript
-2. add graph path helpers in `utils.ts`
-3. write bundle compiler from `event` and explicit md blocks
-4. build new indexes
-5. rewrite scanner to char-based windows and bundle scoring
-6. implement cooldown, top-k, and second-wave recall
-7. implement feedback logging and update queue
-8. add cluster diagnosis and rebuild queue
-9. move sleep/consolidate to incremental graph updates
-10. add hard-core promotion
+- source adapters
+- unitizers
+- evidence extractors
+- IR extractors
+- graph and summary/state materializers
 
-## 18. Benchmark Mapping
+Legacy `event` inputs may still be read during migration, but only as secondary hints.
 
-First benchmark should measure:
+## 15. Non-Goals
 
-- new session recovery without context
-- recall speed
-- correctness under chunked reading
-- resistance to drift
+This design does not require:
 
-Suggested benchmark sources:
+- eliminating curated `knowledge` or `skill`
+- removing the graph
+- replacing `focus_stack.json`
 
-- LongBench single-document QA
-- Qasper paper QA
-- later, repository-scale structured corpora with answer keys
+This design does require:
 
-Recommended evaluation metrics:
-
-- answer accuracy
-- retrieval steps
-- recall latency
-- drift incidents
-- memory pollution rate
-- false critical recall rate
-
-## 18. Open Design Questions
-
-- should `episodic` bundles ever be injected raw, or always summarized first?
-- when should a bundle split by `episode_key` versus by source item?
-- should hard-core memories have their own propagation gains?
-- should second-wave recall be timer-based, checkpoint-based, or both?
-- how large should the rolling episodic day window be by default?
-
-These are the next design questions to close before code.
+- raw evidence authority
+- source normalization
+- IR as the central contract
+- evidence-backed graph and summary/state outputs

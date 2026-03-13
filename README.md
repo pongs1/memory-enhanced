@@ -4,7 +4,7 @@
 
 > **"Why does your AI always forget the coding style you just explained yesterday? Why do solved bugs repeat themselves 3 weeks later? Why does your Agent lose its way after a dozen tool calls?"**
 
-The `memory-enhanced` plugin transforms OpenClaw from a "goldfish memory" chat box into a **long-term intelligent agent** with active consolidation, automatic forgetting, and associative recall.
+The `memory-enhanced` plugin transforms OpenClaw from a "goldfish memory" chat box into a **long-term intelligent agent** with evidence-backed consolidation and associative recall.
 
 ---
 
@@ -13,9 +13,9 @@ The `memory-enhanced` plugin transforms OpenClaw from a "goldfish memory" chat b
 | Layer | Responsibility | Storage Location | What does the AI feel? |
 |---|---|---|---|
 | **L1: Working Memory** | Active tasks & rough notes | `.memory/active/` | On wake, it is **forced** to see the 7 priority tasks and logic drafts—no search required. |
-| **L2: Episodic Memory** | Events, decisions & "Aha!" moments | `.memory/events/` | Recorded like a personalized diary; fragments are recalled based on the "thinking direction." |
-| **L3: Semantic Memory** | Distilled knowledge & preferences | `memory/knowledge/` | The "essence" of past events, no longer cluttered with raw messages. |
-| **L4: Procedural Memory** | Verified "How-To" SOPs | `memory/skills/` | When facing the same problem, it checks the manual instead of reinventing the wheel. |
+| **L2: Raw Session Evidence** | Unmodified user/assistant turns | OpenClaw session traces | Source-of-truth dialogue history, never pre-distilled. |
+| **L3: Memory IR + Graph** | Units, evidence spans, memory items, graph nodes/edges | `.memory/graph/` | Evidence-backed recall across time without re-reading full sessions. |
+| **L4: Procedural Memory (optional)** | Verified "How-To" SOPs | `memory/skills/` | When facing the same problem, it checks the manual instead of reinventing the wheel. |
 
 ---
 
