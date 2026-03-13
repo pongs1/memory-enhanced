@@ -32,12 +32,14 @@ const outputWatchdogs = new Map<string, OutputWatchdogState>();
 const toolFeedbackCooldowns = new Map<string, number>();
 const toolSuccessCooldowns = new Map<string, number>();
 const modelFeedbackCooldowns = new Map<string, number>();
+const modelNeutralCooldowns = new Map<string, number>();
 const nodeLabelCache = new Map<string, { mtime: number; labels: Map<string, NodeLabelEntry> }>();
 
 const TOOL_FEEDBACK_COOLDOWN_MS = 2 * 60 * 1000;
 const TOOL_SUCCESS_COOLDOWN_MS = 2 * 60 * 1000;
 const MODEL_FEEDBACK_WINDOW_MS = 8 * 60 * 1000;
 const MODEL_FEEDBACK_COOLDOWN_MS = 10 * 60 * 1000;
+const MODEL_NEUTRAL_COOLDOWN_MS = 10 * 60 * 1000;
 const TOOL_FEEDBACK_WINDOW_MS = 2 * 60 * 1000;
 const MODEL_ADOPTION_THRESHOLD = 0.22;
 
@@ -456,7 +458,27 @@ function applyModelAdoptionFeedback(
         const nodeIds = collectTraceNodeIds(trace);
         if (nodeIds.length === 0) continue;
         const matched = evaluateRecallAdoption(recentOutput, nodeIds, labelMap);
-        if (matched.length === 0) continue;
+        if (matched.length === 0) {
+            const neutralKey = `${sessionId}:${trace.traceId}:neutral`;
+            const lastNeutral = modelNeutralCooldowns.get(neutralKey) || 0;
+            if (Date.now() - lastNeutral < MODEL_NEUTRAL_COOLDOWN_MS) {
+                continue;
+            }
+            recordFeedbackRecords(workspace, [
+                {
+                    targets: nodeIds,
+                    label: "memory_ignored_neutral",
+                    polarity: "neutral",
+                    scope: "scene",
+                    reason: "model_no_adoption",
+                    sessionId,
+                    recallTraceId: trace.traceId,
+                    source: "model" as const,
+                },
+            ]);
+            modelNeutralCooldowns.set(neutralKey, Date.now());
+            continue;
+        }
         recordFeedback(
             workspace,
             matched.map((nodeId) => ({

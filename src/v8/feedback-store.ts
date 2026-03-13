@@ -296,6 +296,9 @@ export function recordFeedbackRecords(
     const recordPath = feedbackRecordsPath(workspace);
     const now = nowIso();
     for (const entry of entries) {
+        if (!entry.targets || entry.targets.length === 0) {
+            continue;
+        }
         const record: FeedbackRecord = {
             feedbackId: `fb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             sessionId: entry.sessionId,
