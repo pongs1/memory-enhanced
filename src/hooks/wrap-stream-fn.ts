@@ -10,10 +10,17 @@ import {
 } from "../utils.js";
 import { v8StorePaths } from "../v8/paths_v8.js";
 import { assembleRecallPrompts, loadRecallAssemblyContext } from "../v8/recall.js";
-import { recordSessionRecalls } from "../v8/feedback-runtime.js";
+import {
+    getRecentRecallTraces,
+    recordRecallTrace,
+    type V8RecallTrace,
+} from "../v8/feedback-runtime.js";
 import { V8GraphScanner } from "../v8/scanner.js";
+import { recordFeedback } from "../v8/feedback-store.js";
+import { readJsonl } from "../v8/architecture/io.js";
 import type {
     V8ControlAnchors,
+    V8GraphNode,
     V8SceneSignal,
     V8ScannerConfig,
 } from "../v8/types_v8.js";
@@ -22,6 +29,13 @@ import type {
 const scanners = new Map<string, AssociativeScanner>();
 const v8Scanners = new Map<string, V8GraphScanner>();
 const outputWatchdogs = new Map<string, OutputWatchdogState>();
+const toolFeedbackCooldowns = new Map<string, number>();
+const nodeLabelCache = new Map<string, { mtime: number; labels: Map<string, NodeLabelEntry> }>();
+
+const TOOL_FEEDBACK_COOLDOWN_MS = 2 * 60 * 1000;
+const MODEL_FEEDBACK_WINDOW_MS = 8 * 60 * 1000;
+const TOOL_FEEDBACK_WINDOW_MS = 2 * 60 * 1000;
+const MODEL_ADOPTION_THRESHOLD = 0.22;
 
 interface OutputWatchdogState {
     charsStreamed: number;
@@ -50,6 +64,11 @@ interface CheckpointCandidate {
 
 interface OverrideCandidate {
     prompt: string;
+}
+
+interface NodeLabelEntry {
+    label: string;
+    aliases: string[];
 }
 
 type AssociativeRecallKind = "critical" | "decision" | "background";
@@ -298,6 +317,121 @@ function calculateTokenOverlap(sourceText: string, referenceText: string): numbe
     }
 
     return matches / referenceTokens.length;
+}
+
+function loadNodeLabels(workspace: string): Map<string, NodeLabelEntry> {
+    const store = v8StorePaths(workspace);
+    let stat: fs.Stats | null = null;
+    try {
+        stat = fs.statSync(store.graphNodes);
+    } catch {
+        stat = null;
+    }
+    const mtime = stat ? stat.mtimeMs : 0;
+    const cached = nodeLabelCache.get(store.graphNodes);
+    if (cached && cached.mtime === mtime) {
+        return cached.labels;
+    }
+    const nodes = stat ? readJsonl<V8GraphNode>(store.graphNodes) : [];
+    const labels = new Map<string, NodeLabelEntry>();
+    for (const node of nodes) {
+        if (!node?.id) continue;
+        labels.set(node.id, {
+            label: String(node.canonicalLabel || ""),
+            aliases: Array.isArray(node.aliases) ? node.aliases : [],
+        });
+    }
+    nodeLabelCache.set(store.graphNodes, { mtime, labels });
+    return labels;
+}
+
+function collectTraceNodeIds(trace: V8RecallTrace, preferTiered = true): string[] {
+    const tiers = preferTiered
+        ? trace.bundles.filter((bundle) => bundle.tier !== "background")
+        : [];
+    const bundles = tiers.length > 0 ? tiers : trace.bundles;
+    const nodeIds = new Set<string>();
+    for (const bundle of bundles) {
+        for (const nodeId of bundle.nodeIds) {
+            nodeIds.add(nodeId);
+        }
+    }
+    return Array.from(nodeIds);
+}
+
+function evaluateRecallAdoption(
+    outputText: string,
+    nodeIds: string[],
+    labelMap: Map<string, NodeLabelEntry>
+): string[] {
+    const matches: string[] = [];
+    if (!outputText || nodeIds.length === 0) return matches;
+    for (const nodeId of nodeIds) {
+        const entry = labelMap.get(nodeId);
+        if (!entry) continue;
+        const labelText = [entry.label, ...entry.aliases].filter(Boolean).join(" ");
+        if (!labelText) continue;
+        const score = calculateTokenOverlap(outputText, labelText);
+        if (score >= MODEL_ADOPTION_THRESHOLD) {
+            matches.push(nodeId);
+        }
+    }
+    return matches;
+}
+
+function detectToolFailure(event: any): boolean {
+    if (!event) return false;
+    if (event.isError || event.error) return true;
+    if (event.result?.isError || event.result?.error) return true;
+    const statusRaw =
+        event.status ||
+        event.details?.status ||
+        event.result?.status ||
+        event.result?.details?.status;
+    const status = typeof statusRaw === "string" ? statusRaw.toLowerCase() : "";
+    if (["error", "failed", "timeout", "cancelled"].includes(status)) {
+        return true;
+    }
+    const exitCode =
+        event.exitCode ??
+        event.details?.exitCode ??
+        event.result?.exitCode ??
+        event.result?.details?.exitCode;
+    if (typeof exitCode === "number" && exitCode !== 0) {
+        return true;
+    }
+    return false;
+}
+
+function applyModelAdoptionFeedback(
+    workspace: string,
+    sessionId: string,
+    recentOutput: string
+) {
+    if (!recentOutput) return;
+    const recallTraces = getRecentRecallTraces(sessionId, MODEL_FEEDBACK_WINDOW_MS);
+    if (recallTraces.length === 0) return;
+    const labelMap = loadNodeLabels(workspace);
+    for (const trace of recallTraces) {
+        const nodeIds = collectTraceNodeIds(trace);
+        if (nodeIds.length === 0) continue;
+        const matched = evaluateRecallAdoption(recentOutput, nodeIds, labelMap);
+        if (matched.length === 0) continue;
+        recordFeedback(
+            workspace,
+            matched.map((nodeId) => ({
+                nodeId,
+                kind: "reinforce" as const,
+                delta: 0.08,
+                reason: "model_adoption",
+                ttlDays: 5,
+                sessionId,
+                recallTraceId: trace.traceId,
+                source: "model" as const,
+                label: "memory_helped",
+            }))
+        );
+    }
 }
 
 function calculateDriftScore(
@@ -858,8 +992,16 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                                     "memory-enhanced v8 graph recall"
                                 );
                                 if (didInterrupt) {
-                                    const recalledNodeIds = prompts.flatMap((prompt) => prompt.nodeIds);
-                                    recordSessionRecalls(sid, recalledNodeIds);
+                                    const recallBundles = v8Result.activatedBundles.map((bundle) => ({
+                                        bundleId: bundle.bundleId,
+                                        nodeIds: bundle.nodeIds,
+                                        evidenceSpanIds: bundle.evidenceSpanIds,
+                                        tier: bundle.tier,
+                                    }));
+                                    recordRecallTrace(sid, {
+                                        mode: v8Scanner.getMode(),
+                                        bundles: recallBundles,
+                                    });
                                     return;
                                 }
 
@@ -968,6 +1110,37 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
             return;
         }
 
+        const toolName = typeof event?.toolName === "string" ? event.toolName : "";
+        if (toolName && !toolName.startsWith("memory_")) {
+            const now = Date.now();
+            const lastFeedback = toolFeedbackCooldowns.get(sid) || 0;
+            if (
+                now - lastFeedback > TOOL_FEEDBACK_COOLDOWN_MS &&
+                detectToolFailure(event)
+            ) {
+                const recallTraces = getRecentRecallTraces(sid, TOOL_FEEDBACK_WINDOW_MS);
+                for (const trace of recallTraces) {
+                    const nodeIds = collectTraceNodeIds(trace);
+                    if (nodeIds.length === 0) continue;
+                    recordFeedback(
+                        workspace,
+                        nodeIds.map((nodeId) => ({
+                            nodeId,
+                            kind: "suppress" as const,
+                            delta: -0.12,
+                            reason: "tool_failure_after_recall",
+                            ttlDays: 5,
+                            sessionId: sid,
+                            recallTraceId: trace.traceId,
+                            source: "tool" as const,
+                            label: "memory_induced_execution_error",
+                        }))
+                    );
+                }
+                toolFeedbackCooldowns.set(sid, now);
+            }
+        }
+
         const scanner = getV8Scanner(sid, workspace);
         const workingState = maybeRefreshWorkingState(workspace);
         const toolSignals = extractToolSceneSignals(event);
@@ -983,6 +1156,11 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
 
     api.on("agent_end", async (_event: any, ctx: any) => {
         const sid = ctx?.sessionId || "default";
+        const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
+        const watchdog = outputWatchdogs.get(sid);
+        if (watchdog?.recentOutput) {
+            applyModelAdoptionFeedback(workspace, sid, watchdog.recentOutput);
+        }
         outputWatchdogs.delete(sid);
         scanners.delete(sid);
         v8Scanners.delete(sid);

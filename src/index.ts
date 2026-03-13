@@ -36,7 +36,7 @@ import {
     recordFeedback,
     refreshFeedbackStore,
 } from "./v8/feedback-store.js";
-import { takeRecentRecalls } from "./v8/feedback-runtime.js";
+import { takeRecentRecallTraces } from "./v8/feedback-runtime.js";
 import type { V8ScannerConfig } from "./v8/types_v8.js";
 
 // @ts-ignore
@@ -188,21 +188,32 @@ export default function register(api: OpenClawPluginApi) {
 
         if (isExplicitMemoryCorrection(latestUserRequest)) {
             refreshFeedbackStore(workspace);
-            const recalledNodes = takeRecentRecalls(sessionId);
-            if (recalledNodes.length > 0) {
-                recordFeedback(
-                    workspace,
-                    recalledNodes.map((nodeId) => ({
-                        nodeId,
-                        kind: "suppress" as const,
-                        delta: -0.35,
-                        reason: "user_correction",
-                        ttlDays: 30,
-                        sessionId,
-                        source: "user" as const,
-                        label: "memory_content_error",
-                    }))
-                );
+            const recallTraces = takeRecentRecallTraces(sessionId);
+            const recalledNodes = new Set<string>();
+            for (const trace of recallTraces) {
+                const traceNodes = new Set<string>();
+                for (const bundle of trace.bundles) {
+                    for (const nodeId of bundle.nodeIds) {
+                        traceNodes.add(nodeId);
+                        recalledNodes.add(nodeId);
+                    }
+                }
+                if (traceNodes.size > 0) {
+                    recordFeedback(
+                        workspace,
+                        Array.from(traceNodes).map((nodeId) => ({
+                            nodeId,
+                            kind: "suppress" as const,
+                            delta: -0.35,
+                            reason: "user_correction",
+                            ttlDays: 30,
+                            sessionId,
+                            recallTraceId: trace.traceId,
+                            source: "user" as const,
+                            label: "memory_content_error",
+                        }))
+                    );
+                }
             }
 
             const positiveCandidates = findMatchingNodes(
@@ -210,7 +221,7 @@ export default function register(api: OpenClawPluginApi) {
                 latestUserRequest,
                 2,
                 0.22
-            ).filter((nodeId) => !recalledNodes.includes(nodeId));
+            ).filter((nodeId) => !recalledNodes.has(nodeId));
 
             if (positiveCandidates.length > 0) {
                 recordFeedback(
@@ -222,6 +233,7 @@ export default function register(api: OpenClawPluginApi) {
                         reason: "user_correction_reinforce",
                         ttlDays: 7,
                         sessionId,
+                        recallTraceId: recallTraces[recallTraces.length - 1]?.traceId,
                         source: "user" as const,
                         label: "memory_helped",
                     }))
@@ -229,17 +241,25 @@ export default function register(api: OpenClawPluginApi) {
             }
         } else if (isExplicitMemoryAffirmation(latestUserRequest)) {
             refreshFeedbackStore(workspace);
-            const recalledNodes = takeRecentRecalls(sessionId);
-            if (recalledNodes.length > 0) {
+            const recallTraces = takeRecentRecallTraces(sessionId);
+            for (const trace of recallTraces) {
+                const traceNodes = new Set<string>();
+                for (const bundle of trace.bundles) {
+                    for (const nodeId of bundle.nodeIds) {
+                        traceNodes.add(nodeId);
+                    }
+                }
+                if (traceNodes.size === 0) continue;
                 recordFeedback(
                     workspace,
-                    recalledNodes.map((nodeId) => ({
+                    Array.from(traceNodes).map((nodeId) => ({
                         nodeId,
                         kind: "reinforce" as const,
                         delta: 0.15,
                         reason: "user_confirmation",
                         ttlDays: 14,
                         sessionId,
+                        recallTraceId: trace.traceId,
                         source: "user" as const,
                         label: "memory_helped",
                     }))
