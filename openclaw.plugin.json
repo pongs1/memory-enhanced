@@ -56,6 +56,12 @@
         "type": "number",
         "default": 7,
         "description": "Default TTL (days) for cached summary/state packs"
+      },
+      "v8ScannerConfig": {
+        "type": "object",
+        "default": {},
+        "additionalProperties": true,
+        "description": "Optional overrides for V8 scanner thresholds (see V8ScannerConfig)"
       }
     }
   },
