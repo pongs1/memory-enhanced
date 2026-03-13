@@ -394,6 +394,41 @@ export function materializeGraph(
         }
     }
 
+    const unitSpanLimits = {
+        meso: 4,
+        macro: 4,
+    };
+
+    for (const unit of units) {
+        if (unit.layer !== "meso" && unit.layer !== "macro") continue;
+        const unitNodeId = unitNodeById.get(unit.id);
+        if (!unitNodeId) continue;
+        const allSpanIds = collectDescendantSpans(unit.id);
+        const topSpanIds = selectTopSpans(allSpanIds, unitSpanLimits[unit.layer]);
+        for (const spanId of topSpanIds) {
+            const evidenceNodeId = evidenceNodeBySpan.get(spanId);
+            if (!evidenceNodeId) continue;
+            pushEdge({
+                type:
+                    unit.layer === "meso"
+                        ? "meso_block_evidenced_by_span_set"
+                        : "macro_node_evidenced_by_span_set",
+                src: unitNodeId,
+                dst: evidenceNodeId,
+                layer: "cross",
+                originType: "aggregated",
+                sourceItemIds: [],
+                evidenceSpanIds: [spanId],
+                qualifiers: {},
+                confidence: 0.7,
+                state: {
+                    scope: "session",
+                    validity: "active",
+                },
+            });
+        }
+    }
+
     const mesoLinkSeen = new Set<string>();
     for (const node of nodes) {
         if (node.primaryLayer !== "micro") continue;
@@ -516,4 +551,16 @@ function deriveConfidence(
     }
     if (count === 0) return 0.4;
     return Math.min(0.95, sum / count);
+}
+
+function selectTopSpans(spanIds: string[], maxCount: number): string[] {
+    if (spanIds.length <= maxCount) return spanIds;
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const spanId of spanIds) {
+        if (seen.has(spanId)) continue;
+        seen.add(spanId);
+        unique.push(spanId);
+    }
+    return unique.slice(0, maxCount);
 }
