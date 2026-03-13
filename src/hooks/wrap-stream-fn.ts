@@ -170,6 +170,23 @@ function stripUntrustedObservation(text: string): string {
         );
 }
 
+function isNoisyToolName(toolName: string): boolean {
+    const lower = toolName.toLowerCase();
+    return (
+        lower.includes("exec") ||
+        lower.includes("process") ||
+        lower.includes("shell") ||
+        lower.includes("bash") ||
+        lower.includes("node") ||
+        lower.includes("python") ||
+        lower.includes("rg") ||
+        lower.includes("grep") ||
+        lower.includes("git") ||
+        lower.includes("npm") ||
+        lower.includes("tsc")
+    );
+}
+
 function extractToolSceneSignals(event: any): V8SceneSignal[] {
     const signals: V8SceneSignal[] = [];
     const toolName = typeof event?.toolName === "string" ? event.toolName : "";
@@ -187,7 +204,13 @@ function extractToolSceneSignals(event: any): V8SceneSignal[] {
         360
     );
     if (observation) {
-        pushSceneSignal(signals, "tool", observation, 0.92);
+        const trimmed = observation.trim();
+        const noisyTool = isNoisyToolName(toolName);
+        const shortEnough = trimmed.length <= 140;
+        const compactEnough = trimmed.length <= 240 && trimmed.split("\n").length <= 2;
+        if (!noisyTool || shortEnough || compactEnough) {
+            pushSceneSignal(signals, "tool", trimmed, 0.92);
+        }
     }
 
     return signals;
@@ -223,15 +246,23 @@ function selectRecallMode(promptText: string): "profile" | "trajectory" | "obliq
     if (!normalized) return "profile";
 
     const auditPattern =
-        /审计|溯源|追溯|回溯|证据链|证据|核对|核查|验证|fact\s*check|compliance|audit|provenance|evidence|backtrace|trace|verify|validate/i;
+        /审计|溯源|追溯|回溯|证据链|证据|核对|核查|验证|对照|原文|原话|出处|引用|来源|哪句|哪一段|谁说|fact\s*check|compliance|audit|provenance|evidence|backtrace|trace|verify|validate/i;
     const trajectoryPattern =
-        /之前|前面|前几章|前几步|一开始|最初|曾经|后来|之后|现在|改了|变成|演变|变化|从头到尾|全过程|完整脉络|timeline|history|earlier|before|previously|later|after|changed|became|evolved|evolution|lifecycle/i;
+        /之前|前面|前几章|前几步|一开始|最初|起初|起先|当时|早期|前期|后期|曾经|后来|随后|之后|再后来|目前|现在|改了|变成|演变|变化|转变|变迁|演进|回顾|回看|复盘|全程|全过程|完整脉络|全生命周期|时间线|timeline|history|earlier|before|previously|former|back\s*then|later|after|changed|became|evolved|evolution|lifecycle|chronolog/i;
     const obliquePattern =
-        /相关|联系|联想|侧面|旁支|隐含|类似|相似|横向|oblique|related|analog|analogy|adjacent|side/i;
+        /相关|联系|联想|侧面|旁支|隐含|类似|相似|类比|对比|顺便|横向|oblique|related|analog|analogy|adjacent|side/i;
+    const memoryMentionPattern =
+        /记得|记住|回忆|回想|想起|记起|remember|recall/i;
+    const timeMarkerPattern =
+        /之前|上次|曾经|当时|以前|此前|一开始|最初|后来|之后|再后来|过往|历史|早期|前期|后期/i;
 
     if (auditPattern.test(normalized)) return "audit";
     if (trajectoryPattern.test(normalized)) return "trajectory";
+    if (memoryMentionPattern.test(normalized) && timeMarkerPattern.test(normalized)) {
+        return "trajectory";
+    }
     if (obliquePattern.test(normalized)) return "oblique";
+    if (memoryMentionPattern.test(normalized)) return "profile";
     return "profile";
 }
 

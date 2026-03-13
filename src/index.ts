@@ -34,6 +34,7 @@ import {
     isExplicitMemoryAffirmation,
     isExplicitMemoryCorrection,
     recordFeedback,
+    recordFeedbackRecords,
     refreshFeedbackStore,
 } from "./v8/feedback-store.js";
 import { takeRecentRecallTraces } from "./v8/feedback-runtime.js";
@@ -187,8 +188,29 @@ export default function register(api: OpenClawPluginApi) {
         } catch (e) { }
 
         if (isExplicitMemoryCorrection(latestUserRequest)) {
-            refreshFeedbackStore(workspace);
             const recallTraces = takeRecentRecallTraces(sessionId);
+            if (recallTraces.length === 0) {
+                const candidates = findMatchingNodes(
+                    workspace,
+                    latestUserRequest,
+                    3,
+                    0.22
+                );
+                recordFeedbackRecords(workspace, [
+                    {
+                        targets: candidates,
+                        label: "memory_ignored_neutral",
+                        polarity: "neutral",
+                        reason: "user_correction_no_recall_trace",
+                        scope: "scene",
+                        sessionId,
+                        source: "user" as const,
+                    },
+                ]);
+                return;
+            }
+
+            refreshFeedbackStore(workspace);
             const recalledNodes = new Set<string>();
             for (const trace of recallTraces) {
                 const traceNodes = new Set<string>();
@@ -240,8 +262,29 @@ export default function register(api: OpenClawPluginApi) {
                 );
             }
         } else if (isExplicitMemoryAffirmation(latestUserRequest)) {
-            refreshFeedbackStore(workspace);
             const recallTraces = takeRecentRecallTraces(sessionId);
+            if (recallTraces.length === 0) {
+                const candidates = findMatchingNodes(
+                    workspace,
+                    latestUserRequest,
+                    3,
+                    0.22
+                );
+                recordFeedbackRecords(workspace, [
+                    {
+                        targets: candidates,
+                        label: "memory_ignored_neutral",
+                        polarity: "neutral",
+                        reason: "user_affirmation_no_recall_trace",
+                        scope: "scene",
+                        sessionId,
+                        source: "user" as const,
+                    },
+                ]);
+                return;
+            }
+
+            refreshFeedbackStore(workspace);
             for (const trace of recallTraces) {
                 const traceNodes = new Set<string>();
                 for (const bundle of trace.bundles) {

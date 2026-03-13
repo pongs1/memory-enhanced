@@ -276,6 +276,44 @@ export function recordFeedback(
     feedbackLoadedAt = Date.now();
 }
 
+export function recordFeedbackRecords(
+    workspace: string,
+    entries: Array<{
+        targets: string[];
+        label: string;
+        polarity: "positive" | "negative" | "neutral";
+        scope?: FeedbackLayer;
+        reason?: string;
+        sessionId?: string;
+        runId?: string;
+        recallTraceId?: string;
+        source?: "user" | "tool" | "model";
+        evidenceRefs?: string[];
+    }>
+): void {
+    if (!entries || entries.length === 0) return;
+    ensureV8StoreDirs(workspace);
+    const recordPath = feedbackRecordsPath(workspace);
+    const now = nowIso();
+    for (const entry of entries) {
+        const record: FeedbackRecord = {
+            feedbackId: `fb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            sessionId: entry.sessionId,
+            runId: entry.runId,
+            recallTraceId: entry.recallTraceId,
+            source: entry.source,
+            label: entry.label,
+            polarity: entry.polarity,
+            targets: Array.isArray(entry.targets) ? entry.targets : [],
+            scope: entry.scope || "scene",
+            evidenceRefs: entry.evidenceRefs,
+            reason: entry.reason,
+            createdAt: now,
+        };
+        appendJsonl(recordPath, record);
+    }
+}
+
 export function getNodeFeedbackBias(nodeId: string): number {
     const entries = feedbackByNode.get(nodeId);
     if (!entries || entries.length === 0) return 0;
