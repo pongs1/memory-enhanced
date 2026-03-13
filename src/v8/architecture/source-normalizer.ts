@@ -555,12 +555,28 @@ function summarizeToolOutput(
             typeof (args as Record<string, unknown>).command === "string");
     const maxChars = isCommandLike ? 800 : 1600;
     const maxLines = isCommandLike ? 20 : 40;
-    const cleaned = normalizeOutputWhitespace(result.contentText);
+    const cleaned = normalizeOutputWhitespace(
+        stripUntrustedBlocks(result.contentText)
+    );
     return limitTextByLines(cleaned, maxChars, maxLines);
 }
 
 function normalizeOutputWhitespace(text: string): string {
     return text.replace(/\r\n/g, "\n").trim();
+}
+
+function stripUntrustedBlocks(text: string): string {
+    if (!text) return text;
+    const stripped = text
+        .replace(
+            /SECURITY NOTICE:[\s\S]*?(?=<<<EXTERNAL_UNTRUSTED_CONTENT|$)/g,
+            ""
+        )
+        .replace(
+            /<<<EXTERNAL_UNTRUSTED_CONTENT[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT[\s\S]*?>>>/g,
+            "[external content omitted]"
+        );
+    return stripped.trim();
 }
 
 function limitTextByLines(text: string, maxChars: number, maxLines: number): string {
