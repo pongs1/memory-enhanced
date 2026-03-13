@@ -338,9 +338,19 @@ export function materializeGraph(
     }
 
     const mesoLinkSeen = new Set<string>();
-    for (const [nodeId, item] of itemByNodeId.entries()) {
-        if (item.itemType === "discourse_unit") continue;
-        for (const spanId of item.evidenceSpanIds) {
+    for (const node of nodes) {
+        if (node.primaryLayer !== "micro") continue;
+        if (node.memoryType === "evidence" || node.memoryType === "discourse_unit") {
+            continue;
+        }
+        const item = itemByNodeId.get(node.id);
+        const originType = item?.originType || "aggregated";
+        const sourceItemIds = item ? [item.id] : [];
+        const confidence = item ? item.confidence : node.state.confidence;
+        const scope = item ? item.scope : node.state.scope;
+        const validity = item ? item.validity : node.state.validity;
+
+        for (const spanId of node.evidenceSpanIds) {
             const span = spanById.get(spanId);
             if (!span) continue;
             const microUnit = unitById.get(span.unitId);
@@ -349,22 +359,22 @@ export function materializeGraph(
             if (!mesoUnit || mesoUnit.layer !== "meso") continue;
             const mesoNodeId = unitNodeById.get(mesoUnit.id);
             if (!mesoNodeId) continue;
-            const key = `${nodeId}->${mesoNodeId}`;
+            const key = `${node.id}->${mesoNodeId}`;
             if (mesoLinkSeen.has(key)) continue;
             mesoLinkSeen.add(key);
             pushEdge({
                 type: "micro_node_in_meso_block",
-                src: nodeId,
+                src: node.id,
                 dst: mesoNodeId,
                 layer: "cross",
-                originType: item.originType as V8MemoryOriginType,
-                sourceItemIds: [item.id],
+                originType: originType as V8MemoryOriginType,
+                sourceItemIds,
                 evidenceSpanIds: [spanId],
                 qualifiers: {},
-                confidence: Math.min(0.95, item.confidence),
+                confidence: Math.min(0.95, confidence),
                 state: {
-                    scope: item.scope,
-                    validity: item.validity,
+                    scope,
+                    validity,
                 },
             });
         }
