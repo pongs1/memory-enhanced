@@ -28,7 +28,10 @@ export function materializeGraph(
     let semanticNodeSeq = 0;
 
     for (const item of items) {
-        const nodeId = `node_${item.id}`;
+        const nodeId =
+            item.itemType === "discourse_unit"
+                ? `node_${item.id}`
+                : `node_edge_${item.id}`;
         nodeIdByItemId.set(item.id, nodeId);
         itemByNodeId.set(nodeId, item);
 

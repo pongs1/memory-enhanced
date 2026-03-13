@@ -200,6 +200,9 @@ export class V8GraphScanner {
             if (node.memoryType === "discourse_unit") {
                 continue;
             }
+            if (node.id.startsWith("node_edge_")) {
+                continue;
+            }
             const tokens = tokenize(
                 [node.canonicalLabel, ...(node.aliases || [])].join(" ")
             );
