@@ -29,9 +29,10 @@
     {
       "kind": "containment",
       "mode": "profile",
-      "role": "spread",
-      "direction": "bidirectional",
-      "gain": 1.2
+      "role": "gate",
+      "direction": "none",
+      "gain": 0.0,
+      "notes": "structural gating only"
     },
     {
       "kind": "abstraction",
@@ -94,9 +95,10 @@
     {
       "kind": "containment",
       "mode": "trajectory",
-      "role": "spread",
-      "direction": "bidirectional",
-      "gain": 1.0
+      "role": "backtrace",
+      "direction": "none",
+      "gain": 0.0,
+      "notes": "structural backtrace only"
     },
     {
       "kind": "abstraction",
@@ -158,9 +160,10 @@
     {
       "kind": "containment",
       "mode": "oblique",
-      "role": "spread",
-      "direction": "bidirectional",
-      "gain": 0.7
+      "role": "gate",
+      "direction": "none",
+      "gain": 0.0,
+      "notes": "structural gating only"
     },
     {
       "kind": "abstraction",
@@ -222,9 +225,10 @@
     {
       "kind": "containment",
       "mode": "audit",
-      "role": "spread",
-      "direction": "bidirectional",
-      "gain": 0.2
+      "role": "backtrace",
+      "direction": "none",
+      "gain": 0.0,
+      "notes": "structural backtrace only"
     },
     {
       "kind": "abstraction",
