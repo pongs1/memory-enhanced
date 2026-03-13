@@ -191,6 +191,23 @@ function combineRecallPrompts(prompts: Array<{ prompt: string }>): string {
         .join("\n\n");
 }
 
+function selectRecallMode(promptText: string): "profile" | "trajectory" | "oblique" | "audit" {
+    const normalized = (promptText || "").trim();
+    if (!normalized) return "profile";
+
+    const auditPattern =
+        /审计|溯源|追溯|回溯|证据链|证据|核对|核查|验证|fact\s*check|compliance|audit|provenance|evidence|backtrace|trace|verify|validate/i;
+    const trajectoryPattern =
+        /之前|前面|前几章|前几步|一开始|最初|曾经|后来|之后|现在|改了|变成|演变|变化|从头到尾|全过程|完整脉络|timeline|history|earlier|before|previously|later|after|changed|became|evolved|evolution|lifecycle/i;
+    const obliquePattern =
+        /相关|联系|联想|侧面|旁支|隐含|类似|相似|横向|oblique|related|analog|analogy|adjacent|side/i;
+
+    if (auditPattern.test(normalized)) return "audit";
+    if (trajectoryPattern.test(normalized)) return "trajectory";
+    if (obliquePattern.test(normalized)) return "oblique";
+    return "profile";
+}
+
 function getCheckpointConfig(pluginConfig: any): StreamCheckpointConfig {
     return {
         outputCheckpointChars: pluginConfig?.outputCheckpointChars ?? 1600,
@@ -912,6 +929,8 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
             if (useV8GraphRecall) {
                 const workingState = maybeRefreshWorkingState(workspace);
                 const scanner = getV8Scanner(sid, workspace);
+                const mode = selectRecallMode(promptText);
+                scanner.setMode(mode);
                 scanner.refreshScene(
                     buildSceneSignals(workingState, [
                         {

@@ -1,41 +1,35 @@
 import * as fs from "node:fs";
-import {
-    normalizeUserRequest,
-    readEvents,
-} from "../utils.js";
-import { graphPaths } from "./paths.js";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { readJson } from "../utils.js";
+import { loadEdgeRuntimePolicy } from "./edge-runtime-policy.js";
+import { getNodeFeedbackBias, refreshFeedbackStore } from "./feedback-store.js";
+import { v8StorePaths } from "./paths_v8.js";
 import type {
     V8ActivatedBundle,
     V8ControlAnchors,
-    V8DayIndex,
-    V8HardCoreIndex,
-    V8MemoryBundle,
-    V8MemoryEdge,
-    V8MemoryNode,
+    V8EdgeCatalogEntry,
+    V8EdgeRuntimePolicyEntry,
+    V8GraphEdge,
+    V8GraphNode,
+    V8RecallMode,
     V8ScanResult,
     V8ScannerConfig,
     V8SceneSignal,
-    V8SourceIndex,
-    V8TriggerLexicon,
-} from "./types.js";
+} from "./types_v8.js";
 
-interface LoadedGraphData {
-    bundles: Map<string, V8MemoryBundle>;
-    nodes: Map<string, V8MemoryNode>;
-    adjacency: Map<string, V8MemoryEdge[]>;
-    reverseAdjacency: Map<string, V8MemoryEdge[]>;
-    triggerLexicon: V8TriggerLexicon;
-    dayIndex: V8DayIndex;
-    sourceIndex: V8SourceIndex;
-    hardCoreIndex: V8HardCoreIndex;
+interface EdgeCatalogFile {
+    edges?: Array<Partial<V8EdgeCatalogEntry> & { type?: string }>;
 }
 
-function loadJson<T>(filePath: string, fallback: T): T {
-    try {
-        return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
-    } catch {
-        return fallback;
-    }
+interface LoadedGraphData {
+    nodesById: Map<string, V8GraphNode>;
+    edges: V8GraphEdge[];
+    adjacency: Map<string, V8GraphEdge[]>;
+    reverseAdjacency: Map<string, V8GraphEdge[]>;
+    nodeTokens: Map<string, Set<string>>;
+    edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>;
+    policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
 }
 
 function loadJsonl<T>(filePath: string): T[] {
@@ -49,14 +43,6 @@ function loadJsonl<T>(filePath: string): T[] {
     } catch {
         return [];
     }
-}
-
-function clamp01(value: number): number {
-    return Math.max(0, Math.min(1, value));
-}
-
-function isBoundary(text: string): boolean {
-    return /(\n\n|\n|```|[。！？!?](?:\s|$)|\.(?:\s|$)|:(?:\s|$)|;(?:\s|$)|,(?:\s|$))/.test(text);
 }
 
 function tokenize(text: string): string[] {
@@ -82,108 +68,63 @@ function tokenize(text: string): string[] {
     return [...englishWords, ...cjkNgrams];
 }
 
-function overlapScore(sourceText: string, referenceText: string): number {
-    const sourceTokens = new Set(tokenize(sourceText));
-    const referenceTokens = [...new Set(tokenize(referenceText))];
-    if (sourceTokens.size === 0 || referenceTokens.length === 0) {
+function overlapScore(tokens: Set<string>, referenceTokens: Set<string>): number {
+    if (tokens.size === 0 || referenceTokens.size === 0) {
         return 0;
     }
 
     let matches = 0;
     for (const token of referenceTokens) {
-        if (sourceTokens.has(token)) {
+        if (tokens.has(token)) {
             matches += 1;
         }
     }
-    return matches / referenceTokens.length;
+    return matches / referenceTokens.size;
 }
 
-function maxAnchorOverlap(text: string, anchors: V8ControlAnchors): number {
-    return Math.max(
-        overlapScore(text, anchors.goal || ""),
-        overlapScore(text, anchors.activeTask || ""),
-        overlapScore(text, anchors.latestUserRequest || "")
-    );
+function nowMs(): number {
+    return Date.now();
 }
 
-function normalizeTrigger(value: string): string {
-    return value.trim().toLowerCase().replace(/\s+/g, " ");
+function clamp01(value: number): number {
+    return Math.max(0, Math.min(1, value));
 }
 
-function topK<T>(
-    values: T[],
-    k: number,
-    scoreFn: (value: T) => number
-): T[] {
-    return [...values]
-        .sort((a, b) => scoreFn(b) - scoreFn(a))
-        .slice(0, Math.max(0, k));
+function edgeCatalogPath(): string {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    return path.resolve(here, "../../schema/v8-edge-catalog.json");
 }
 
-function scoreEdge(edge: V8MemoryEdge): number {
-    return (
-        edge.assocStrength *
-        edge.utility *
-        edge.trust *
-        edge.freshness *
-        edge.contextFit
-    );
-}
-
-function bundleTier(
-    bundle: V8MemoryBundle,
-    bundleNodes: V8MemoryNode[],
-    hardCoreIndex: V8HardCoreIndex
-): V8ActivatedBundle["tier"] {
-    const hardCoreIds = new Set([
-        ...(hardCoreIndex.agent_identity_core || []),
-        ...(hardCoreIndex.inter_agent_protocol_core || []),
-    ]);
-
-    if (bundleNodes.some((node) => hardCoreIds.has(node.id))) {
-        return "critical";
+function loadEdgeCatalog(): Map<string, V8EdgeCatalogEntry["kind"]> {
+    const data = readJson<EdgeCatalogFile>(edgeCatalogPath(), { edges: [] });
+    const entries = Array.isArray(data.edges) ? data.edges : [];
+    const map = new Map<string, V8EdgeCatalogEntry["kind"]>();
+    for (const entry of entries) {
+        if (!entry?.type || !entry.kind) {
+            continue;
+        }
+        map.set(entry.type, entry.kind as V8EdgeCatalogEntry["kind"]);
     }
-
-    const roles = new Set(bundleNodes.map((node) => node.role));
-    if (
-        roles.has("checkpoint") ||
-        roles.has("constraint") ||
-        (roles.has("workflow") && roles.has("constraint"))
-    ) {
-        return "critical";
-    }
-
-    if (roles.has("workflow") || roles.has("condition")) {
-        return "decision";
-    }
-
-    return "background";
+    return map;
 }
 
-function scoreNodeSceneOverlap(node: V8MemoryNode, text: string): number {
-    return overlapScore(
-        text,
-        `${node.names.zh} ${node.names.en} ${node.aliases.join(" ")} ${node.text} ${node.summary} ${node.keywords.join(" ")}`
-    );
+function policyKey(kind: string, mode: V8RecallMode): string {
+    return `${kind}:${mode}`;
 }
 
-function sceneSourceWeight(signal: V8SceneSignal): number {
-    if (typeof signal.weight === "number") {
-        return signal.weight;
+function buildPolicyMap(entries: V8EdgeRuntimePolicyEntry[]): Map<string, V8EdgeRuntimePolicyEntry> {
+    const map = new Map<string, V8EdgeRuntimePolicyEntry>();
+    for (const entry of entries) {
+        map.set(policyKey(entry.kind, entry.mode), entry);
     }
+    return map;
+}
 
-    switch (signal.source) {
-        case "control":
-            return 1.15;
-        case "prompt":
-            return 1.0;
-        case "tool":
-            return 1.05;
-        case "event":
-            return 0.9;
-        default:
-            return 0.85;
-    }
+function scoreTier(energy: number, config: V8ScannerConfig): V8ActivatedBundle["tier"] | null {
+    if (energy >= config.criticalThreshold) return "critical";
+    if (energy >= config.decisionThreshold) return "decision";
+    if (energy >= config.backgroundThreshold) return "background";
+    return null;
 }
 
 export const DEFAULT_V8_SCANNER_CONFIG: V8ScannerConfig = {
@@ -217,40 +158,47 @@ export const DEFAULT_V8_SCANNER_CONFIG: V8ScannerConfig = {
 export class V8GraphScanner {
     private readonly workspace: string;
     private readonly config: V8ScannerConfig;
+    private mode: V8RecallMode;
     private readonly graph: LoadedGraphData;
     private readonly activations = new Map<string, number>();
     private readonly nodeCooldowns = new Map<string, number>();
     private readonly bundleCooldowns = new Map<string, number>();
-    private readonly activeDayKeys = new Set<string>();
     private readonly sceneBiases = new Map<string, number>();
     private recentWindow = "";
     private charsSinceLastScan = 0;
 
-    constructor(
-        workspace: string,
-        config: Partial<V8ScannerConfig> = {}
-    ) {
+    constructor(workspace: string, config: Partial<V8ScannerConfig> = {}, mode: V8RecallMode = "profile") {
         this.workspace = workspace;
         this.config = { ...DEFAULT_V8_SCANNER_CONFIG, ...config };
+        this.mode = mode;
         this.graph = this.loadGraph();
     }
 
-    private loadGraph(): LoadedGraphData {
-        const gp = graphPaths(this.workspace);
-        const bundles = loadJsonl<V8MemoryBundle>(gp.bundles);
-        const nodes = [
-            ...loadJsonl<V8MemoryNode>(gp.nodesEpisodic),
-            ...loadJsonl<V8MemoryNode>(gp.nodesSemantic),
-            ...loadJsonl<V8MemoryNode>(gp.nodesProcedural),
-        ];
-        const edges = [
-            ...loadJsonl<V8MemoryEdge>(gp.edgesAssociative),
-            ...loadJsonl<V8MemoryEdge>(gp.edgesStructural),
-            ...loadJsonl<V8MemoryEdge>(gp.edgesSupersession),
-        ];
+    public setMode(mode: V8RecallMode): void {
+        this.mode = mode;
+    }
 
-        const adjacency = new Map<string, V8MemoryEdge[]>();
-        const reverseAdjacency = new Map<string, V8MemoryEdge[]>();
+    public getMode(): V8RecallMode {
+        return this.mode;
+    }
+
+    private loadGraph(): LoadedGraphData {
+        const store = v8StorePaths(this.workspace);
+        const nodes = loadJsonl<V8GraphNode>(store.graphNodes);
+        const edges = loadJsonl<V8GraphEdge>(store.graphEdges);
+
+        const nodesById = new Map<string, V8GraphNode>();
+        const nodeTokens = new Map<string, Set<string>>();
+        for (const node of nodes) {
+            nodesById.set(node.id, node);
+            const tokens = tokenize(
+                [node.canonicalLabel, ...(node.aliases || [])].join(" ")
+            );
+            nodeTokens.set(node.id, new Set(tokens));
+        }
+
+        const adjacency = new Map<string, V8GraphEdge[]>();
+        const reverseAdjacency = new Map<string, V8GraphEdge[]>();
         for (const edge of edges) {
             if (!adjacency.has(edge.src)) adjacency.set(edge.src, []);
             adjacency.get(edge.src)!.push(edge);
@@ -258,422 +206,224 @@ export class V8GraphScanner {
             reverseAdjacency.get(edge.dst)!.push(edge);
         }
 
+        const edgeKinds = loadEdgeCatalog();
+        const policyByKindMode = buildPolicyMap(loadEdgeRuntimePolicy());
+
         return {
-            bundles: new Map(bundles.map((bundle) => [bundle.bundleId, bundle])),
-            nodes: new Map(nodes.map((node) => [node.id, node])),
+            nodesById,
+            edges,
             adjacency,
             reverseAdjacency,
-            triggerLexicon: loadJson<V8TriggerLexicon>(gp.triggerLexicon, {}),
-            dayIndex: loadJson<V8DayIndex>(gp.dayIndex, {}),
-            sourceIndex: loadJson<V8SourceIndex>(gp.sourceIndex, {}),
-            hardCoreIndex: loadJson<V8HardCoreIndex>(gp.hardCoreIndex, {
-                agent_identity_core: [],
-                inter_agent_protocol_core: [],
-            }),
+            nodeTokens,
+            edgeKinds,
+            policyByKindMode,
         };
     }
 
-    public preExcite(prompt: string, anchors: V8ControlAnchors): void {
-        if (!prompt.trim()) return;
-        this.injectFromText(prompt, anchors, true);
-        this.spreadActivation();
-    }
+    public refreshScene(signals: V8SceneSignal[], anchors: V8ControlAnchors): void {
+        const combined = [
+            anchors.goal,
+            anchors.activeTask,
+            anchors.latestUserRequest,
+            ...signals.map((signal) => signal.text),
+        ]
+            .filter(Boolean)
+            .join(" ");
 
-    public refreshScene(
-        signals: V8SceneSignal[],
-        anchors: V8ControlAnchors
-    ): void {
-        const usableSignals = signals
-            .map((signal) => ({
-                ...signal,
-                text: normalizeTrigger(signal.text || ""),
-            }))
-            .filter((signal) => signal.text);
-        if (usableSignals.length === 0) {
+        if (!combined) {
+            this.sceneBiases.clear();
             return;
         }
 
-        this.decaySceneBiases();
+        const signalTokens = new Set(tokenize(combined));
+        const nextBiases = new Map<string, number>();
 
-        for (const signal of usableSignals) {
-            this.injectSceneSignal(signal, anchors);
+        for (const [nodeId, tokens] of this.graph.nodeTokens.entries()) {
+            const overlap = overlapScore(signalTokens, tokens);
+            if (overlap >= this.config.sceneOverlapThreshold) {
+                nextBiases.set(nodeId, overlap * this.config.sceneSignalGain);
+            }
         }
 
-        this.applySceneField();
+        this.sceneBiases.clear();
+        for (const [nodeId, bias] of nextBiases.entries()) {
+            this.sceneBiases.set(nodeId, bias);
+        }
+    }
+
+    public preExcite(prompt: string, anchors: V8ControlAnchors): void {
+        if (!prompt) {
+            return;
+        }
+
+        const tokens = new Set(tokenize(prompt));
+        for (const [nodeId, nodeTokens] of this.graph.nodeTokens.entries()) {
+            const overlap = overlapScore(tokens, nodeTokens);
+            if (overlap <= 0) continue;
+            const bias = this.sceneBiases.get(nodeId) || 0;
+            this.activate(nodeId, clamp01(overlap + bias));
+        }
+
         this.spreadActivation();
     }
 
-    public processChunk(delta: string, anchors: V8ControlAnchors): V8ScanResult {
+    public processChunk(delta: string, _anchors: V8ControlAnchors): V8ScanResult {
         if (!delta) {
             return { activatedBundles: [], recentWindow: this.recentWindow };
         }
 
+        this.recentWindow = (this.recentWindow + delta).slice(-1200);
         this.charsSinceLastScan += delta.length;
-        this.recentWindow = (
-            this.recentWindow + delta
-        ).slice(-Math.max(this.config.macroCharsZh, this.config.macroCharsEn));
 
-        if (
-            this.charsSinceLastScan < this.config.scanIntervalChars &&
-            !isBoundary(delta)
-        ) {
+        if (this.charsSinceLastScan < this.config.scanIntervalChars) {
             return { activatedBundles: [], recentWindow: this.recentWindow };
         }
 
         this.charsSinceLastScan = 0;
+        refreshFeedbackStore(this.workspace);
         this.applyDecay();
-        this.decaySceneBiases();
-        this.injectFromText(this.recentWindow, anchors, false);
-        this.applySceneField();
+
+        const tokens = new Set(tokenize(this.recentWindow));
+        for (const [nodeId, nodeTokens] of this.graph.nodeTokens.entries()) {
+            const overlap = overlapScore(tokens, nodeTokens);
+            if (overlap <= 0) continue;
+            const bias = this.sceneBiases.get(nodeId) || 0;
+            const feedbackBias = getNodeFeedbackBias(nodeId);
+            const energy = clamp01(overlap + bias + feedbackBias);
+            this.activate(nodeId, energy);
+        }
+
         this.spreadActivation();
 
-        const activatedBundles = this.collectActivatedBundles();
-        return { activatedBundles, recentWindow: this.recentWindow };
-    }
-
-    public getSourceIndex(): V8SourceIndex {
-        return this.graph.sourceIndex;
-    }
-
-    public getBundle(bundleId: string): V8MemoryBundle | undefined {
-        return this.graph.bundles.get(bundleId);
-    }
-
-    public getBundleNodes(bundleId: string): V8MemoryNode[] {
-        const bundle = this.graph.bundles.get(bundleId);
-        if (!bundle) return [];
-        return bundle.nodeIds
-            .map((nodeId) => this.graph.nodes.get(nodeId))
-            .filter((node): node is V8MemoryNode => Boolean(node));
-    }
-
-    public getHardCoreIndex(): V8HardCoreIndex {
-        return this.graph.hardCoreIndex;
-    }
-
-    private injectFromText(
-        text: string,
-        anchors: V8ControlAnchors,
-        isInitialPrompt: boolean
-    ) {
-        const normalizedText = normalizeTrigger(text);
-        const lexicalHits = new Set<string>();
-
-        for (const [trigger, nodeIds] of Object.entries(this.graph.triggerLexicon)) {
-            if (!trigger || !normalizedText.includes(trigger)) continue;
-            for (const nodeId of nodeIds) {
-                lexicalHits.add(nodeId);
-            }
-        }
-
-        const overlappingNodes = topK(
-            [...this.graph.nodes.values()]
-                .map((node) => ({
-                    node,
-                    overlap: scoreNodeSceneOverlap(node, normalizedText),
-                }))
-                .filter((entry) => entry.overlap >= this.config.sceneOverlapThreshold),
-            this.config.sceneTopKNodes,
-            (entry) => entry.overlap
-        );
-        const candidateNodeIds = new Set<string>(lexicalHits);
-        for (const entry of overlappingNodes) {
-            candidateNodeIds.add(entry.node.id);
-        }
-
-        const now = Date.now();
-
-        for (const nodeId of candidateNodeIds) {
-            const node = this.graph.nodes.get(nodeId);
-            if (!node) continue;
-
+        const now = nowMs();
+        const candidates: V8ActivatedBundle[] = [];
+        for (const [nodeId, energy] of this.activations.entries()) {
+            const tier = scoreTier(energy, this.config);
+            if (!tier) continue;
             const cooldownUntil = this.nodeCooldowns.get(nodeId) || 0;
             if (cooldownUntil > now) continue;
 
-            if (node.kind === "episodic" && node.dayKey) {
-                this.activeDayKeys.add(node.dayKey);
-            }
-
-            const gLex = lexicalHits.has(nodeId) ? 1 : 0;
-            const gOverlap = scoreNodeSceneOverlap(node, normalizedText);
-            const gCtrl = maxAnchorOverlap(
-                `${node.names.zh} ${node.names.en} ${node.aliases.join(" ")} ${node.text} ${node.summary}`,
-                anchors
-            );
-            const gTime =
-                node.kind !== "episodic"
-                    ? 0.65
-                    : node.dayKey && this.activeDayKeys.has(node.dayKey)
-                        ? 1
-                        : 0.2;
-            const baseGain = isInitialPrompt ? 1.4 : 1;
-            const energy =
-                baseGain *
-                (0.45 * gLex + 0.35 * Math.max(gOverlap, gCtrl) + 0.2 * gTime);
-            this.activate(nodeId, energy);
-        }
-    }
-
-    private injectSceneSignal(
-        signal: V8SceneSignal & { text: string },
-        anchors: V8ControlAnchors
-    ): void {
-        const lexicalHits = new Set<string>();
-        for (const [trigger, nodeIds] of Object.entries(this.graph.triggerLexicon)) {
-            if (!trigger || !signal.text.includes(trigger)) continue;
-            for (const nodeId of nodeIds) {
-                lexicalHits.add(nodeId);
-            }
-        }
-
-        const overlappingNodes = topK(
-            [...this.graph.nodes.values()]
-                .map((node) => ({
-                    node,
-                    overlap: scoreNodeSceneOverlap(node, signal.text),
-                }))
-                .filter((entry) => entry.overlap >= this.config.sceneOverlapThreshold),
-            this.config.sceneTopKNodes,
-            (entry) => entry.overlap
-        );
-
-        const candidateNodeIds = new Set<string>(lexicalHits);
-        for (const entry of overlappingNodes) {
-            candidateNodeIds.add(entry.node.id);
-        }
-
-        for (const nodeId of candidateNodeIds) {
-            const node = this.graph.nodes.get(nodeId);
+            const node = this.graph.nodesById.get(nodeId);
             if (!node) continue;
+            const evidenceSpanIds =
+                node.bestEvidenceSpanIds.length > 0
+                    ? node.bestEvidenceSpanIds
+                    : node.evidenceSpanIds;
 
-            const lexicalScore = lexicalHits.has(nodeId) ? 1 : 0;
-            const overlap = scoreNodeSceneOverlap(node, signal.text);
-            const gCtrl = maxAnchorOverlap(
-                `${node.names.zh} ${node.names.en} ${node.aliases.join(" ")} ${node.text} ${node.summary}`,
-                anchors
-            );
-            const gTime =
-                node.kind !== "episodic"
-                    ? 0.72
-                    : node.dayKey && this.activeDayKeys.has(node.dayKey)
-                        ? 1
-                        : 0.3;
-            const sourceWeight = sceneSourceWeight(signal);
-            const bias =
-                sourceWeight *
-                this.config.sceneSignalGain *
-                (0.6 * lexicalScore + 0.25 * Math.max(overlap, gCtrl) + 0.15 * gTime);
-
-            if (bias <= 0.03) continue;
-
-            if (node.kind === "episodic" && node.dayKey) {
-                this.activeDayKeys.add(node.dayKey);
-            }
-
-            this.sceneBiases.set(
-                nodeId,
-                Math.min(1.25, (this.sceneBiases.get(nodeId) || 0) + bias)
-            );
+            candidates.push({
+                bundleId: nodeId,
+                nodeIds: [nodeId],
+                tier,
+                energy,
+                evidenceSpanIds,
+            });
         }
+
+        let topBundles = candidates
+            .sort((a, b) => b.energy - a.energy)
+            .slice(0, this.config.maxInjectedBundles);
+
+        if (topBundles.length === 0) {
+            this.spreadActivation("oblique");
+            const obliqueCandidates: V8ActivatedBundle[] = [];
+            for (const [nodeId, energy] of this.activations.entries()) {
+                if (energy < this.config.secondWaveThreshold) continue;
+                const cooldownUntil = this.nodeCooldowns.get(nodeId) || 0;
+                if (cooldownUntil > now) continue;
+                const node = this.graph.nodesById.get(nodeId);
+                if (!node) continue;
+                const evidenceSpanIds =
+                    node.bestEvidenceSpanIds.length > 0
+                        ? node.bestEvidenceSpanIds
+                        : node.evidenceSpanIds;
+                obliqueCandidates.push({
+                    bundleId: nodeId,
+                    nodeIds: [nodeId],
+                    tier: "background",
+                    energy,
+                    evidenceSpanIds,
+                    wave: 2,
+                });
+            }
+            topBundles = obliqueCandidates
+                .sort((a, b) => b.energy - a.energy)
+                .slice(0, this.config.maxInjectedBundles);
+        }
+
+        for (const bundle of topBundles) {
+            this.nodeCooldowns.set(bundle.bundleId, now + this.config.nodeCooldownMs);
+            this.bundleCooldowns.set(bundle.bundleId, now + this.config.bundleCooldownMs);
+        }
+
+        return { activatedBundles: topBundles, recentWindow: this.recentWindow };
     }
 
     private activate(nodeId: string, energy: number): void {
-        this.activations.set(nodeId, (this.activations.get(nodeId) || 0) + energy);
-    }
-
-    private applySceneField(): void {
-        const topSceneNodes = topK(
-            [...this.sceneBiases.entries()],
-            this.config.sceneTopKNodes,
-            ([, energy]) => energy
-        );
-
-        for (const [nodeId, energy] of topSceneNodes) {
-            const node = this.graph.nodes.get(nodeId);
-            if (!node) continue;
-            if (
-                node.kind === "episodic" &&
-                node.dayKey &&
-                !this.activeDayKeys.has(node.dayKey)
-            ) {
-                continue;
-            }
-
-            this.activate(nodeId, energy * this.config.sceneCarryGain);
-        }
-    }
-
-    private spreadActivation(): void {
-        const spreadUpdates = new Map<string, number>();
-        const degree = new Map<string, number>();
-
-        for (const [src, edges] of this.graph.adjacency.entries()) {
-            degree.set(src, edges.length);
-            for (const edge of edges) {
-                degree.set(edge.dst, (degree.get(edge.dst) || 0) + 1);
-            }
-        }
-
-        for (const [nodeId, energy] of this.activations.entries()) {
-            if (energy <= 0.08) continue;
-
-            const forwardEdges = topK(
-                this.graph.adjacency.get(nodeId) || [],
-                this.config.topKEdges,
-                scoreEdge
-            );
-            for (const edge of forwardEdges) {
-                const penalty = Math.pow(
-                    Math.max(1, degree.get(nodeId) || 1),
-                    this.config.hubPenaltyPower
-                );
-                const transfer =
-                    energy *
-                    scoreEdge(edge) *
-                    this.config.forwardGain /
-                    penalty;
-                spreadUpdates.set(
-                    edge.dst,
-                    (spreadUpdates.get(edge.dst) || 0) + transfer
-                );
-            }
-
-            const reverseEdges = topK(
-                this.graph.reverseAdjacency.get(nodeId) || [],
-                this.config.topKEdges,
-                scoreEdge
-            );
-            for (const edge of reverseEdges) {
-                const penalty = Math.pow(
-                    Math.max(1, degree.get(nodeId) || 1),
-                    this.config.hubPenaltyPower
-                );
-                const transfer =
-                    energy *
-                    scoreEdge(edge) *
-                    this.config.reverseGain /
-                    penalty;
-                spreadUpdates.set(
-                    edge.src,
-                    (spreadUpdates.get(edge.src) || 0) + transfer
-                );
-            }
-        }
-
-        for (const [nodeId, energy] of spreadUpdates.entries()) {
-            const node = this.graph.nodes.get(nodeId);
-            if (!node) continue;
-            if (
-                node.kind === "episodic" &&
-                node.dayKey &&
-                !this.activeDayKeys.has(node.dayKey)
-            ) {
-                continue;
-            }
-            this.activate(nodeId, energy);
-        }
+        const current = this.activations.get(nodeId) || 0;
+        this.activations.set(nodeId, current + energy);
     }
 
     private applyDecay(): void {
         for (const [nodeId, energy] of this.activations.entries()) {
-            const decayed = energy * this.config.decayLambda;
-            if (decayed < 0.04) {
+            const next = energy * this.config.decayLambda;
+            if (next < 0.05) {
                 this.activations.delete(nodeId);
             } else {
-                this.activations.set(nodeId, decayed);
+                this.activations.set(nodeId, next);
             }
         }
-    }
 
-    private decaySceneBiases(): void {
-        for (const [nodeId, energy] of this.sceneBiases.entries()) {
-            const decayed = energy * this.config.sceneDecayLambda;
-            if (decayed < 0.03) {
+        for (const [nodeId, bias] of this.sceneBiases.entries()) {
+            const next = bias * this.config.sceneDecayLambda;
+            if (next < 0.01) {
                 this.sceneBiases.delete(nodeId);
             } else {
-                this.sceneBiases.set(nodeId, decayed);
+                this.sceneBiases.set(nodeId, next);
             }
         }
     }
 
-    private collectActivatedBundles(): V8ActivatedBundle[] {
-        const bundleEnergy = new Map<string, number>();
-        const bundleNodeIds = new Map<string, Set<string>>();
-        const now = Date.now();
+    private spreadActivation(modeOverride?: V8RecallMode): void {
+        const mode = modeOverride || this.mode;
+        const nextEnergy = new Map<string, number>();
+        const degree = new Map<string, number>();
 
-        const candidateNodeIds = new Set<string>([
-            ...this.activations.keys(),
-            ...this.sceneBiases.keys(),
-        ]);
+        for (const edge of this.graph.edges) {
+            degree.set(edge.src, (degree.get(edge.src) || 0) + 1);
+            degree.set(edge.dst, (degree.get(edge.dst) || 0) + 1);
+        }
 
-        for (const nodeId of candidateNodeIds) {
-            const node = this.graph.nodes.get(nodeId);
-            if (!node) continue;
-
-            const activationEnergy = this.activations.get(nodeId) || 0;
-            const sceneEnergy =
-                (this.sceneBiases.get(nodeId) || 0) * this.config.sceneBundleBiasGain;
-            const energy = activationEnergy + sceneEnergy;
-            if (energy <= 0) continue;
-
-            const bundle = this.graph.bundles.get(node.bundleId);
-            if (!bundle) continue;
-
-            const existingEnergy = bundleEnergy.get(bundle.bundleId) || 0;
-            bundleEnergy.set(bundle.bundleId, Math.max(existingEnergy, energy));
-
-            if (!bundleNodeIds.has(bundle.bundleId)) {
-                bundleNodeIds.set(bundle.bundleId, new Set());
+        for (const edge of this.graph.edges) {
+            const kind = this.graph.edgeKinds.get(edge.type) || "semantic";
+            const policy =
+                this.graph.policyByKindMode.get(policyKey(kind, mode));
+            if (!policy || policy.role !== "spread") {
+                continue;
             }
-            bundleNodeIds.get(bundle.bundleId)!.add(nodeId);
-        }
 
-        const ranked: V8ActivatedBundle[] = [];
-        for (const [bundleId, energy] of bundleEnergy.entries()) {
-            const cooldownUntil = this.bundleCooldowns.get(bundleId) || 0;
-            if (cooldownUntil > now) continue;
+            const weight = clamp01(edge.confidence ?? 0.6) * policy.gain;
 
-            const bundle = this.graph.bundles.get(bundleId);
-            if (!bundle) continue;
+            const srcEnergy = this.activations.get(edge.src) || 0;
+            const dstEnergy = this.activations.get(edge.dst) || 0;
 
-            const bundleNodes = this.getBundleNodes(bundleId);
-            const tier = bundleTier(bundle, bundleNodes, this.graph.hardCoreIndex);
-            const threshold =
-                tier === "critical"
-                    ? this.config.criticalThreshold
-                    : tier === "decision"
-                        ? this.config.decisionThreshold
-                        : this.config.backgroundThreshold;
+            const srcPenalty = Math.pow(Math.max(1, degree.get(edge.src) || 1), this.config.hubPenaltyPower);
+            const dstPenalty = Math.pow(Math.max(1, degree.get(edge.dst) || 1), this.config.hubPenaltyPower);
 
-            if (energy < threshold) continue;
+            const canForward = policy.direction === "bidirectional" || policy.direction === "up";
+            const canReverse = policy.direction === "bidirectional" || policy.direction === "down";
 
-            ranked.push({
-                bundleId,
-                energy: clamp01(energy),
-                tier,
-                nodeIds: [...(bundleNodeIds.get(bundleId) || new Set<string>())],
-            });
-        }
-
-        const selected = topK(
-            ranked,
-            this.config.maxInjectedBundles,
-            (bundle) => bundle.energy
-        );
-
-        for (const hit of selected) {
-            this.bundleCooldowns.set(
-                hit.bundleId,
-                now + this.config.bundleCooldownMs
-            );
-            for (const nodeId of hit.nodeIds) {
-                this.nodeCooldowns.set(
-                    nodeId,
-                    now + this.config.nodeCooldownMs
-                );
+            if (canForward && srcEnergy > 0.05) {
+                const transfer = (srcEnergy * weight * this.config.forwardGain) / srcPenalty;
+                nextEnergy.set(edge.dst, (nextEnergy.get(edge.dst) || 0) + transfer);
+            }
+            if (canReverse && dstEnergy > 0.05) {
+                const transfer = (dstEnergy * weight * this.config.reverseGain) / dstPenalty;
+                nextEnergy.set(edge.src, (nextEnergy.get(edge.src) || 0) + transfer);
             }
         }
 
-        return selected;
+        for (const [nodeId, energy] of nextEnergy.entries()) {
+            this.activate(nodeId, energy);
+        }
     }
 }
