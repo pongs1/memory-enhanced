@@ -1,0 +1,2772 @@
+{
+  "$schema": "./v8-edge-catalog.schema.json",
+  "catalogVersion": "v8.1",
+  "generatedFrom": [
+    "memory-enhanced/V8_ARCHITECTURE.md",
+    "memory-enhanced/V8_SCHEMA_AND_PIPELINE.md",
+    "memory-enhanced/V8_TYPES_AND_MIGRATION.md",
+    "/mnt/d/E/deep-research-report.md"
+  ],
+  "notes": [
+    "This catalog defines edge semantics and classification only.",
+    "Runtime propagation policy is intentionally not encoded here.",
+    "Compatibility aliases are retained for migration but are not canonical graph targets."
+  ],
+  "edges": [
+    {
+      "type": "is_a",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "ontology",
+      "status": "canonical",
+      "description": "source is a subtype or kind of target",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "instance_of",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "ontology",
+      "status": "canonical",
+      "description": "source is a concrete instance of target class",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "part_of",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "ontology",
+      "status": "canonical",
+      "description": "source is a component of target",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "has_part",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "ontology",
+      "status": "canonical",
+      "description": "source contains target as a component",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "belongs_to",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "ontology",
+      "status": "canonical",
+      "description": "source is affiliated with, owned by, or assigned to target",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "equivalent_to",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "ontology",
+      "status": "canonical",
+      "description": "source and target are aliases or semantically equivalent",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "performs",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "participation",
+      "status": "canonical",
+      "description": "source actor executes the target method or action",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "acts_on",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "participation",
+      "status": "canonical",
+      "description": "source action or method operates on target object",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "uses",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "participation",
+      "status": "canonical",
+      "description": "source depends on or uses target as an input or tool",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "produces",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "participation",
+      "status": "canonical",
+      "description": "source creates, emits, or yields target",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "targets",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "participation",
+      "status": "canonical",
+      "description": "source is directed at target objective or object",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "initiates",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "event_structure",
+      "status": "canonical",
+      "description": "source triggers the start of target event",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "involves",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "event_structure",
+      "status": "canonical",
+      "description": "source event directly includes target participant or object",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "occurs_at",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "event_structure",
+      "status": "canonical",
+      "description": "source event is anchored at target time, place, or phase",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": true,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "results_in_event",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "event_structure",
+      "status": "canonical",
+      "description": "source event causes the target event to occur",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "causes",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "causality_and_condition",
+      "status": "canonical",
+      "description": "source causally produces target",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "caused_by",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "causality_and_condition",
+      "status": "canonical",
+      "description": "source is causally explained by target",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "enables",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "causality_and_condition",
+      "status": "canonical",
+      "description": "source makes target possible",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "prevents",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "causality_and_condition",
+      "status": "canonical",
+      "description": "source blocks, stops, or suppresses target",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "requires",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "causality_and_condition",
+      "status": "canonical",
+      "description": "source needs target as a prerequisite",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "conditioned_on",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "causality_and_condition",
+      "status": "canonical",
+      "description": "source only holds under target condition or context",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": true,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "before",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "time_and_evolution",
+      "status": "canonical",
+      "description": "source happens earlier than target",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "after",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "time_and_evolution",
+      "status": "canonical",
+      "description": "source happens later than target",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "simultaneous_with",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "time_and_evolution",
+      "status": "canonical",
+      "description": "source and target hold at the same time",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "evolves_to",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "time_and_evolution",
+      "status": "canonical",
+      "description": "source develops into target version, form, or state",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "better_than",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "comparison",
+      "status": "canonical",
+      "description": "source is superior to target along some aspect",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": true,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "worse_than",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "comparison",
+      "status": "canonical",
+      "description": "source is inferior to target along some aspect",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": true,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "similar_to",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "comparison",
+      "status": "canonical",
+      "description": "source is similar to target",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": true,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "differs_from",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "comparison",
+      "status": "canonical",
+      "description": "source differs from target",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": true,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "supports",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "support",
+      "status": "canonical",
+      "description": "source evidence or claim supports target claim",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "contradicts",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "support",
+      "status": "canonical",
+      "description": "source evidence or claim opposes target claim",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "cites",
+      "layer": "micro",
+      "kind": "semantic",
+      "group": "support",
+      "status": "canonical",
+      "description": "source explicitly cites or references target",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "elaborates",
+      "layer": "micro",
+      "kind": "discourse",
+      "group": "discourse",
+      "status": "canonical",
+      "description": "source adds detail to target",
+      "sourceFamilies": [
+        "DiscourseUnit"
+      ],
+      "targetFamilies": [
+        "DiscourseUnit"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "summarizes",
+      "layer": "micro",
+      "kind": "discourse",
+      "group": "discourse",
+      "status": "canonical",
+      "description": "source is a summary of target",
+      "sourceFamilies": [
+        "DiscourseUnit"
+      ],
+      "targetFamilies": [
+        "DiscourseUnit"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "contrasts",
+      "layer": "micro",
+      "kind": "discourse",
+      "group": "discourse",
+      "status": "canonical",
+      "description": "source sets up a contrast with target",
+      "sourceFamilies": [
+        "DiscourseUnit"
+      ],
+      "targetFamilies": [
+        "DiscourseUnit"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "explains",
+      "layer": "micro",
+      "kind": "discourse",
+      "group": "discourse",
+      "status": "canonical",
+      "description": "source explains target",
+      "sourceFamilies": [
+        "DiscourseUnit"
+      ],
+      "targetFamilies": [
+        "DiscourseUnit"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "concludes",
+      "layer": "micro",
+      "kind": "discourse",
+      "group": "discourse",
+      "status": "canonical",
+      "description": "source concludes from target or leads to a conclusion about target",
+      "sourceFamilies": [
+        "DiscourseUnit"
+      ],
+      "targetFamilies": [
+        "DiscourseUnit"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "recommends",
+      "layer": "micro",
+      "kind": "discourse",
+      "group": "discourse",
+      "status": "canonical",
+      "description": "source recommends target action, object, or conclusion",
+      "sourceFamilies": [
+        "DiscourseUnit"
+      ],
+      "targetFamilies": [
+        "DiscourseUnit"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "grounded_in",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "anchoring_and_composition",
+      "status": "canonical",
+      "description": "scene block is anchored in a concrete situation frame",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "oriented_to",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "anchoring_and_composition",
+      "status": "canonical",
+      "description": "block is directed toward an objective block",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "focuses_on",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "anchoring_and_composition",
+      "status": "canonical",
+      "description": "block centers on a problem, interaction, or decision focus",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "realized_by",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "anchoring_and_composition",
+      "status": "canonical",
+      "description": "strategy is carried out through a procedure or interaction block",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "evidenced_by_block",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "anchoring_and_composition",
+      "status": "canonical",
+      "description": "block is supported or weakened by an evidence frame",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "functions_as",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "anchoring_and_composition",
+      "status": "canonical",
+      "description": "block serves a structural role such as setup, pivot, or resolution",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "triggered_by",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_dynamics",
+      "status": "canonical",
+      "description": "block or shift is triggered by an earlier block",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "responds_to",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_dynamics",
+      "status": "canonical",
+      "description": "strategy, decision, or interaction responds to a prior issue or block",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "constrained_by",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_dynamics",
+      "status": "canonical",
+      "description": "local move is limited by a problem, frame, or prior state",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "attempts_to_resolve",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_dynamics",
+      "status": "canonical",
+      "description": "local move tries to resolve a problem block",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "escalates",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_dynamics",
+      "status": "canonical",
+      "description": "source block increases local tension, pressure, or conflict",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "mitigates",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_dynamics",
+      "status": "canonical",
+      "description": "source block reduces local tension, pressure, or conflict",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "reframes",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_dynamics",
+      "status": "canonical",
+      "description": "source block changes the problem framing or interpretive frame",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "revises",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_dynamics",
+      "status": "canonical",
+      "description": "source block revises an earlier local decision, objective, or strategy",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "culminates_in",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_transformation",
+      "status": "canonical",
+      "description": "block reaches a local climax in a decision, outcome, or shift",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "leads_to",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_transformation",
+      "status": "canonical",
+      "description": "block directly leads to a subsequent block or outcome",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "produces_shift",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_transformation",
+      "status": "canonical",
+      "description": "block causes a local stance, state, or strategy shift",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "stabilizes",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_transformation",
+      "status": "canonical",
+      "description": "block stabilizes the local situation",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "destabilizes",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_transformation",
+      "status": "canonical",
+      "description": "block destabilizes the local situation",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "opens",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_transformation",
+      "status": "canonical",
+      "description": "block opens a new issue, branch, or objective",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "closes",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "local_transformation",
+      "status": "canonical",
+      "description": "block closes a local issue, branch, or block",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "precedes_block",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "block_organization",
+      "status": "canonical",
+      "description": "source block comes before target block",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "branches_to",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "block_organization",
+      "status": "canonical",
+      "description": "source block branches into target block",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "merges_into",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "block_organization",
+      "status": "canonical",
+      "description": "source block merges into target block",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "parallels",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "block_organization",
+      "status": "canonical",
+      "description": "source and target blocks proceed in parallel",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "contrasts_with_block",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "block_organization",
+      "status": "canonical",
+      "description": "source and target blocks form a local structural contrast",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "echoes",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "block_organization",
+      "status": "canonical",
+      "description": "later block repeats or echoes an earlier block",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "sets_up",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "block_organization",
+      "status": "canonical",
+      "description": "source block prepares or foreshadows target block",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "mirrors_locally",
+      "layer": "meso",
+      "kind": "semantic",
+      "group": "block_organization",
+      "status": "canonical",
+      "description": "source and target have mirrored local structure with opposing stance or outcome",
+      "sourceFamilies": [
+        "MesoNode"
+      ],
+      "targetFamilies": [
+        "MesoNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "unfolds_through",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "global_structure",
+      "status": "canonical",
+      "description": "arc or thread unfolds through a sequence of phases",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "spans_phase",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "global_structure",
+      "status": "canonical",
+      "description": "source line spans the target phase",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "organized_as",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "global_structure",
+      "status": "canonical",
+      "description": "source arc is organized as a specific global scene type",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "governed_by",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "global_structure",
+      "status": "canonical",
+      "description": "source arc or phase is governed by the target regime",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "centered_on_line",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "global_structure",
+      "status": "canonical",
+      "description": "source arc is primarily centered on a specific objective, conflict, or method line",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "dominated_by",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "global_structure",
+      "status": "canonical",
+      "description": "source phase is dominated by a theme, conflict, or long-running tension",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "transitions_to_phase",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_evolution",
+      "status": "canonical",
+      "description": "source phase shifts into target phase",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "evolves_to",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_evolution",
+      "status": "canonical",
+      "description": "source line or state develops into a new long-range form",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "branches_into",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_evolution",
+      "status": "canonical",
+      "description": "source line branches into multiple successor lines",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "converges_with",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_evolution",
+      "status": "canonical",
+      "description": "source line converges with target line",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "interrupted_by",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_evolution",
+      "status": "canonical",
+      "description": "source arc or line is interrupted by target event, regime, or turning point",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "resumes_after",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_evolution",
+      "status": "canonical",
+      "description": "source line resumes after target interruption or phase",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "culminates_at",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_evolution",
+      "status": "canonical",
+      "description": "source arc reaches a climax at target turning point",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "resolved_by",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_evolution",
+      "status": "canonical",
+      "description": "source conflict or objective line is resolved by target line or turning point",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "produces_state",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "global_state_and_constraint",
+      "status": "canonical",
+      "description": "source arc, phase, or turning point produces a global state",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "shifts_regime",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "global_state_and_constraint",
+      "status": "canonical",
+      "description": "source turning point causes a regime shift",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "stabilizes_state",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "global_state_and_constraint",
+      "status": "canonical",
+      "description": "source line or phase stabilizes a global state",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "destabilizes_state",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "global_state_and_constraint",
+      "status": "canonical",
+      "description": "source line or turning point destabilizes a global state",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "constrains",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "global_state_and_constraint",
+      "status": "canonical",
+      "description": "source regime, conflict, or theme constrains target line",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "enables",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "global_state_and_constraint",
+      "status": "canonical",
+      "description": "source regime, method, or relation enables target line",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "competes_with",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_interaction",
+      "status": "canonical",
+      "description": "source line competes with target line",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "reinforces",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_interaction",
+      "status": "canonical",
+      "description": "source line, theme, or pattern strengthens target",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "undermines",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_interaction",
+      "status": "canonical",
+      "description": "source line, theme, or pattern weakens target",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "mirrors",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_interaction",
+      "status": "canonical",
+      "description": "source and target arcs or phases mirror one another",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "recurs_as",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_interaction",
+      "status": "canonical",
+      "description": "source pattern recurs as target variant",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "foreshadows",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_interaction",
+      "status": "canonical",
+      "description": "source line, phase, or pattern foreshadows target structure",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "pays_off",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_interaction",
+      "status": "canonical",
+      "description": "source setup, theme, or pattern is fulfilled by target",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "recontextualizes",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_interaction",
+      "status": "canonical",
+      "description": "source turning point or regime changes how target is interpreted",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "opens_arc",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_interaction",
+      "status": "canonical",
+      "description": "source turning point or state opens a new arc",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "closes_arc",
+      "layer": "macro",
+      "kind": "semantic",
+      "group": "long_range_interaction",
+      "status": "canonical",
+      "description": "source turning point or state closes an arc",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct_or_support",
+      "notes": ""
+    },
+    {
+      "type": "span_in_micro_unit",
+      "layer": "cross",
+      "kind": "evidence_anchor",
+      "group": "evidence_anchor",
+      "status": "canonical",
+      "description": "exact evidence span belongs to a micro unit",
+      "sourceFamilies": [
+        "Span"
+      ],
+      "targetFamilies": [
+        "MicroUnit"
+      ],
+      "strength": "hard",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct",
+      "notes": ""
+    },
+    {
+      "type": "mention_maps_to_micro_node",
+      "layer": "cross",
+      "kind": "evidence_anchor",
+      "group": "evidence_anchor",
+      "status": "canonical",
+      "description": "mention resolves to a concrete micro object or concept node",
+      "sourceFamilies": [
+        "Span"
+      ],
+      "targetFamilies": [
+        "MicroNode"
+      ],
+      "strength": "hard",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct",
+      "notes": ""
+    },
+    {
+      "type": "micro_edge_evidenced_by_span",
+      "layer": "cross",
+      "kind": "evidence_anchor",
+      "group": "evidence_anchor",
+      "status": "canonical",
+      "description": "micro relation is directly supported by a span",
+      "sourceFamilies": [
+        "MicroEdge"
+      ],
+      "targetFamilies": [
+        "Span"
+      ],
+      "strength": "hard",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct",
+      "notes": ""
+    },
+    {
+      "type": "meso_block_evidenced_by_span_set",
+      "layer": "cross",
+      "kind": "evidence_anchor",
+      "group": "evidence_anchor",
+      "status": "canonical",
+      "description": "meso block is supported by a contiguous or near-contiguous evidence set",
+      "sourceFamilies": [
+        "MesoBlock"
+      ],
+      "targetFamilies": [
+        "SpanSet"
+      ],
+      "strength": "hard",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "macro_node_evidenced_by_span_set",
+      "layer": "cross",
+      "kind": "evidence_anchor",
+      "group": "evidence_anchor",
+      "status": "canonical",
+      "description": "macro structure is supported by a distributed evidence set",
+      "sourceFamilies": [
+        "MacroNode"
+      ],
+      "targetFamilies": [
+        "SpanSet"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "state_evidenced_by_block",
+      "layer": "cross",
+      "kind": "evidence_anchor",
+      "group": "evidence_anchor",
+      "status": "canonical",
+      "description": "state is supported by a concrete local block rather than a raw span only",
+      "sourceFamilies": [
+        "StateNode"
+      ],
+      "targetFamilies": [
+        "MesoBlock"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "micro_unit_in_meso_unit",
+      "layer": "cross",
+      "kind": "containment",
+      "group": "containment",
+      "status": "canonical",
+      "description": "a micro unit belongs to one meso block",
+      "sourceFamilies": [
+        "MicroUnit"
+      ],
+      "targetFamilies": [
+        "MesoBlock"
+      ],
+      "strength": "hard",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "direct",
+      "notes": ""
+    },
+    {
+      "type": "micro_node_in_meso_block",
+      "layer": "cross",
+      "kind": "containment",
+      "group": "containment",
+      "status": "canonical",
+      "description": "a micro node participates in a specific meso block",
+      "sourceFamilies": [
+        "MicroNode"
+      ],
+      "targetFamilies": [
+        "MesoBlock"
+      ],
+      "strength": "hard",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "micro_edge_in_meso_block",
+      "layer": "cross",
+      "kind": "containment",
+      "group": "containment",
+      "status": "canonical",
+      "description": "a micro relation belongs structurally to a meso block",
+      "sourceFamilies": [
+        "MicroEdge"
+      ],
+      "targetFamilies": [
+        "MesoBlock"
+      ],
+      "strength": "hard",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "meso_unit_in_macro_unit",
+      "layer": "cross",
+      "kind": "containment",
+      "group": "containment",
+      "status": "canonical",
+      "description": "a meso block belongs to one macro structure",
+      "sourceFamilies": [
+        "MesoBlock"
+      ],
+      "targetFamilies": [
+        "MacroNode"
+      ],
+      "strength": "hard",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "meso_block_in_phase",
+      "layer": "cross",
+      "kind": "containment",
+      "group": "containment",
+      "status": "canonical",
+      "description": "a meso block occurs inside a phase",
+      "sourceFamilies": [
+        "MesoBlock"
+      ],
+      "targetFamilies": [
+        "Phase"
+      ],
+      "strength": "hard",
+      "requiresScope": true,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "phase_in_arc",
+      "layer": "cross",
+      "kind": "containment",
+      "group": "containment",
+      "status": "canonical",
+      "description": "a phase belongs to a larger arc or thread",
+      "sourceFamilies": [
+        "Phase"
+      ],
+      "targetFamilies": [
+        "ArcOrThread"
+      ],
+      "strength": "hard",
+      "requiresScope": true,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "micro_fact_abstracted_as_block",
+      "layer": "cross",
+      "kind": "abstraction",
+      "group": "abstraction",
+      "status": "canonical",
+      "description": "local facts are lifted into a scene or workflow block",
+      "sourceFamilies": [
+        "MicroNodeOrMicroEdge"
+      ],
+      "targetFamilies": [
+        "MesoBlock"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "micro_claim_summarized_by_block",
+      "layer": "cross",
+      "kind": "abstraction",
+      "group": "abstraction",
+      "status": "canonical",
+      "description": "one or more claims or evidence objects are summarized by a meso block",
+      "sourceFamilies": [
+        "ClaimEvidenceOrContext"
+      ],
+      "targetFamilies": [
+        "MesoBlock"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "block_instantiates_global_type",
+      "layer": "cross",
+      "kind": "abstraction",
+      "group": "abstraction",
+      "status": "canonical",
+      "description": "local block realizes a reusable macro scene type",
+      "sourceFamilies": [
+        "MesoBlock"
+      ],
+      "targetFamilies": [
+        "GlobalSceneType"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "block_summarized_by_topic",
+      "layer": "cross",
+      "kind": "abstraction",
+      "group": "abstraction",
+      "status": "canonical",
+      "description": "local block is summarized by a higher-level theme or thread",
+      "sourceFamilies": [
+        "MesoBlock"
+      ],
+      "targetFamilies": [
+        "ThemeOrThread"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "block_contributes_to_pattern",
+      "layer": "cross",
+      "kind": "abstraction",
+      "group": "abstraction",
+      "status": "canonical",
+      "description": "local block is one instance of a recurring pattern",
+      "sourceFamilies": [
+        "MesoBlock"
+      ],
+      "targetFamilies": [
+        "Pattern"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "line_summarized_by_theme",
+      "layer": "cross",
+      "kind": "abstraction",
+      "group": "abstraction",
+      "status": "canonical",
+      "description": "long-running line is summarized by a theme",
+      "sourceFamilies": [
+        "ArcOrThreadOrMethodLine"
+      ],
+      "targetFamilies": [
+        "Theme"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "local_goal_in_objective_line",
+      "layer": "cross",
+      "kind": "line_binding",
+      "group": "line_binding",
+      "status": "canonical",
+      "description": "local goal belongs to a long-running goal line",
+      "sourceFamilies": [
+        "ObjectiveBlockOrOutcomeBlock"
+      ],
+      "targetFamilies": [
+        "ObjectiveLine"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "local_conflict_in_conflict_line",
+      "layer": "cross",
+      "kind": "line_binding",
+      "group": "line_binding",
+      "status": "canonical",
+      "description": "local conflict belongs to a long-running conflict line",
+      "sourceFamilies": [
+        "ProblemBlockOrInteractionBlock"
+      ],
+      "targetFamilies": [
+        "ConflictLine"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "local_method_in_method_line",
+      "layer": "cross",
+      "kind": "line_binding",
+      "group": "line_binding",
+      "status": "canonical",
+      "description": "local strategy or procedure belongs to a method evolution line",
+      "sourceFamilies": [
+        "StrategyBlockOrProcedureBlock"
+      ],
+      "targetFamilies": [
+        "MethodLine"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "local_relationship_in_relationship_arc",
+      "layer": "cross",
+      "kind": "line_binding",
+      "group": "line_binding",
+      "status": "canonical",
+      "description": "local interaction or shift belongs to a relationship arc",
+      "sourceFamilies": [
+        "InteractionBlockOrShiftBlock"
+      ],
+      "targetFamilies": [
+        "RelationshipArc"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "local_event_in_thread",
+      "layer": "cross",
+      "kind": "line_binding",
+      "group": "line_binding",
+      "status": "canonical",
+      "description": "local event block belongs to a recurring issue thread",
+      "sourceFamilies": [
+        "SceneBlockOrEventOrEvidenceFrame"
+      ],
+      "targetFamilies": [
+        "Thread"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "local_shift_to_turning_point",
+      "layer": "cross",
+      "kind": "line_binding",
+      "group": "line_binding",
+      "status": "canonical",
+      "description": "local shift contributes to a larger turning point",
+      "sourceFamilies": [
+        "ShiftBlockOrOutcomeBlock"
+      ],
+      "targetFamilies": [
+        "TurningPoint"
+      ],
+      "strength": "soft",
+      "requiresScope": false,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "state_valid_in_phase",
+      "layer": "cross",
+      "kind": "scope_anchor",
+      "group": "scope_anchor",
+      "status": "canonical",
+      "description": "state is only valid during a specific phase",
+      "sourceFamilies": [
+        "StateNode"
+      ],
+      "targetFamilies": [
+        "Phase"
+      ],
+      "strength": "hard",
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "state_valid_in_timewindow",
+      "layer": "cross",
+      "kind": "scope_anchor",
+      "group": "scope_anchor",
+      "status": "canonical",
+      "description": "state is only valid during a concrete time window",
+      "sourceFamilies": [
+        "StateNode"
+      ],
+      "targetFamilies": [
+        "TimeWindow"
+      ],
+      "strength": "hard",
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "block_scoped_to_regime",
+      "layer": "cross",
+      "kind": "scope_anchor",
+      "group": "scope_anchor",
+      "status": "canonical",
+      "description": "local block is constrained by a version, environment, or operating regime",
+      "sourceFamilies": [
+        "MesoBlock"
+      ],
+      "targetFamilies": [
+        "Regime"
+      ],
+      "strength": "hard",
+      "requiresScope": true,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "block_scoped_to_topicstate",
+      "layer": "cross",
+      "kind": "scope_anchor",
+      "group": "scope_anchor",
+      "status": "canonical",
+      "description": "local block belongs to a specific topic branch state",
+      "sourceFamilies": [
+        "MesoBlock"
+      ],
+      "targetFamilies": [
+        "TopicState"
+      ],
+      "strength": "hard",
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "thread_spans_timewindow",
+      "layer": "cross",
+      "kind": "scope_anchor",
+      "group": "scope_anchor",
+      "status": "canonical",
+      "description": "a long-running line spans a time range",
+      "sourceFamilies": [
+        "ThreadOrArc"
+      ],
+      "targetFamilies": [
+        "TimeWindow"
+      ],
+      "strength": "soft",
+      "requiresScope": true,
+      "stateful": false,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "block_updates_global_state",
+      "layer": "cross",
+      "kind": "scope_anchor",
+      "group": "scope_anchor",
+      "status": "canonical",
+      "description": "local block updates the global state",
+      "sourceFamilies": [
+        "MesoBlock"
+      ],
+      "targetFamilies": [
+        "GlobalState"
+      ],
+      "strength": "soft",
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "state_supersedes_state",
+      "layer": "cross",
+      "kind": "change",
+      "group": "change",
+      "status": "canonical",
+      "description": "new state replaces old state without deleting history",
+      "sourceFamilies": [
+        "StateNode"
+      ],
+      "targetFamilies": [
+        "StateNode"
+      ],
+      "strength": "hard",
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "state_refines_state",
+      "layer": "cross",
+      "kind": "change",
+      "group": "change",
+      "status": "canonical",
+      "description": "new state narrows or qualifies the previous state",
+      "sourceFamilies": [
+        "StateNode"
+      ],
+      "targetFamilies": [
+        "StateNode"
+      ],
+      "strength": "soft",
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "state_changed_by_event",
+      "layer": "cross",
+      "kind": "change",
+      "group": "change",
+      "status": "canonical",
+      "description": "a state changes because of an event or turning point",
+      "sourceFamilies": [
+        "StateNode"
+      ],
+      "targetFamilies": [
+        "EventOrTurningPoint"
+      ],
+      "strength": "hard",
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "state_opened_by_block",
+      "layer": "cross",
+      "kind": "change",
+      "group": "change",
+      "status": "canonical",
+      "description": "a local block opens or activates a state",
+      "sourceFamilies": [
+        "StateNode"
+      ],
+      "targetFamilies": [
+        "MesoBlock"
+      ],
+      "strength": "hard",
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "state_closed_by_block",
+      "layer": "cross",
+      "kind": "change",
+      "group": "change",
+      "status": "canonical",
+      "description": "a local block closes a state",
+      "sourceFamilies": [
+        "StateNode"
+      ],
+      "targetFamilies": [
+        "MesoBlock"
+      ],
+      "strength": "hard",
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "state_invalidated_under_regime",
+      "layer": "cross",
+      "kind": "change",
+      "group": "change",
+      "status": "canonical",
+      "description": "a state becomes invalid under a regime or version",
+      "sourceFamilies": [
+        "StateNode"
+      ],
+      "targetFamilies": [
+        "RegimeOrVersion"
+      ],
+      "strength": "hard",
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "state_reactivated_under_regime",
+      "layer": "cross",
+      "kind": "change",
+      "group": "change",
+      "status": "canonical",
+      "description": "a state becomes valid again under a new regime",
+      "sourceFamilies": [
+        "StateNode"
+      ],
+      "targetFamilies": [
+        "RegimeOrVersion"
+      ],
+      "strength": "hard",
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "correction_propagates_to_line",
+      "layer": "cross",
+      "kind": "change",
+      "group": "change",
+      "status": "canonical",
+      "description": "a correction affects a larger line and marks related structures for review",
+      "sourceFamilies": [
+        "StateNodeOrMesoBlock"
+      ],
+      "targetFamilies": [
+        "ThreadOrMethodLineOrRelationshipArc"
+      ],
+      "strength": "soft",
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "support",
+      "notes": ""
+    },
+    {
+      "type": "supersedes",
+      "layer": "cross",
+      "kind": "memory_control",
+      "group": "legacy_control",
+      "status": "compatibility_alias",
+      "description": "generic control-memory alias for state replacement",
+      "sourceFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "targetFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": true,
+      "evidenceMode": "compatibility_alias",
+      "notes": "Prefer explicit vertical/state-overlay edges in canonical graph materialization."
+    },
+    {
+      "type": "refines",
+      "layer": "cross",
+      "kind": "memory_control",
+      "group": "legacy_control",
+      "status": "compatibility_alias",
+      "description": "generic control-memory alias for state refinement",
+      "sourceFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "targetFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": true,
+      "evidenceMode": "compatibility_alias",
+      "notes": "Prefer explicit vertical/state-overlay edges in canonical graph materialization."
+    },
+    {
+      "type": "scoped_to",
+      "layer": "cross",
+      "kind": "memory_control",
+      "group": "legacy_control",
+      "status": "compatibility_alias",
+      "description": "generic control-memory alias for scope binding",
+      "sourceFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "targetFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "strength": null,
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "compatibility_alias",
+      "notes": "Prefer explicit vertical/state-overlay edges in canonical graph materialization."
+    },
+    {
+      "type": "valid_during",
+      "layer": "cross",
+      "kind": "memory_control",
+      "group": "legacy_control",
+      "status": "compatibility_alias",
+      "description": "generic control-memory alias for validity window binding",
+      "sourceFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "targetFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "strength": null,
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "compatibility_alias",
+      "notes": "Prefer explicit vertical/state-overlay edges in canonical graph materialization."
+    },
+    {
+      "type": "conflicts_with",
+      "layer": "cross",
+      "kind": "memory_control",
+      "group": "legacy_control",
+      "status": "compatibility_alias",
+      "description": "generic control-memory alias for conflicting active states",
+      "sourceFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "targetFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": true,
+      "evidenceMode": "compatibility_alias",
+      "notes": "Prefer explicit vertical/state-overlay edges in canonical graph materialization."
+    },
+    {
+      "type": "asserted_by",
+      "layer": "cross",
+      "kind": "memory_control",
+      "group": "legacy_control",
+      "status": "compatibility_alias",
+      "description": "generic control-memory alias for assertion provenance",
+      "sourceFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "targetFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "compatibility_alias",
+      "notes": "Prefer explicit vertical/state-overlay edges in canonical graph materialization."
+    },
+    {
+      "type": "evidenced_by",
+      "layer": "cross",
+      "kind": "memory_control",
+      "group": "legacy_control",
+      "status": "compatibility_alias",
+      "description": "generic control-memory alias for evidence provenance",
+      "sourceFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "targetFamilies": [
+        "MemoryControlOrStateNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "compatibility_alias",
+      "notes": "Prefer explicit vertical/state-overlay edges in canonical graph materialization."
+    },
+    {
+      "type": "mention_maps_to_object",
+      "layer": "cross",
+      "kind": "evidence_anchor",
+      "group": "migration_bridge",
+      "status": "compatibility_alias",
+      "description": "migration bridge alias for mention-to-object mapping",
+      "sourceFamilies": [
+        "BridgeNode"
+      ],
+      "targetFamilies": [
+        "BridgeNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "compatibility_alias",
+      "notes": "Bridge label retained for migration. Prefer explicit vertical taxonomy in new schema work."
+    },
+    {
+      "type": "proposition_summarized_by_topic",
+      "layer": "cross",
+      "kind": "abstraction",
+      "group": "migration_bridge",
+      "status": "compatibility_alias",
+      "description": "migration bridge alias for proposition-to-topic summarization",
+      "sourceFamilies": [
+        "BridgeNode"
+      ],
+      "targetFamilies": [
+        "BridgeNode"
+      ],
+      "strength": null,
+      "requiresScope": false,
+      "stateful": false,
+      "evidenceMode": "compatibility_alias",
+      "notes": "Bridge label retained for migration. Prefer explicit vertical taxonomy in new schema work."
+    },
+    {
+      "type": "topic_has_timewindow",
+      "layer": "cross",
+      "kind": "scope_anchor",
+      "group": "migration_bridge",
+      "status": "compatibility_alias",
+      "description": "migration bridge alias for topic-to-time-window scoping",
+      "sourceFamilies": [
+        "BridgeNode"
+      ],
+      "targetFamilies": [
+        "BridgeNode"
+      ],
+      "strength": null,
+      "requiresScope": true,
+      "stateful": true,
+      "evidenceMode": "compatibility_alias",
+      "notes": "Bridge label retained for migration. Prefer explicit vertical taxonomy in new schema work."
+    }
+  ]
+}

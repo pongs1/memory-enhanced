@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memory-enhanced.local/schema/v8-edge-catalog.schema.json",
+  "title": "V8 Edge Catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "catalogVersion",
+    "generatedFrom",
+    "notes",
+    "edges"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "catalogVersion": {
+      "type": "string"
+    },
+    "generatedFrom": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/edgeCatalogEntry"
+      },
+      "minItems": 1
+    }
+  },
+  "$defs": {
+    "layer": {
+      "type": "string",
+      "enum": [
+        "micro",
+        "meso",
+        "macro",
+        "cross"
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "semantic",
+        "discourse",
+        "evidence_anchor",
+        "containment",
+        "abstraction",
+        "line_binding",
+        "scope_anchor",
+        "change",
+        "memory_control"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "canonical",
+        "compatibility_alias"
+      ]
+    },
+    "strength": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "hard",
+        "soft",
+        null
+      ]
+    },
+    "evidenceMode": {
+      "type": "string",
+      "enum": [
+        "direct",
+        "support",
+        "direct_or_support",
+        "compatibility_alias"
+      ]
+    },
+    "edgeCatalogEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "layer",
+        "kind",
+        "group",
+        "status",
+        "description",
+        "sourceFamilies",
+        "targetFamilies",
+        "strength",
+        "requiresScope",
+        "stateful",
+        "evidenceMode",
+        "notes"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "layer": {
+          "$ref": "#/$defs/layer"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "group": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceFamilies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "targetFamilies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "strength": {
+          "$ref": "#/$defs/strength"
+        },
+        "requiresScope": {
+          "type": "boolean"
+        },
+        "stateful": {
+          "type": "boolean"
+        },
+        "evidenceMode": {
+          "$ref": "#/$defs/evidenceMode"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

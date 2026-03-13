@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memory-enhanced.local/schema/v8-edge-runtime-policy.schema.json",
+  "title": "V8 Edge Runtime Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "policyVersion",
+    "generatedFrom",
+    "notes",
+    "entries"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "policyVersion": {
+      "type": "string"
+    },
+    "generatedFrom": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/edgeRuntimeEntry"
+      },
+      "minItems": 1
+    }
+  },
+  "$defs": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "semantic",
+        "discourse",
+        "evidence_anchor",
+        "containment",
+        "abstraction",
+        "line_binding",
+        "scope_anchor",
+        "change",
+        "memory_control"
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "profile",
+        "trajectory",
+        "oblique",
+        "audit"
+      ]
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "spread",
+        "gate",
+        "reweight",
+        "backtrace"
+      ]
+    },
+    "direction": {
+      "type": "string",
+      "enum": [
+        "up",
+        "down",
+        "bidirectional",
+        "none"
+      ]
+    },
+    "edgeRuntimeEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "mode",
+        "role",
+        "direction",
+        "gain"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "mode": {
+          "$ref": "#/$defs/mode"
+        },
+        "role": {
+          "$ref": "#/$defs/role"
+        },
+        "direction": {
+          "$ref": "#/$defs/direction"
+        },
+        "gain": {
+          "type": "number",
+          "minimum": 0
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,274 @@
+{
+  "$schema": "./v8-edge-runtime-policy.schema.json",
+  "policyVersion": "v8.1",
+  "generatedFrom": [
+    "memory-enhanced/V8_ARCHITECTURE.md",
+    "memory-enhanced/V8_SCHEMA_AND_PIPELINE.md",
+    "memory-enhanced/V8_TYPES_AND_MIGRATION.md"
+  ],
+  "notes": [
+    "This policy defines default runtime participation by edge kind and recall mode.",
+    "Numeric gains are defaults; scanner configuration may override them.",
+    "Gate and backtrace roles are non-propagating by design."
+  ],
+  "entries": [
+    {
+      "kind": "semantic",
+      "mode": "profile",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 1.0
+    },
+    {
+      "kind": "discourse",
+      "mode": "profile",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 0.8
+    },
+    {
+      "kind": "containment",
+      "mode": "profile",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 1.2
+    },
+    {
+      "kind": "abstraction",
+      "mode": "profile",
+      "role": "spread",
+      "direction": "up",
+      "gain": 0.5
+    },
+    {
+      "kind": "line_binding",
+      "mode": "profile",
+      "role": "spread",
+      "direction": "up",
+      "gain": 0.5
+    },
+    {
+      "kind": "scope_anchor",
+      "mode": "profile",
+      "role": "gate",
+      "direction": "none",
+      "gain": 0.0,
+      "notes": "validity slicing only"
+    },
+    {
+      "kind": "change",
+      "mode": "profile",
+      "role": "reweight",
+      "direction": "none",
+      "gain": 0.0,
+      "notes": "suppress superseded, lift active"
+    },
+    {
+      "kind": "evidence_anchor",
+      "mode": "profile",
+      "role": "backtrace",
+      "direction": "none",
+      "gain": 0.0
+    },
+    {
+      "kind": "memory_control",
+      "mode": "profile",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 1.1
+    },
+    {
+      "kind": "semantic",
+      "mode": "trajectory",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 0.7
+    },
+    {
+      "kind": "discourse",
+      "mode": "trajectory",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 0.6
+    },
+    {
+      "kind": "containment",
+      "mode": "trajectory",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 1.0
+    },
+    {
+      "kind": "abstraction",
+      "mode": "trajectory",
+      "role": "spread",
+      "direction": "up",
+      "gain": 0.9
+    },
+    {
+      "kind": "line_binding",
+      "mode": "trajectory",
+      "role": "spread",
+      "direction": "up",
+      "gain": 0.9
+    },
+    {
+      "kind": "scope_anchor",
+      "mode": "trajectory",
+      "role": "gate",
+      "direction": "none",
+      "gain": 0.0
+    },
+    {
+      "kind": "change",
+      "mode": "trajectory",
+      "role": "reweight",
+      "direction": "none",
+      "gain": 0.0,
+      "notes": "lineage traversal allowed"
+    },
+    {
+      "kind": "evidence_anchor",
+      "mode": "trajectory",
+      "role": "backtrace",
+      "direction": "none",
+      "gain": 0.0
+    },
+    {
+      "kind": "memory_control",
+      "mode": "trajectory",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 0.8
+    },
+    {
+      "kind": "semantic",
+      "mode": "oblique",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 0.7
+    },
+    {
+      "kind": "discourse",
+      "mode": "oblique",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 0.6
+    },
+    {
+      "kind": "containment",
+      "mode": "oblique",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 0.7
+    },
+    {
+      "kind": "abstraction",
+      "mode": "oblique",
+      "role": "spread",
+      "direction": "up",
+      "gain": 1.0
+    },
+    {
+      "kind": "line_binding",
+      "mode": "oblique",
+      "role": "spread",
+      "direction": "up",
+      "gain": 1.0
+    },
+    {
+      "kind": "scope_anchor",
+      "mode": "oblique",
+      "role": "gate",
+      "direction": "none",
+      "gain": 0.0
+    },
+    {
+      "kind": "change",
+      "mode": "oblique",
+      "role": "reweight",
+      "direction": "none",
+      "gain": 0.0,
+      "notes": "local review marks only"
+    },
+    {
+      "kind": "evidence_anchor",
+      "mode": "oblique",
+      "role": "backtrace",
+      "direction": "none",
+      "gain": 0.0
+    },
+    {
+      "kind": "memory_control",
+      "mode": "oblique",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 0.6
+    },
+    {
+      "kind": "semantic",
+      "mode": "audit",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 0.2
+    },
+    {
+      "kind": "discourse",
+      "mode": "audit",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 0.2
+    },
+    {
+      "kind": "containment",
+      "mode": "audit",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 0.2
+    },
+    {
+      "kind": "abstraction",
+      "mode": "audit",
+      "role": "spread",
+      "direction": "up",
+      "gain": 0.1
+    },
+    {
+      "kind": "line_binding",
+      "mode": "audit",
+      "role": "spread",
+      "direction": "up",
+      "gain": 0.1
+    },
+    {
+      "kind": "scope_anchor",
+      "mode": "audit",
+      "role": "gate",
+      "direction": "none",
+      "gain": 0.0
+    },
+    {
+      "kind": "change",
+      "mode": "audit",
+      "role": "reweight",
+      "direction": "none",
+      "gain": 0.0,
+      "notes": "lineage traversal only"
+    },
+    {
+      "kind": "evidence_anchor",
+      "mode": "audit",
+      "role": "backtrace",
+      "direction": "none",
+      "gain": 0.0,
+      "notes": "mandatory provenance backtrace"
+    },
+    {
+      "kind": "memory_control",
+      "mode": "audit",
+      "role": "spread",
+      "direction": "bidirectional",
+      "gain": 0.2
+    }
+  ]
+}
