@@ -24,6 +24,8 @@ export function materializeGraph(
     const itemByNodeId = new Map<string, V8MemoryItem>();
     const mentionTargetsBySpan = new Map<string, string[]>();
     const discourseUnitBySpan = new Map<string, string>();
+    const semanticNodeByKey = new Map<string, V8GraphNode>();
+    let semanticNodeSeq = 0;
 
     for (const item of items) {
         const nodeId = `node_${item.id}`;
@@ -166,6 +168,84 @@ export function materializeGraph(
         edges.push({ id: `edge_${edgeIndex}`, ...edge });
     };
 
+    const upsertSemanticNode = (
+        label: string,
+        memoryType: V8MemoryItem["itemType"],
+        spanIds: string[],
+        confidence: number
+    ): string => {
+        const key = `${memoryType}:${normalizeKey(label)}`;
+        const existing = semanticNodeByKey.get(key);
+        if (existing) {
+            const combined = mergeIds(existing.evidenceSpanIds, spanIds);
+            existing.evidenceSpanIds = combined;
+            existing.bestEvidenceSpanIds = combined.slice(0, 1);
+            existing.state.supportCount = combined.length;
+            existing.state.confidence = Math.max(existing.state.confidence, confidence);
+            return existing.id;
+        }
+
+        semanticNodeSeq += 1;
+        const node: V8GraphNode = {
+            id: `node_sem_${semanticNodeSeq}`,
+            memoryType,
+            canonicalLabel: label,
+            aliases: [],
+            primaryLayer: "micro",
+            layerMemberships: ["micro"],
+            sourceItemIds: [],
+            evidenceSpanIds: [...spanIds],
+            bestEvidenceSpanIds: spanIds.slice(0, 1),
+            state: {
+                scope: "session",
+                validity: "active",
+                confidence,
+                supportCount: spanIds.length,
+            },
+        };
+        semanticNodeByKey.set(key, node);
+        nodes.push(node);
+        return node.id;
+    };
+
+    for (const item of items) {
+        if (item.itemType === "discourse_unit") continue;
+        if (!item.subject || !item.object) continue;
+        const subjectType = item.subject === "user" || item.subject === "assistant" || item.subject === "system"
+            ? "entity"
+            : "entity";
+        const objectType = "concept";
+
+        const subjectNodeId = upsertSemanticNode(
+            item.subject,
+            subjectType,
+            item.evidenceSpanIds,
+            item.confidence
+        );
+        const objectNodeId = upsertSemanticNode(
+            item.object,
+            objectType,
+            item.evidenceSpanIds,
+            item.confidence
+        );
+
+        pushEdge({
+            type: item.predicate as V8GraphEdge["type"],
+            src: subjectNodeId,
+            dst: objectNodeId,
+            layer: item.layer,
+            originType: item.originType as V8MemoryOriginType,
+            sourceItemIds: [item.id],
+            evidenceSpanIds: item.evidenceSpanIds,
+            qualifiers: item.qualifiers || {},
+            confidence: item.confidence,
+            state: {
+                scope: item.scope,
+                validity: item.validity,
+            },
+        });
+    }
+
     for (const span of evidenceSpans) {
         const evidenceNodeId = evidenceNodeBySpan.get(span.id);
         if (!evidenceNodeId) continue;
@@ -297,6 +377,25 @@ function truncateLabel(text: string, maxLen = 120): string {
     const trimmed = (text || "").trim().replace(/\s+/g, " ");
     if (trimmed.length <= maxLen) return trimmed;
     return trimmed.slice(0, maxLen) + "…";
+}
+
+function normalizeKey(text: string): string {
+    return (text || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ");
+}
+
+function mergeIds(base: string[], extra: string[]): string[] {
+    if (!extra.length) return base;
+    const set = new Set(base);
+    for (const id of extra) {
+        if (!set.has(id)) {
+            base.push(id);
+            set.add(id);
+        }
+    }
+    return base;
 }
 
 function deriveConfidence(
