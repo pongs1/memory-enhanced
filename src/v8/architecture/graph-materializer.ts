@@ -63,7 +63,9 @@ export function materializeGraph(
     }
 
     const evidenceNodeBySpan = new Map<string, string>();
+    const spanById = new Map<string, V8EvidenceSpan>();
     for (const span of evidenceSpans) {
+        spanById.set(span.id, span);
         const evidenceNodeId = `node_span_${span.id}`;
         evidenceNodeBySpan.set(span.id, evidenceNodeId);
         nodes.push({
@@ -250,6 +252,39 @@ export function materializeGraph(
                 state: {
                     scope: "session",
                     validity: "active",
+                },
+            });
+        }
+    }
+
+    const mesoLinkSeen = new Set<string>();
+    for (const [nodeId, item] of itemByNodeId.entries()) {
+        if (item.itemType === "discourse_unit") continue;
+        for (const spanId of item.evidenceSpanIds) {
+            const span = spanById.get(spanId);
+            if (!span) continue;
+            const microUnit = unitById.get(span.unitId);
+            if (!microUnit || !microUnit.parentUnitId) continue;
+            const mesoUnit = unitById.get(microUnit.parentUnitId);
+            if (!mesoUnit || mesoUnit.layer !== "meso") continue;
+            const mesoNodeId = unitNodeById.get(mesoUnit.id);
+            if (!mesoNodeId) continue;
+            const key = `${nodeId}->${mesoNodeId}`;
+            if (mesoLinkSeen.has(key)) continue;
+            mesoLinkSeen.add(key);
+            pushEdge({
+                type: "micro_node_in_meso_block",
+                src: nodeId,
+                dst: mesoNodeId,
+                layer: "cross",
+                originType: item.originType as V8MemoryOriginType,
+                sourceItemIds: [item.id],
+                evidenceSpanIds: [spanId],
+                qualifiers: {},
+                confidence: Math.min(0.95, item.confidence),
+                state: {
+                    scope: item.scope,
+                    validity: item.validity,
                 },
             });
         }
