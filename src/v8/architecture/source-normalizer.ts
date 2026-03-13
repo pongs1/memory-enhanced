@@ -39,9 +39,12 @@ export interface SourceNormalizationOptions {
 
 const DEFAULT_CLEAN_PATTERNS: RegExp[] = [
     /<!-- Memory Context \(Live\) -->[\s\S]*?<!-- End Memory Context -->/g,
+    /<!-- Memory Recall[\s\S]*?<!-- End Memory Recall -->/g,
     /<memory-context[\s\S]*?<\/memory-context>/gi,
     /<task-ledger[\s\S]*?<\/task-ledger>/gi,
     /<!--\s*Task Ledger[\s\S]*?-->/gi,
+    /Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi,
+    /^Current time:[^\n]*$/gim,
 ];
 
 export function normalizeSessionMessages(
