@@ -12,7 +12,11 @@ import { v8StorePaths } from "../v8/paths_v8.js";
 import { assembleRecallPrompts, loadRecallAssemblyContext } from "../v8/recall.js";
 import { recordSessionRecalls } from "../v8/feedback-runtime.js";
 import { V8GraphScanner } from "../v8/scanner.js";
-import type { V8ControlAnchors, V8SceneSignal } from "../v8/types_v8.js";
+import type {
+    V8ControlAnchors,
+    V8SceneSignal,
+    V8ScannerConfig,
+} from "../v8/types_v8.js";
 
 // A global registry for active scanners per session
 const scanners = new Map<string, AssociativeScanner>();
@@ -177,9 +181,13 @@ function getLegacyScanner(sessionId: string, workspace: string): AssociativeScan
     return scanners.get(sessionId)!;
 }
 
-function getV8Scanner(sessionId: string, workspace: string): V8GraphScanner {
+function getV8Scanner(
+    sessionId: string,
+    workspace: string,
+    config?: Partial<V8ScannerConfig>
+): V8GraphScanner {
     if (!v8Scanners.has(sessionId)) {
-        v8Scanners.set(sessionId, new V8GraphScanner(workspace));
+        v8Scanners.set(sessionId, new V8GraphScanner(workspace, config));
     }
     return v8Scanners.get(sessionId)!;
 }
@@ -749,6 +757,7 @@ function warnMissingLiveInterrupt(
 }
 
 export function registerStreamWrapper(api: any, pluginConfig: any) {
+    const v8ScannerConfig = (pluginConfig?.v8ScannerConfig || {}) as Partial<V8ScannerConfig>;
     // We assume the user's OpenClaw modification exposes a "wrap_stream_fn" hook
     // that allows us to wrap the raw provider stream function.
     api.on("wrap_stream_fn", async (event: any, ctx: any) => {
@@ -758,7 +767,9 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
         const watchdog = getOutputWatchdog(sid);
         const useV8GraphRecall = isV8GraphRecallEnabled(pluginConfig, workspace);
         const legacyScanner = useV8GraphRecall ? null : getLegacyScanner(sid, workspace);
-        const v8Scanner = useV8GraphRecall ? getV8Scanner(sid, workspace) : null;
+            const v8Scanner = useV8GraphRecall
+                ? getV8Scanner(sid, workspace, v8ScannerConfig)
+                : null;
 
         const originalStreamFn = event.streamFn;
 
@@ -929,7 +940,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
         if (promptText) {
             if (useV8GraphRecall) {
                 const workingState = maybeRefreshWorkingState(workspace);
-                const scanner = getV8Scanner(sid, workspace);
+                const scanner = getV8Scanner(sid, workspace, v8ScannerConfig);
                 const mode = selectRecallMode(promptText);
                 scanner.setMode(mode);
                 scanner.refreshScene(

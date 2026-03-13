@@ -1,24 +1,13 @@
 /**
  * memory-enhanced — OpenClaw plugin entry point.
  *
- * Registers 5 agent tools:
- *   - memory_record:      Write structured events (dual-format JSONL + MD)
- *   - memory_explore:     Traverse association chains
- *   - memory_consolidate: Decay, archive, MEMORY_INDEX.md regeneration
+ * Registers 2 agent tools:
+ *   - memory_consolidate: Build V8 clean-slate graph from session traces
  *   - memory_working:     Passive working-memory ledger & scratchpad
- *   - memory_feedback:    Score recalled V8 bundles after use
  *
  * These complement (not replace) the built-in memory_search and memory_get tools.
  */
 
-import {
-    MemoryRecordParams,
-    executeMemoryRecord,
-} from "./tools/memory_record.js";
-import {
-    MemoryExploreParams,
-    executeMemoryExplore,
-} from "./tools/memory_explore.js";
 import {
     MemoryConsolidateParams,
     executeMemoryConsolidate,
@@ -27,10 +16,6 @@ import {
     executeMemoryWorking,
     MemoryWorkingParams,
 } from "./tools/memory_working.js";
-import {
-    executeMemoryFeedback,
-    MemoryFeedbackParams,
-} from "./tools/memory_feedback.js";
 
 import {
     isSyntheticControlRequest,
@@ -44,6 +29,15 @@ import {
     writeWorkingMemoryState,
 } from "./utils.js";
 import { registerStreamWrapper } from "./hooks/wrap-stream-fn.js";
+import {
+    findMatchingNodes,
+    isExplicitMemoryAffirmation,
+    isExplicitMemoryCorrection,
+    recordFeedback,
+    refreshFeedbackStore,
+} from "./v8/feedback-store.js";
+import { takeRecentRecalls } from "./v8/feedback-runtime.js";
+import type { V8ScannerConfig } from "./v8/types_v8.js";
 
 // @ts-ignore
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
@@ -51,9 +45,6 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 export default function register(api: OpenClawPluginApi) {
     const pluginConfig = api.config as
         | {
-            halfLifeDays?: number;
-            archiveThreshold?: number;
-            memoryMdMaxChars?: number;
             outputCheckpointChars?: number;
             outputCheckpointCooldownChars?: number;
             outputCheckpointBoundarySlackChars?: number;
@@ -61,14 +52,10 @@ export default function register(api: OpenClawPluginApi) {
             outputCheckpointDriftThreshold?: number;
             outputCheckpointTailChars?: number;
             enableV8GraphRecall?: boolean;
-            enableV8ExplorationNoise?: boolean;
-            v8ExplorationMode?: "disabled" | "global_random" | "sparse_biased";
-            v8ExplorationNewEdgeProbability?: number;
-            v8ExplorationWeightJitterProbability?: number;
-            v8ExplorationWeightJitterDelta?: number;
-            v8ExplorationMaxNewEdges?: number;
-            v8ExplorationMinNewEdgeWeight?: number;
-            v8ExplorationMaxNewEdgeWeight?: number;
+            v8CleanSlateMode?: boolean;
+            v8SessionTraceDir?: string;
+            v8PackCacheTtlDays?: number;
+            v8ScannerConfig?: Partial<V8ScannerConfig>;
         }
         | undefined;
 
@@ -112,38 +99,6 @@ export default function register(api: OpenClawPluginApi) {
 
         return normalizeUserRequest(timestampTail);
     };
-    const semanticSignalPatterns = [
-        /\bdecid(?:e|ed|ing|es)\b/i,
-        /\bdecision\b/i,
-        /\bprefer(?:ence|red|s)?\b/i,
-        /\bconstraint\b/i,
-        /\bpolicy\b/i,
-        /\brule\b/i,
-        /\bprioriti[sz]e\b/i,
-        /\bdefer(?:red)?\b/i,
-        /\bdrop(?:ped)?\b/i,
-        /\badopt(?:ed|ing)?\b/i,
-        /\bdeprecat(?:e|ed|ing)\b/i,
-        /\bmigrat(?:e|ed|ing)\b/i,
-        /\brollback\b/i,
-        /决定/,
-        /改为/,
-        /改成/,
-        /优先/,
-        /偏好/,
-        /约束/,
-        /规则/,
-        /采用/,
-        /弃用/,
-        /切换/,
-        /暂停/,
-        /延后/,
-        /保留/,
-        /不再/,
-        /以后都/,
-        /默认/,
-    ];
-
     const resolveIncomingUserRequest = (event: any, fallbackMessages?: any[]) => {
         const candidates = [
             typeof event?.prompt === "string" ? extractCurrentPromptUserText(event.prompt) : "",
@@ -173,44 +128,13 @@ export default function register(api: OpenClawPluginApi) {
     // Keep runtime behavior intact and bridge the stale type surface here.
     const toolExecute = <T extends Function>(fn: T) => fn as any;
 
-    // --- memory_record ---
-    api.registerTool({
-        name: "memory_record",
-        label: "Record Memory",
-        description:
-            "Record an important event in dual format (structured JSONL + searchable Markdown). " +
-            "Use this for decisions, preferences, insights, errors, and corrections that are " +
-            "worth preserving. Returns the generated event ID for association linking. " +
-            "Note: casual chat and raw tool outputs should NOT be recorded (session JSONL " +
-            "already captures those).",
-        parameters: MemoryRecordParams,
-        execute: toolExecute(executeMemoryRecord),
-    });
-
-    // --- memory_explore ---
-    api.registerTool({
-        name: "memory_explore",
-        label: "Explore Memory",
-        description:
-            "Traverse association chains starting from an event ID (evt_*) or knowledge " +
-            "entry ID (ke_*). Follows linked entries up to the specified depth, calculates " +
-            "relevance scores (importance + association density), and reinforces accessed " +
-            "entries (resets their decay score). Use this when a retrieved memory has " +
-            "associations you want to investigate.",
-        parameters: MemoryExploreParams,
-        execute: toolExecute(executeMemoryExplore),
-    });
-
     // --- memory_consolidate ---
     api.registerTool({
         name: "memory_consolidate",
         label: "Consolidate Memory",
         description:
-            "Run structural consolidation: apply decay to old events, archive low-score " +
-            "entries, and regenerate MEMORY_INDEX.md from knowledge files. This handles " +
-            "mechanical tasks at zero token cost. NOTE: knowledge *distillation* " +
-            "(extracting knowledge from events) still requires you to read the events " +
-            "and write to memory/knowledge/*.md before calling this tool.",
+            "Build the memory graph directly from raw session traces. " +
+            "This handles structural ingestion and graph materialization with zero token cost.",
         parameters: MemoryConsolidateParams,
         execute: toolExecute((id: string, params: any, ctx: any) =>
             executeMemoryConsolidate(id, params, { ...ctx, config: pluginConfig })),
@@ -228,18 +152,6 @@ export default function register(api: OpenClawPluginApi) {
             "Use 'scratchpad_append' for rough notes and 'scratchpad_refill' to recover parked tasks.",
         parameters: MemoryWorkingParams,
         execute: toolExecute(executeMemoryWorking),
-    });
-
-    // --- memory_feedback ---
-    api.registerTool({
-        name: "memory_feedback",
-        label: "Memory Feedback",
-        description:
-            "Score recently recalled V8 graph memory bundles after execution. " +
-            "Use this when a recalled memory proved useful, stale, wrong, superseded, or harmful. " +
-            "By default it targets the latest V8 recalls from this session; you can also pass explicit bundle IDs.",
-        parameters: MemoryFeedbackParams,
-        execute: toolExecute(executeMemoryFeedback),
     });
 
     // --- HOOKS ---
@@ -265,6 +177,7 @@ export default function register(api: OpenClawPluginApi) {
 
     api.on("message_received", async (event: any, ctx: any) => {
         const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
+        const sessionId = ctx?.sessionId || "default";
         const latestUserRequest = resolveIncomingUserRequest(event);
         if (!latestUserRequest) {
             return;
@@ -272,6 +185,67 @@ export default function register(api: OpenClawPluginApi) {
         try {
             syncLatestUserRequest(workspace, latestUserRequest);
         } catch (e) { }
+
+        if (isExplicitMemoryCorrection(latestUserRequest)) {
+            refreshFeedbackStore(workspace);
+            const recalledNodes = takeRecentRecalls(sessionId);
+            if (recalledNodes.length > 0) {
+                recordFeedback(
+                    workspace,
+                    recalledNodes.map((nodeId) => ({
+                        nodeId,
+                        kind: "suppress" as const,
+                        delta: -0.35,
+                        reason: "user_correction",
+                        ttlDays: 30,
+                        sessionId,
+                        source: "user" as const,
+                        label: "memory_content_error",
+                    }))
+                );
+            }
+
+            const positiveCandidates = findMatchingNodes(
+                workspace,
+                latestUserRequest,
+                2,
+                0.22
+            ).filter((nodeId) => !recalledNodes.includes(nodeId));
+
+            if (positiveCandidates.length > 0) {
+                recordFeedback(
+                    workspace,
+                    positiveCandidates.map((nodeId) => ({
+                        nodeId,
+                        kind: "reinforce" as const,
+                        delta: 0.2,
+                        reason: "user_correction_reinforce",
+                        ttlDays: 7,
+                        sessionId,
+                        source: "user" as const,
+                        label: "memory_helped",
+                    }))
+                );
+            }
+        } else if (isExplicitMemoryAffirmation(latestUserRequest)) {
+            refreshFeedbackStore(workspace);
+            const recalledNodes = takeRecentRecalls(sessionId);
+            if (recalledNodes.length > 0) {
+                recordFeedback(
+                    workspace,
+                    recalledNodes.map((nodeId) => ({
+                        nodeId,
+                        kind: "reinforce" as const,
+                        delta: 0.15,
+                        reason: "user_confirmation",
+                        ttlDays: 14,
+                        sessionId,
+                        source: "user" as const,
+                        label: "memory_helped",
+                    }))
+                );
+            }
+        }
     });
 
     api.on("before_prompt_build", async (event: any, ctx: any) => {
@@ -366,7 +340,6 @@ export default function register(api: OpenClawPluginApi) {
     });
 
     api.on("agent_end", async (event: any, ctx: { workspaceDir?: string }) => {
-        // L2: Auto-record user intent & assistant reply
         const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
         const msgs = event?.messages || [];
 
@@ -378,31 +351,11 @@ export default function register(api: OpenClawPluginApi) {
 
         const userText = lastUser ? extractCurrentPromptUserText(extractText(lastUser)) : "";
         const asstText = extractText(lastAssistant);
-        const combined = `${userText}\n${asstText}`;
 
         if (userText && !isSyntheticControlRequest(userText)) {
             try {
                 syncLatestUserRequest(workspace, userText);
             } catch (e) { }
-        }
-
-        // Heuristics for auto-recording
-        const shouldRecord = semanticSignalPatterns.some((pattern) => pattern.test(combined));
-
-        if (shouldRecord) {
-            const recordContent = `User: ${userText.substring(0, 500)}\nAsst: ${asstText.substring(0, 500)}`;
-            try {
-                // Pass a mocked toolCallId and input
-                await executeMemoryRecord("auto_hook", {
-                    content: recordContent,
-                    type: "insight",
-                    importance: 0.7,
-                    tags: ["auto-recorded", "semantic-candidate"],
-                    associations: []
-                }, ctx);
-            } catch (e) {
-                // ignore errors in background hook
-            }
         }
     });
 }
