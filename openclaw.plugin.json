@@ -1,27 +1,12 @@
 {
   "id": "memory-enhanced",
   "name": "Memory Enhanced",
-  "description": "Brain-inspired four-layer memory system with structured events, knowledge distillation, association traversal, and automated consolidation",
+  "description": "Clean-slate V8 memory graph built directly from raw OpenClaw session traces",
   "version": "8.0.1",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "halfLifeDays": {
-        "type": "number",
-        "default": 30,
-        "description": "Half-life for exponential decay of event scores (days)"
-      },
-      "archiveThreshold": {
-        "type": "number",
-        "default": 0.2,
-        "description": "Events with decay_score below this are archived"
-      },
-      "memoryMdMaxChars": {
-        "type": "number",
-        "default": 5000,
-        "description": "Target maximum character count for auto-generated MEMORY.md"
-      },
       "outputCheckpointChars": {
         "type": "number",
         "default": 1600,
@@ -55,63 +40,22 @@
       "enableV8GraphRecall": {
         "type": "boolean",
         "default": false,
-        "description": "Enable the experimental V8 graph-based recall path when .memory/graph/manifest.json exists"
+        "description": "Enable graph-based recall when .memory/graph/graph_nodes.jsonl exists"
       },
-      "enableV8ExplorationNoise": {
+      "v8CleanSlateMode": {
         "type": "boolean",
-        "default": false,
-        "description": "Enable very low-frequency exploration noise in the V8 graph: tiny associative edge jitter plus a few weak exploratory associative links"
+        "default": true,
+        "description": "Use clean-slate V8 pipeline (raw session traces only, no legacy ingest)"
       },
-      "v8ExplorationMode": {
+      "v8SessionTraceDir": {
         "type": "string",
-        "default": "global_random",
-        "enum": ["disabled", "global_random", "sparse_biased"],
-        "description": "Exploration mode for V8 graph noise: disabled, uniform global randomness, or sparsity-biased exploratory linking"
+        "default": "/home/pongs/.openclaw/agents/main/sessions",
+        "description": "OpenClaw session transcript directory"
       },
-      "v8ExplorationNewEdgeProbability": {
+      "v8PackCacheTtlDays": {
         "type": "number",
-        "default": 0.004,
-        "description": "Per-attempt probability for adding a tiny random associative link during V8 graph build"
-      },
-      "v8ExplorationWeightJitterProbability": {
-        "type": "number",
-        "default": 0.015,
-        "description": "Per-edge probability of applying a very small random weight jitter to existing associative edges"
-      },
-      "v8ExplorationWeightJitterDelta": {
-        "type": "number",
-        "default": 0.03,
-        "description": "Maximum absolute delta for exploration jitter applied to associative edge weights"
-      },
-      "v8ExplorationMaxNewEdges": {
-        "type": "number",
-        "default": 4,
-        "description": "Maximum number of weak random associative links added in one V8 graph build"
-      },
-      "v8ExplorationMinNewEdgeWeight": {
-        "type": "number",
-        "default": 0.04,
-        "description": "Minimum initial weight for exploration-added weak associative links"
-      },
-      "v8ExplorationMaxNewEdgeWeight": {
-        "type": "number",
-        "default": 0.12,
-        "description": "Maximum initial weight for exploration-added weak associative links"
-      },
-      "v8ClusterDiagnosisMinBuildCount": {
-        "type": "number",
-        "default": 3,
-        "description": "Minimum V8 graph build count before cluster diagnosis/queue pruning starts"
-      },
-      "v8ClusterDiagnosisMinTotalHits": {
-        "type": "number",
-        "default": 4,
-        "description": "Minimum total node hit count required before cluster diagnosis can start"
-      },
-      "v8ClusterDiagnosisCooldownMinutes": {
-        "type": "number",
-        "default": 180,
-        "description": "Cooldown window between cluster diagnosis runs to avoid immediate repeated pruning"
+        "default": 7,
+        "description": "Default TTL (days) for cached summary/state packs"
       }
     }
   },

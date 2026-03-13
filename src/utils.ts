@@ -153,106 +153,8 @@ export function paths(workspace: string) {
         scratchpad: path.join(workspace, ".memory", "active", "scratchpad.md"),
         focusStack: path.join(workspace, ".memory", "active", "focus_stack.json"),
         focusStackMd: path.join(workspace, ".memory", "active", "focus_stack.md"),
-        eventsDir: path.join(workspace, ".memory", "events"),
-        eventsSchema: path.join(workspace, ".memory", "events", "_schema.json"),
         scriptsDir: path.join(workspace, ".memory", "scripts"),
-        archiveDir: path.join(workspace, ".memory", "archive"),
-        // Daily files (parameterized)
-        dailyLog: (date: string) => path.join(workspace, "memory", `${date}.md`),
-        dailyJsonl: (date: string) =>
-            path.join(workspace, ".memory", "events", `${date}.jsonl`),
     };
-}
-
-/**
- * Count the next event sequence number for a given date's JSONL file.
- */
-export function nextEventSeq(jsonlPath: string): number {
-    try {
-        const content = fs.readFileSync(jsonlPath, "utf-8").trim();
-        if (!content) return 1;
-        return content.split("\n").length + 1;
-    } catch {
-        return 1;
-    }
-}
-
-/**
- * Parse all events from a JSONL file.
- */
-export function readEvents(jsonlPath: string): MemoryEvent[] {
-    try {
-        const content = fs.readFileSync(jsonlPath, "utf-8").trim();
-        if (!content) return [];
-        return content
-            .split("\n")
-            .filter((l: string) => l.trim())
-            .map((l: string) => JSON.parse(l) as MemoryEvent);
-    } catch {
-        return [];
-    }
-}
-
-/**
- * Write events back to a JSONL file.
- */
-export function writeEvents(jsonlPath: string, events: MemoryEvent[]): void {
-    ensureDir(path.dirname(jsonlPath));
-    const content = events.map((e) => JSON.stringify(e)).join("\n");
-    fs.writeFileSync(jsonlPath, content ? content + "\n" : "", "utf-8");
-}
-
-/**
- * Find a knowledge entry by ID across all knowledge files.
- */
-export function findKnowledgeEntry(
-    knowledgeDir: string,
-    entryId: string
-): { file: string; content: string } | null {
-    if (!fs.existsSync(knowledgeDir)) return null;
-    const files = fs
-        .readdirSync(knowledgeDir)
-        .filter((f: string) => f.endsWith(".md"));
-    for (const file of files) {
-        const content = fs.readFileSync(
-            path.join(knowledgeDir, file),
-            "utf-8"
-        );
-        const marker = `<!-- knowledge_entry: ${entryId} -->`;
-        const endMarker = `<!-- /knowledge_entry -->`;
-        const startIdx = content.indexOf(marker);
-        if (startIdx === -1) continue;
-        const endIdx = content.indexOf(endMarker, startIdx);
-        if (endIdx === -1) continue;
-        return {
-            file,
-            content: content.slice(startIdx, endIdx + endMarker.length),
-        };
-    }
-    return null;
-}
-
-/** Memory event type definition. */
-export interface MemoryEncodingContext {
-    goal: string;
-    activeTask: string;
-    lastUserRequest: string;
-    topNextTasks: string[];
-    scopeHints: string[];
-    recordedAt: string;
-}
-
-export interface MemoryEvent {
-    id: string;
-    timestamp: string;
-    type: string;
-    content: string;
-    tags: string[];
-    importance: number;
-    associations: string[];
-    consolidated: boolean;
-    decay_score: number;
-    encoding_context?: MemoryEncodingContext | null;
 }
 
 /** Focus stack structure. */
@@ -530,44 +432,6 @@ export function loadWorkingMemoryState(workspace: string): WorkingMemoryState {
     return normalizeWorkingMemoryState(readJson(p.focusStack, createDefaultWorkingMemoryState()));
 }
 
-export function captureEncodingContextFromWorkingMemory(
-    state: WorkingMemoryState
-): MemoryEncodingContext | null {
-    const goal = normalizeUserRequest(state.project_goal, 180);
-    const activeTask = normalizeTaskTitle(state.active_task, 160);
-    const lastUserRequest = normalizeUserRequest(state.last_user_request, 180);
-    const topNextTasks = state.next_tasks
-        .map((task) => normalizeTaskTitle(task, 120))
-        .filter(Boolean)
-        .slice(0, 2);
-    const scopeHints = dedupeWorkingTasks(
-        [
-            ...state.context_path.map((part) => normalizeUserRequest(part, 80)),
-            ...state.context_path
-                .join(" ")
-                .split(/[\\/]/)
-                .map((part) => normalizeUserRequest(part, 80)),
-        ].filter(Boolean),
-        undefined
-    ).slice(0, 4);
-
-    if (!goal && !activeTask && !lastUserRequest && topNextTasks.length === 0 && scopeHints.length === 0) {
-        return null;
-    }
-
-    return {
-        goal,
-        activeTask,
-        lastUserRequest,
-        topNextTasks,
-        scopeHints,
-        recordedAt: nowISO(),
-    };
-}
-
-export function captureEncodingContext(workspace: string): MemoryEncodingContext | null {
-    return captureEncodingContextFromWorkingMemory(loadWorkingMemoryState(workspace));
-}
 
 export function renderWorkingMemory(state: WorkingMemoryState): string {
     const lines = [

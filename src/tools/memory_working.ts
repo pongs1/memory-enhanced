@@ -13,7 +13,6 @@ import {
     resolveWorkspace,
     writeWorkingMemoryState,
 } from "../utils.js";
-import { executeMemoryRecord } from "./memory_record.js";
 
 const MAX_NEXT_TASKS = 5;
 const MAX_DONE_RECENT = 5;
@@ -101,9 +100,6 @@ export const MemoryWorkingParams = Type.Object({
         Type.Array(Type.String(), {
             description: "Queued next tasks (for 'plan', 'push', or 'reprioritize')",
         })
-    ),
-    insight: Type.Optional(
-        Type.String({ description: "Optional insight to record to memory (for 'complete')" })
     ),
     next_focus: Type.Optional(
         Type.String({
@@ -194,18 +190,6 @@ export async function executeMemoryWorking(
             };
 
         case "complete":
-            if (params.insight) {
-                await executeMemoryRecord(
-                    toolCallId,
-                    {
-                        content: params.insight,
-                        type: "insight",
-                        importance: 0.6,
-                    },
-                    ctx
-                );
-            }
-
             state = completeActiveTask(workspace, state, params.next_focus);
             return {
                 content: [{ type: "text" as const, text: withPrefix("Active task completed.", state) }],
