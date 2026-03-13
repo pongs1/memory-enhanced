@@ -194,6 +194,12 @@ export class V8GraphScanner {
             if (node.memoryType === "evidence") {
                 continue;
             }
+            if (node.primaryLayer !== "micro") {
+                continue;
+            }
+            if (node.memoryType === "discourse_unit") {
+                continue;
+            }
             const tokens = tokenize(
                 [node.canonicalLabel, ...(node.aliases || [])].join(" ")
             );
