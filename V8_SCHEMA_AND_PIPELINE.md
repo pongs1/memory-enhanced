@@ -409,6 +409,120 @@ Promotion rules:
   - rich result text or structured details such as `excerpt`, `summary`, `output`, `result`
 - this is required so custom tools can still become operation evidence even when they are not part of a predefined tool catalog
 
+### 5.4.1 Tool catalog snapshot contract
+
+V8 should **not** query or reconstruct the live OpenClaw tool registry by itself during memory consolidation.
+That coupling belongs on the OpenClaw side.
+
+Instead, OpenClaw should publish a stable snapshot for memory consumers:
+
+- `raw/observations/tool_catalog_snapshot.json`
+- `raw/observations/tool_cleaning_profiles.json`
+
+Responsibility split:
+
+- OpenClaw:
+  - scan the live core + plugin tool registry
+  - resolve tool `name`, `label`, `description`, `source`, optional `plugin_id`
+  - capture parameter schema shape
+  - capture observed result-shape hints from runtime hooks
+  - compare the current catalog fingerprint against the previous snapshot
+  - regenerate cleaning profiles only when a tool is new or changed
+- V8 / memory-enhanced:
+  - read the published snapshot/profile files if present
+  - apply those profiles during observation cleaning and promotion
+  - fall back to generic payload-shape heuristics only when no profile exists
+
+This keeps the memory pipeline stable when OpenClaw adds or changes tools.
+
+### 5.4.2 Tool fingerprint + change detection
+
+OpenClaw should compute a per-tool fingerprint from:
+
+- `tool name`
+- `label`
+- `description`
+- `source` (`core` or `plugin`)
+- `plugin_id` when present
+- normalized parameter schema
+- optional observed top-level result-shape keys
+
+Trigger points for recomputing the catalog:
+
+- process start
+- plugin install/update/remove
+- agent tool allowlist/profile change
+- config reload
+- explicit maintenance command or cron
+
+Rules:
+
+- if fingerprint unchanged, keep the existing cleaning profile
+- if fingerprint changed or a new tool appears, generate a new draft cleaning profile
+- if a tool disappears, mark the profile inactive but keep history for replay/debugging
+
+### 5.4.3 Cleaning profile generation flow
+
+OpenClaw should own the onboarding flow for new tools:
+
+1. Scan the live tool registry and write `tool_catalog_snapshot.json`.
+2. For each new/changed tool, generate a draft cleaning profile from:
+   - description
+   - parameter schema
+   - tool source (`core` / plugin)
+   - observed result payload samples from `after_tool_call` / `tool_result_persist`
+3. Classify the tool into a memory-facing cleaning mode such as:
+   - `read_artifact`
+   - `web_lookup`
+   - `artifact_write`
+   - `content_extraction`
+   - `filesystem_probe`
+   - `process_control`
+   - `status_only`
+   - `generic_payload`
+4. Emit a resolved profile into `tool_cleaning_profiles.json`.
+5. V8 consumes the resolved profile without needing code changes.
+
+The important point is that new tool support should usually mean:
+
+- OpenClaw updates the snapshot/profile
+- V8 re-runs consolidation
+
+not:
+
+- manually patch memory code for every new tool
+
+### 5.4.4 Cleaning profile shape
+
+Recommended per-tool profile fields:
+
+```json
+{
+  "tool_name": "read",
+  "fingerprint": "sha256:...",
+  "source": "core",
+  "plugin_id": null,
+  "description": "Read file contents",
+  "input_hints": {
+    "artifact_keys": ["path", "file_path", "file", "url"],
+    "query_keys": [],
+    "payload_keys": []
+  },
+  "result_hints": {
+    "text_keys": ["content", "excerpt", "text", "output", "result"],
+    "metadata_keys": ["status", "durationMs", "exitCode", "mime", "truncated"]
+  },
+  "cleaning_mode": "read_artifact",
+  "promotion": "llm_ir",
+  "max_chars": 2600,
+  "max_lines": 90,
+  "status": "active"
+}
+```
+
+This file is not the raw observation ledger.
+It is a runtime-maintained normalization contract between OpenClaw and V8.
+
 ### 5.5 Assembled operation text view
 
 For unitization, V8 may assemble one high-density text view from:
