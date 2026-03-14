@@ -10,6 +10,9 @@ import { materializeGraph } from "./architecture/graph-materializer.js";
 import { buildRuntimeProjections } from "./architecture/runtime-projection.js";
 import { writeJsonl } from "./architecture/io.js";
 import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import type { V8SourceRecord } from "./types_v8.js";
 
 export interface CleanSlateBuildOptions {
     workspace?: string;
@@ -33,6 +36,7 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             sourceRefPrefix: group.sourceRefPrefix,
         })
     );
+    persistAssembledObservationMarkdown(store.rawDir, sourceRecords);
 
     const units = unitizeSourceRecords(sourceRecords);
     const evidenceSpans = extractEvidenceSpans(units, sourceRecords);
@@ -85,6 +89,27 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         ignitionEdges: projections.ignitionEdges,
         recallBundles: projections.recallBundles,
     };
+}
+
+function persistAssembledObservationMarkdown(rawDir: string, records: V8SourceRecord[]): void {
+    if (!records.length) return;
+    const outDir = path.join(rawDir, "observations", "assembled");
+    fs.mkdirSync(outDir, { recursive: true });
+    for (const record of records) {
+        if (record.metadata?.sourceCategory !== "operation") continue;
+        const toolCallId = record.metadata?.toolCallId;
+        const base = toolCallId ? `op_${toolCallId}` : `op_${record.id}`;
+        const fileName = sanitizeFileName(base) + ".md";
+        try {
+            fs.writeFileSync(path.join(outDir, fileName), record.rawText || "", "utf-8");
+        } catch {
+            // ignore write failures to keep consolidation moving
+        }
+    }
+}
+
+function sanitizeFileName(value: string): string {
+    return value.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
 function maybeRunIrLlm(input: {

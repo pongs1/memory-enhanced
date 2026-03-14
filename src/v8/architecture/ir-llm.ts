@@ -45,6 +45,50 @@ const CONTROL_ITEM_TYPES = new Set<V8MemoryItemType>([
     "topic_state",
 ]);
 
+const ITEM_TYPES_BY_LAYER: Record<V8GraphLayer, string[]> = {
+    micro: [
+        "entity",
+        "concept",
+        "method",
+        "event",
+        "attribute",
+        "metric",
+        "claim",
+        "evidence",
+        "context",
+        "discourse_unit",
+    ],
+    meso: [
+        "scene_block",
+        "situation_frame",
+        "objective_block",
+        "problem_block",
+        "strategy_block",
+        "procedure_block",
+        "interaction_block",
+        "decision_block",
+        "evidence_frame",
+        "shift_block",
+        "outcome_block",
+        "block_function",
+    ],
+    macro: [
+        "arc",
+        "thread",
+        "phase",
+        "global_scene_type",
+        "regime",
+        "objective_line",
+        "conflict_line",
+        "relationship_arc",
+        "method_line",
+        "theme",
+        "pattern",
+        "turning_point",
+        "global_state",
+    ],
+};
+
 function edgeCatalogPath(): string {
     const here = path.dirname(fileURLToPath(import.meta.url));
     return path.resolve(here, "../../../schema/v8-edge-catalog.json");
@@ -314,11 +358,11 @@ function buildPrompt(input: {
     const allowedLine = allowed.length
         ? `Allowed relations (${unit.layer}): ${allowed.join(", ")}`
         : "";
+    const itemTypeLine = ITEM_TYPES_BY_LAYER[unit.layer]?.length
+        ? `Allowed item_type (${unit.layer}): ${ITEM_TYPES_BY_LAYER[unit.layer].join(", ")}`
+        : "";
     return [
-        "## 结构化关系抽取任务",
-        "",
-        "你没有任何项目背景信息，只有下面这段清洗后的文本和证据片段。",
-        "任务：从该文本中抽取关系，输出 Markdown；若没有可抽取关系，输出 `[]`。",
+        "任务：从下方文本中抽取关系，输出 Markdown；若无可抽取关系，输出 `[]`。",
         "",
         "硬性规则：",
         "- 只能使用 Allowed relations 列表内的关系类型（按分组提示）",
@@ -348,6 +392,7 @@ function buildPrompt(input: {
         "- predicate 可用：prefers, requires, targets, decides, acts",
         "",
         allowedLine,
+        itemTypeLine,
         ...groupedLines,
         "",
         "### Unit",
