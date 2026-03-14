@@ -137,9 +137,9 @@ Normalization must produce a cleaned text stream for unitization while preservin
 Rules:
 
 - strip prompt scaffolding, tool wrappers, and injected memory blocks
-- preserve a span map so evidence spans can still backtrace to raw offsets
-- keep both `raw_text` and `clean_text`
-- transcript replay must route `toolCall` and `toolResult` records into observation normalization instead of dropping them blindly or flattening them into ordinary user/assistant text
+- preserve a span map so evidence spans can still backtrace to narrative offsets
+- narrative text is canonical; `raw_text` and `clean_text` are identical after cleaning
+- transcript replay must route `toolCall` and `toolResult` records into narrative assembly instead of dropping them blindly or flattening them into ordinary user/assistant text
 
 ### 3.3 Strip or downgrade
 
@@ -155,13 +155,13 @@ These fields may still be stored as `legacyHints`, but they must not be treated 
 
 ### 3.4 Observation promotion rules
 
-Not every runtime observation becomes a source record.
-V8 needs an explicit promotion contract between OpenClaw observations and the extraction path.
+Not every runtime observation becomes a narrative record.
+V8 needs an explicit assembly contract between OpenClaw observations and the narrative extraction path.
 
 Rules:
 
-- persist every raw observation first
-- promote only stable, provenance-complete observations into `source_records`, `evidence_spans`, or runtime feedback traces
+- build the narrative from cleaned observations
+- promote only stable, provenance-complete observations into the narrative stream
 - do not flatten every tool result into the same text stream as user or assistant turns
 - session transcript `toolResult` blocks are fallback provenance, not the only detection path
 
@@ -182,7 +182,7 @@ Implementation note:
 ### 3.5 Observation cleaning policy
 
 Observation cleaning should stay deliberately shallow.
-Its job is only to remove obvious junk and preserve enough structure for later unitization and LLM extraction.
+Its job is only to remove obvious junk and preserve enough structure for later narrative assembly and unitization.
 It is not a second semantic summarization layer.
 
 Required pre-clean steps:
@@ -240,13 +240,11 @@ Recommended graph-adjacent layout:
 ```text
 .memory/
   raw/
-    sessions/
-    normalized_sources/
     observations/
-      message_feedback.jsonl
-      tool_observations.jsonl
-      llm_io_traces.jsonl
-      read_artifacts.jsonl
+      assembled/
+        session_<id>_narrative.md
+        session_<id>_units.md
+        op_<toolCallId>.md
   runtime/
     recall_traces.jsonl
     feedback_records.jsonl
@@ -255,7 +253,7 @@ Recommended graph-adjacent layout:
     review_windows.jsonl
   graph/
     manifest.json
-    source_records.jsonl
+    source_records.jsonl   # narrative-derived source records
     units.jsonl
     evidence_spans.jsonl
     memory_items.jsonl

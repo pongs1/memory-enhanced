@@ -526,7 +526,8 @@ function convertTraceToNarrative(
         timestamp: record.timestamp,
         rawText,
         cleanText: rawText,
-        cleanMap: record.cleanMap || [],
+        // narrative is canonical; do not map back to raw offsets
+        cleanMap: [],
         language: record.language,
         metadata,
     };
