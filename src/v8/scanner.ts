@@ -586,55 +586,47 @@ export class V8GraphScanner {
         this.spreadActivation();
 
         const now = nowMs();
-        const candidates: V8ActivatedBundle[] = [];
-        for (const [nodeId, energy] of this.activations.entries()) {
-            const tier = scoreTier(energy, this.config);
-            if (!tier) continue;
-            const cooldownUntil = this.nodeCooldowns.get(nodeId) || 0;
-            if (cooldownUntil > now) continue;
-            if (this.isNodeSuppressed(nodeId, this.mode)) continue;
 
-            const node = this.graph.nodesById.get(nodeId);
-            if (!node) continue;
-            const projection = this.graph.ignitionNodesById?.get(nodeId) || null;
-            const evidenceSpanIds =
-                projection?.bestEvidenceSpanIds && projection.bestEvidenceSpanIds.length > 0
-                    ? projection.bestEvidenceSpanIds
-                    : projection?.evidenceSpanIds && projection.evidenceSpanIds.length > 0
-                      ? projection.evidenceSpanIds
-                      : node.bestEvidenceSpanIds.length > 0
-                        ? node.bestEvidenceSpanIds
-                        : node.evidenceSpanIds;
-            const bundleId = projection?.bundleId || nodeId;
-            const bundleCooldownUntil = this.bundleCooldowns.get(bundleId) || 0;
-            if (bundleCooldownUntil > now) continue;
-
-            candidates.push({
-                bundleId,
-                nodeIds: [nodeId],
-                tier,
-                energy,
-                evidenceSpanIds,
-            });
-        }
-
-        let topBundles = candidates
-            .sort((a, b) => b.energy - a.energy)
-            .slice(0, this.config.maxInjectedBundles);
-
-        if (topBundles.length === 0) {
-            this.spreadActivation("oblique");
-            const obliqueCandidates: V8ActivatedBundle[] = [];
-            for (const [nodeId, energy] of this.activations.entries()) {
-                if (this.isNodeSuppressed(nodeId, "oblique")) {
-                    continue;
+        const collectEvidence = (
+            entries: Array<{ nodeId: string; energy: number; evidenceSpanIds: string[] }>,
+            limit: number
+        ) => {
+            const merged: string[] = [];
+            const seen = new Set<string>();
+            for (const entry of entries) {
+                for (const spanId of entry.evidenceSpanIds) {
+                    if (seen.has(spanId)) continue;
+                    seen.add(spanId);
+                    merged.push(spanId);
+                    if (merged.length >= limit) return merged;
                 }
-                if (energy < this.config.secondWaveThreshold) continue;
+            }
+            return merged;
+        };
+
+        const buildBundles = (
+            suppressionMode: V8RecallMode,
+            minEnergy: number,
+            tierOverride?: V8ActivatedBundle["tier"],
+            wave?: 2
+        ): V8ActivatedBundle[] => {
+            const bundleMap = new Map<
+                string,
+                { energy: number; nodes: Array<{ nodeId: string; energy: number; evidenceSpanIds: string[] }> }
+            >();
+
+            for (const [nodeId, energy] of this.activations.entries()) {
+                if (energy < minEnergy) continue;
+                if (this.isNodeSuppressed(nodeId, suppressionMode)) continue;
                 const cooldownUntil = this.nodeCooldowns.get(nodeId) || 0;
                 if (cooldownUntil > now) continue;
                 const node = this.graph.nodesById.get(nodeId);
                 if (!node) continue;
                 const projection = this.graph.ignitionNodesById?.get(nodeId) || null;
+                const bundleId = projection?.bundleId || nodeId;
+                const bundleCooldownUntil = this.bundleCooldowns.get(bundleId) || 0;
+                if (bundleCooldownUntil > now) continue;
+
                 const evidenceSpanIds =
                     projection?.bestEvidenceSpanIds && projection.bestEvidenceSpanIds.length > 0
                         ? projection.bestEvidenceSpanIds
@@ -643,25 +635,52 @@ export class V8GraphScanner {
                           : node.bestEvidenceSpanIds.length > 0
                             ? node.bestEvidenceSpanIds
                             : node.evidenceSpanIds;
-                const bundleId = projection?.bundleId || nodeId;
-                const bundleCooldownUntil = this.bundleCooldowns.get(bundleId) || 0;
-                if (bundleCooldownUntil > now) continue;
-                obliqueCandidates.push({
+
+                const entry = bundleMap.get(bundleId) || { energy: 0, nodes: [] };
+                entry.energy += energy;
+                entry.nodes.push({ nodeId, energy, evidenceSpanIds });
+                bundleMap.set(bundleId, entry);
+            }
+
+            const bundles: V8ActivatedBundle[] = [];
+            for (const [bundleId, entry] of bundleMap.entries()) {
+                const energy = clamp01(entry.energy);
+                const tier = tierOverride ?? scoreTier(energy, this.config);
+                if (!tier) continue;
+                const ordered = entry.nodes.sort((a, b) => b.energy - a.energy);
+                const evidenceSpanIds = collectEvidence(ordered, 8);
+                const nodeIds = ordered.map((node) => node.nodeId);
+                bundles.push({
                     bundleId,
-                    nodeIds: [nodeId],
-                    tier: "background",
+                    nodeIds,
+                    tier,
                     energy,
                     evidenceSpanIds,
-                    wave: 2,
+                    ...(wave ? { wave } : {}),
                 });
             }
-            topBundles = obliqueCandidates
+
+            return bundles
                 .sort((a, b) => b.energy - a.energy)
                 .slice(0, this.config.maxInjectedBundles);
+        };
+
+        let topBundles = buildBundles(this.mode, 0.05);
+
+        if (topBundles.length === 0) {
+            this.spreadActivation("oblique");
+            topBundles = buildBundles(
+                "oblique",
+                this.config.secondWaveThreshold,
+                "background",
+                2
+            );
         }
 
         for (const bundle of topBundles) {
-            this.nodeCooldowns.set(bundle.bundleId, now + this.config.nodeCooldownMs);
+            for (const nodeId of bundle.nodeIds) {
+                this.nodeCooldowns.set(nodeId, now + this.config.nodeCooldownMs);
+            }
             this.bundleCooldowns.set(bundle.bundleId, now + this.config.bundleCooldownMs);
         }
 
