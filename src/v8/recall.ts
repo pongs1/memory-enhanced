@@ -236,6 +236,16 @@ function collectBacktraceEvidence(
             if (!policy || policy.role === "spread") {
                 continue;
             }
+            if (policy.role === "gate") {
+                continue;
+            }
+            if (
+                policy.role === "reweight" &&
+                mode !== "trajectory" &&
+                mode !== "audit"
+            ) {
+                continue;
+            }
 
             const nextId = edge.src === current.id ? edge.dst : edge.src;
             if (nextId === current.id) continue;
