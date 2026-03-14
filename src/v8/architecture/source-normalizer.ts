@@ -461,6 +461,16 @@ function extractContentArray(
     name?: string;
     arguments?: unknown;
     description?: string;
+    toolCallId?: string;
+    tool_call_id?: string;
+    toolName?: string;
+    tool_name?: string;
+    tool?: string;
+    function?: {
+        name?: string;
+        arguments?: unknown;
+        description?: string;
+    };
 }> {
     const raw = msg.message?.content ?? msg.content;
     if (Array.isArray(raw)) return raw;
