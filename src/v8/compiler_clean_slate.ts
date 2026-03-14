@@ -4,6 +4,7 @@ import { loadSessionTraces } from "./adapters/session-source.js";
 import { normalizeSessionMessages } from "./architecture/source-normalizer.js";
 import { loadResolvedToolCleaningProfiles } from "./architecture/tool-cleaning-profiles.js";
 import { checkToolCatalogAgainstRules } from "./architecture/tool-catalog-check.js";
+import { loadNarrativeSourceRecords } from "./architecture/narrative-source.js";
 import { unitizeSourceRecords } from "./architecture/unitizer.js";
 import { extractEvidenceSpans } from "./architecture/evidence.js";
 import { extractMemoryItems } from "./architecture/ir-extractor.js";
@@ -14,7 +15,7 @@ import { writeJsonl } from "./architecture/io.js";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { V8SourceRecord } from "./types_v8.js";
+import type { V8SourceRecord, V8Unit } from "./types_v8.js";
 
 export interface CleanSlateBuildOptions {
     workspace?: string;
@@ -38,16 +39,22 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         profiles: toolCleaningProfiles,
     });
 
-    const sourceRecords = traceGroups.flatMap((group) =>
+    const traceSourceRecords = traceGroups.flatMap((group) =>
         normalizeSessionMessages(group.messages, {
             sourceRefPrefix: group.sourceRefPrefix,
             workspace,
             toolCleaningProfiles,
         })
     );
-    persistAssembledObservationMarkdown(store.rawDir, sourceRecords);
+    persistAssembledObservationMarkdown(store.rawDir, traceSourceRecords);
 
+    const narrativeSourceRecords = loadNarrativeSourceRecords(store.rawDir);
+    const sourceRecords = mergeNarrativeCoverage(
+        narrativeSourceRecords,
+        traceSourceRecords
+    );
     const units = unitizeSourceRecords(sourceRecords);
+    persistNarrativeUnitPreview(store.rawDir, units, sourceRecords);
     const evidenceSpans = extractEvidenceSpans(units, sourceRecords);
     const llmJobs = buildLlmIrJobs(units, evidenceSpans, sourceRecords);
     writeIrLlmJobs(store.irLlmJobs, llmJobs);
@@ -107,6 +114,108 @@ function persistAssembledObservationMarkdown(rawDir: string, records: V8SourceRe
     fs.mkdirSync(outDir, { recursive: true });
     persistOperationMarkdown(outDir, records);
     persistSessionNarratives(outDir, records);
+}
+
+function mergeNarrativeCoverage(
+    narrativeRecords: V8SourceRecord[],
+    traceRecords: V8SourceRecord[]
+): V8SourceRecord[] {
+    if (!traceRecords.length) return narrativeRecords;
+    if (!narrativeRecords.length) {
+        return traceRecords.map((record, idx) =>
+            convertTraceToNarrative(record, idx + 1)
+        );
+    }
+
+    const merged = [...narrativeRecords];
+    const seen = new Set<string>();
+    for (const record of narrativeRecords) {
+        const key = buildCoverageKey(record);
+        if (key) seen.add(key);
+    }
+
+    const extraIndexBySession = new Map<string, number>();
+    for (const record of traceRecords) {
+        const key = buildCoverageKey(record);
+        if (!key || seen.has(key)) continue;
+        const sessionId = record.metadata?.sessionId || "default";
+        const nextIndex = (extraIndexBySession.get(sessionId) ?? 0) + 1;
+        extraIndexBySession.set(sessionId, nextIndex);
+        merged.push(convertTraceToNarrative(record, nextIndex));
+        seen.add(key);
+    }
+
+    return merged;
+}
+
+function buildCoverageKey(record: V8SourceRecord): string | null {
+    const sessionId = record.metadata?.sessionId || "default";
+    const sourceCategory =
+        record.metadata?.sourceCategory || inferSourceCategory(record);
+    const sourceIndex =
+        record.metadata?.sourceIndex || extractSourceIndexFromRef(record.sourceRef);
+    if (sourceIndex) return `${sessionId}:${sourceCategory}:${sourceIndex}`;
+    if (record.sourceRef) return `${sessionId}:${sourceCategory}:${record.sourceRef}`;
+    return null;
+}
+
+function convertTraceToNarrative(
+    record: V8SourceRecord,
+    ordinal: number
+): V8SourceRecord {
+    const sessionId = record.metadata?.sessionId || "default";
+    const sourceCategory =
+        record.metadata?.sourceCategory || inferSourceCategory(record);
+    const sourceIndex =
+        record.metadata?.sourceIndex || extractSourceIndexFromRef(record.sourceRef);
+    const id = `src_${sessionId}_narr_x${ordinal}`;
+    const rawText = record.cleanText || record.rawText || "";
+    const metadata: Record<string, string> = {
+        sessionId,
+        sourceRef: record.sourceRef,
+        sourceCategory,
+        narrativeLabel: sourceIndex
+            ? sourceCategory === "operation"
+                ? `op-${sourceIndex}`
+                : `#${sourceIndex}`
+            : "",
+        narrativeSpeaker: record.speaker || "unknown",
+        mergedFrom: "session_trace",
+    };
+    if (sourceIndex) {
+        metadata.sourceIndex = sourceIndex;
+    }
+
+    return {
+        id,
+        sourceClass: "curated",
+        sourceType: "session_narrative",
+        sourceRef: record.sourceRef,
+        speaker: record.speaker,
+        timestamp: record.timestamp,
+        rawText,
+        cleanText: rawText,
+        cleanMap: record.cleanMap || [],
+        language: record.language,
+        metadata,
+    };
+}
+
+function extractSourceIndexFromRef(sourceRef: string): string | undefined {
+    if (!sourceRef) return undefined;
+    const opMatch = sourceRef.match(/#op-(\d+)/);
+    if (opMatch) return opMatch[1];
+    const msgMatch = sourceRef.match(/#(\d+)/);
+    if (msgMatch) return msgMatch[1];
+    return undefined;
+}
+
+function inferSourceCategory(record: V8SourceRecord): "conversation" | "operation" {
+    const ref = record.sourceRef || "";
+    if (ref.includes("#op-")) return "operation";
+    const label = record.metadata?.narrativeLabel || "";
+    if (label.toLowerCase().includes("op-")) return "operation";
+    return "conversation";
 }
 
 function sanitizeFileName(value: string): string {
@@ -245,6 +354,97 @@ function renderSessionNarrative(
         lines.push("");
     }
     return lines.join("\n").trim() + "\n";
+}
+
+function persistNarrativeUnitPreview(
+    rawDir: string,
+    units: V8Unit[],
+    sources: V8SourceRecord[]
+): void {
+    const sourcesById = new Map(sources.map((source) => [source.id, source]));
+    const sessions = new Map<
+        string,
+        Map<string, { source: V8SourceRecord; units: V8Unit[] }>
+    >();
+
+    for (const unit of units) {
+        const source = sourcesById.get(unit.sourceRecordId);
+        if (!source || source.sourceType !== "session_narrative") continue;
+        const sessionId = source.metadata?.sessionId || "default";
+        const sessionBucket =
+            sessions.get(sessionId) ||
+            new Map<string, { source: V8SourceRecord; units: V8Unit[] }>();
+        const recordBucket =
+            sessionBucket.get(source.id) ||
+            { source, units: [] as V8Unit[] };
+        recordBucket.units.push(unit);
+        sessionBucket.set(source.id, recordBucket);
+        sessions.set(sessionId, sessionBucket);
+    }
+
+    if (sessions.size === 0) return;
+    const outDir = path.join(rawDir, "observations", "assembled");
+    fs.mkdirSync(outDir, { recursive: true });
+
+    for (const [sessionId, recordMap] of sessions.entries()) {
+        const lines: string[] = [];
+        lines.push("# Narrative Units");
+        lines.push("");
+        lines.push(`Session: \`${sessionId}\``);
+        lines.push("");
+
+        const records = Array.from(recordMap.values());
+        records.sort((a, b) => a.source.id.localeCompare(b.source.id));
+        for (const entry of records) {
+            const record = entry.source;
+            const text = (record.cleanText || record.rawText || "").trim();
+            lines.push(`## ${record.id}`);
+            if (record.metadata?.narrativeLabel) {
+                lines.push(`label: ${record.metadata.narrativeLabel}`);
+            }
+            if (record.speaker) {
+                lines.push(`speaker: ${record.speaker}`);
+            }
+            if (record.timestamp) {
+                lines.push(`timestamp: ${formatTimestampShort(record.timestamp) || record.timestamp}`);
+            }
+            if (text) {
+                lines.push("");
+                lines.push(text);
+                lines.push("");
+            }
+
+            const byLayer = new Map<V8Unit["layer"], V8Unit[]>();
+            for (const unit of entry.units) {
+                const bucket = byLayer.get(unit.layer) || [];
+                bucket.push(unit);
+                byLayer.set(unit.layer, bucket);
+            }
+            const layerOrder: V8Unit["layer"][] = ["macro", "meso", "micro"];
+            for (const layer of layerOrder) {
+                const bucket = byLayer.get(layer);
+                if (!bucket || bucket.length === 0) continue;
+                bucket.sort((a, b) => a.ordinal - b.ordinal);
+                lines.push(`### ${layer} units`);
+                for (const unit of bucket) {
+                    const unitText = unit.text.trim();
+                    lines.push(`- ${unit.id}: ${unitText}`);
+                }
+                lines.push("");
+            }
+        }
+
+        const fileName = `session_${sessionId}_units.md`;
+        try {
+            fs.writeFileSync(
+                path.join(outDir, fileName),
+                lines.join("\n").trim() + "\n",
+                "utf-8"
+            );
+        } catch {
+            // ignore write failures
+        }
+    }
 }
 
 function buildEntryLabel(entry: NarrativeEntry): string | null {

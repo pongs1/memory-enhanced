@@ -61,6 +61,7 @@ export async function executeMemoryConsolidate(
         `sessionTraceDir=${sessionTraceDir || "default"}`,
         maxSessionFiles ? `maxSessionFiles=${maxSessionFiles}` : null,
         llmCommand ? `llmStatus=${output.llmStatus}` : null,
+        "units=narrative",
         output.toolCatalogCheck
             ? `toolCatalogCheck=${output.toolCatalogCheck.status} tools=${output.toolCatalogCheck.toolCount} rules=${output.toolCatalogCheck.ruleCount}`
             : null,

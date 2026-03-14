@@ -2,6 +2,7 @@ export type V8SourceClass = "raw" | "curated" | "legacy";
 
 export type V8SourceType =
     | "session_trace"
+    | "session_narrative"
     | "daily_log"
     | "knowledge_md"
     | "skill_md"

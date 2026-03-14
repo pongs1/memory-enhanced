@@ -607,7 +607,9 @@ In addition to tool-specific assembly, V8 should persist a **session-level narra
 - assembled tool operation snapshots (from 5.5)
 
 This narrative is a **derived, high-density Markdown view** for replay and offline LLM extraction.
-It must not replace `source_records` or the raw observation ledger.
+In V8, it is also the **canonical input** for unitization and IR extraction.
+Raw session traces are only used to assemble the narrative and validate coverage; they are not persisted as
+graph inputs.
 
 Persistence (recommended):
 
@@ -616,9 +618,11 @@ Persistence (recommended):
 - ordering: prefer timestamps; fall back to transcript order when timestamps are missing
 - keep it natural-language, not JSON or key-value dumps
 - strip prompt scaffolding, hidden control tags, and other machine-only noise
+- coverage: if the narrative misses any trace entries, inject the cleaned trace text back
+  into the narrative stream (timestamp order) before unitization
 
-This view is a convenient input for IR extraction or debugging,
-but the graph and evidence spans must still trace back to canonical source records.
+This view is the primary input for IR extraction and graph materialization.
+Evidence spans still trace back to the narrative-derived source records.
 
 ## 6. Unitization
 
