@@ -10,12 +10,14 @@ import type {
     V8ControlAnchors,
     V8EdgeCatalogEntry,
     V8EdgeRuntimePolicyEntry,
+    V8EvidenceSpan,
     V8GraphEdge,
     V8GraphNode,
     V8RecallMode,
     V8ScanResult,
     V8ScannerConfig,
     V8SceneSignal,
+    V8SourceRecord,
 } from "./types_v8.js";
 
 interface EdgeCatalogFile {
@@ -31,6 +33,8 @@ interface LoadedGraphData {
     degree: Map<string, number>;
     scopeAnchorsByNode: Map<string, string[]>;
     scopeNodes: Set<string>;
+    nodeKinds: Map<string, "episodic" | "semantic" | "procedural">;
+    nodeDayKeys: Map<string, Set<string>>;
     edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>;
     policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
 }
@@ -125,6 +129,13 @@ function policyKey(kind: string, mode: V8RecallMode): string {
     return `${kind}:${mode}`;
 }
 
+function toDayKey(timestamp: string): string | null {
+    if (!timestamp) return null;
+    const parsed = new Date(timestamp);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString().slice(0, 10);
+}
+
 function buildPolicyMap(entries: V8EdgeRuntimePolicyEntry[]): Map<string, V8EdgeRuntimePolicyEntry> {
     const map = new Map<string, V8EdgeRuntimePolicyEntry>();
     for (const entry of entries) {
@@ -183,6 +194,7 @@ export class V8GraphScanner {
     >();
     private readonly runtimeReweightCache = new Map<V8RecallMode, ReweightEdge[]>();
     private activeScopeIds: Set<string> | null = null;
+    private activeDayKeys: Set<string> | null = null;
     private recentWindow = "";
     private charsSinceLastScan = 0;
 
@@ -205,9 +217,15 @@ export class V8GraphScanner {
         const store = v8StorePaths(this.workspace);
         const nodes = loadJsonl<V8GraphNode>(store.graphNodes);
         const edges = loadJsonl<V8GraphEdge>(store.graphEdges);
+        const evidenceSpans = loadJsonl<V8EvidenceSpan>(store.evidenceSpans);
+        const sources = loadJsonl<V8SourceRecord>(store.sourceRecords);
 
         const nodesById = new Map<string, V8GraphNode>();
         const nodeTokens = new Map<string, Set<string>>();
+        const spanById = new Map(evidenceSpans.map((span) => [span.id, span]));
+        const sourceById = new Map(sources.map((source) => [source.id, source]));
+        const nodeKinds = new Map<string, "episodic" | "semantic" | "procedural">();
+        const nodeDayKeys = new Map<string, Set<string>>();
         for (const node of nodes) {
             nodesById.set(node.id, node);
             if (node.memoryType === "evidence") {
@@ -226,6 +244,38 @@ export class V8GraphScanner {
                 [node.canonicalLabel, ...(node.aliases || [])].join(" ")
             );
             nodeTokens.set(node.id, new Set(tokens));
+
+            let hasCurated = false;
+            let hasProcedural = false;
+            const dayKeys = new Set<string>();
+            for (const spanId of node.evidenceSpanIds || []) {
+                const span = spanById.get(spanId);
+                if (!span) continue;
+                const source = sourceById.get(span.sourceRecordId);
+                if (!source) continue;
+                if (source.sourceType === "skill_md") {
+                    hasProcedural = true;
+                }
+                if (source.sourceClass === "curated") {
+                    hasCurated = true;
+                }
+                if (source.timestamp) {
+                    const dayKey = toDayKey(source.timestamp);
+                    if (dayKey) {
+                        dayKeys.add(dayKey);
+                    }
+                }
+            }
+            if (dayKeys.size > 0) {
+                nodeDayKeys.set(node.id, dayKeys);
+            }
+            if (hasProcedural) {
+                nodeKinds.set(node.id, "procedural");
+            } else if (hasCurated) {
+                nodeKinds.set(node.id, "semantic");
+            } else {
+                nodeKinds.set(node.id, "episodic");
+            }
         }
 
         const adjacency = new Map<string, V8GraphEdge[]>();
@@ -262,6 +312,8 @@ export class V8GraphScanner {
             degree,
             scopeAnchorsByNode,
             scopeNodes,
+            nodeKinds,
+            nodeDayKeys,
             edgeKinds,
             policyByKindMode,
         };
@@ -360,6 +412,7 @@ export class V8GraphScanner {
         const nextBiases = new Map<string, number>();
 
         this.updateActiveScopes(signalTokens);
+        this.updateActiveDays(signalTokens);
 
         for (const [nodeId, tokens] of this.graph.nodeTokens.entries()) {
             if (this.isNodeSuppressed(nodeId, this.mode)) {
@@ -413,6 +466,7 @@ export class V8GraphScanner {
         this.applyDecay();
 
         const tokens = new Set(tokenize(this.recentWindow));
+        this.updateActiveDays(tokens);
         for (const [nodeId, nodeTokens] of this.graph.nodeTokens.entries()) {
             if (this.isNodeSuppressed(nodeId, this.mode)) {
                 continue;
@@ -641,23 +695,38 @@ export class V8GraphScanner {
     }
 
     private isNodeSuppressed(nodeId: string, mode: V8RecallMode): boolean {
-        if (mode === "trajectory" || mode === "audit") {
-            return false;
-        }
         const node = this.graph.nodesById.get(nodeId);
         if (!node) return false;
-        if (node.state?.validity === "superseded") {
+        if (mode !== "trajectory" && mode !== "audit") {
+            if (node.state?.validity === "superseded") {
+                return true;
+            }
+            const scopedTo = this.graph.scopeAnchorsByNode.get(nodeId);
+            if (scopedTo && scopedTo.length > 0) {
+                if (this.activeScopeIds && this.activeScopeIds.size > 0) {
+                    for (const scopeId of scopedTo) {
+                        if (this.activeScopeIds.has(scopeId)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
+
+        const kind = this.graph.nodeKinds.get(nodeId) || "semantic";
+        if (kind !== "episodic") {
+            return false;
+        }
+        const dayKeys = this.graph.nodeDayKeys.get(nodeId);
+        if (!dayKeys || dayKeys.size === 0) {
+            return false;
+        }
+        if (!this.activeDayKeys || this.activeDayKeys.size === 0) {
             return true;
         }
-        const scopedTo = this.graph.scopeAnchorsByNode.get(nodeId);
-        if (!scopedTo || scopedTo.length === 0) {
-            return false;
-        }
-        if (!this.activeScopeIds || this.activeScopeIds.size === 0) {
-            return false;
-        }
-        for (const scopeId of scopedTo) {
-            if (this.activeScopeIds.has(scopeId)) {
+        for (const dayKey of dayKeys) {
+            if (this.activeDayKeys.has(dayKey)) {
                 return false;
             }
         }
@@ -690,5 +759,24 @@ export class V8GraphScanner {
             }
         }
         this.activeScopeIds = active.size > 0 ? active : null;
+    }
+
+    private updateActiveDays(signalTokens: Set<string>): void {
+        if (signalTokens.size === 0) {
+            this.activeDayKeys = null;
+            return;
+        }
+        const active = new Set<string>();
+        for (const [nodeId, tokens] of this.graph.nodeTokens.entries()) {
+            if (this.graph.nodeKinds.get(nodeId) !== "episodic") continue;
+            const overlap = overlapScore(signalTokens, tokens);
+            if (overlap < this.config.sceneOverlapThreshold) continue;
+            const dayKeys = this.graph.nodeDayKeys.get(nodeId);
+            if (!dayKeys || dayKeys.size === 0) continue;
+            for (const dayKey of dayKeys) {
+                active.add(dayKey);
+            }
+        }
+        this.activeDayKeys = active.size > 0 ? active : null;
     }
 }
