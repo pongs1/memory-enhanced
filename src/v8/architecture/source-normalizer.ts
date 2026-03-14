@@ -10,6 +10,16 @@ export interface RawSessionMessage {
     body?: string;
     message?: {
         role?: string;
+        tool_calls?: unknown;
+        toolCalls?: unknown;
+        function_call?: unknown;
+        functionCall?: unknown;
+        toolCallId?: string;
+        tool_call_id?: string;
+        toolName?: string;
+        tool_name?: string;
+        name?: string;
+        tool?: string;
         content?: Array<{
             type?: string;
             text?: string;
@@ -17,9 +27,17 @@ export interface RawSessionMessage {
             name?: string;
             arguments?: unknown;
             description?: string;
+            toolCallId?: string;
+            tool_call_id?: string;
+            toolName?: string;
+            tool_name?: string;
+            tool?: string;
+            function?: {
+                name?: string;
+                arguments?: unknown;
+                description?: string;
+            };
         }> | string;
-        toolCallId?: string;
-        toolName?: string;
         details?: Record<string, unknown>;
         isError?: boolean;
         timestamp?: string | number;
@@ -305,17 +323,40 @@ function extractToolCalls(
         msg.role ||
         msg.speaker;
     if (role !== "assistant") return [];
+    const calls: ToolCallInfo[] = [];
+    const seen = new Set<string>();
+
+    const pushCall = (call: ToolCallInfo) => {
+        const key = `${call.toolCallId || ""}:${call.toolName || ""}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        calls.push(call);
+    };
+
     const content = extractContentArray(msg);
-    if (!content.length) return [];
-    return content
-        .filter((item) =>
-            item?.type ? item.type === "toolCall" || item.type === "tool_call" : false
-        )
-        .map((item) => ({
-            toolCallId: item.id || "",
-            toolName: item.name || "tool",
+    for (const item of content) {
+        const type = item?.type || "";
+        if (!type) continue;
+        if (
+            type !== "toolCall" &&
+            type !== "tool_call" &&
+            type !== "tool_use"
+        ) {
+            continue;
+        }
+        const toolName =
+            item.name ||
+            item.toolName ||
+            item.tool_name ||
+            item.tool ||
+            item.function?.name ||
+            "tool";
+        pushCall({
+            toolCallId:
+                item.id || item.toolCallId || item.tool_call_id || "",
+            toolName,
             description: extractToolDescription(item),
-            arguments: item.arguments,
+            arguments: item.arguments ?? item.function?.arguments,
             messageId: msg.id,
             parentId: msg.parentId,
             timestamp:
@@ -324,8 +365,51 @@ function extractToolCalls(
                 msg.created_at ??
                 msg.message?.timestamp,
             sourceIndex,
-        }))
-        .filter((call) => Boolean(call.toolCallId || call.toolName));
+        });
+    }
+
+    const rawToolCalls =
+        msg.message?.tool_calls ??
+        msg.message?.toolCalls ??
+        msg.message?.function_call ??
+        msg.message?.functionCall;
+    const toolCalls = Array.isArray(rawToolCalls)
+        ? rawToolCalls
+        : rawToolCalls
+          ? [rawToolCalls]
+          : [];
+    for (const call of toolCalls) {
+        if (!call || typeof call !== "object") continue;
+        const callObj = call as Record<string, unknown>;
+        const fn = callObj.function as Record<string, unknown> | undefined;
+        const toolName =
+            (typeof callObj.name === "string" && callObj.name) ||
+            (typeof callObj.toolName === "string" && callObj.toolName) ||
+            (typeof callObj.tool_name === "string" && callObj.tool_name) ||
+            (typeof callObj.tool === "string" && callObj.tool) ||
+            (typeof fn?.name === "string" && fn?.name) ||
+            "tool";
+        pushCall({
+            toolCallId:
+                (typeof callObj.id === "string" && callObj.id) ||
+                (typeof callObj.toolCallId === "string" && callObj.toolCallId) ||
+                (typeof callObj.tool_call_id === "string" && callObj.tool_call_id) ||
+                "",
+            toolName,
+            description: extractToolDescription(callObj),
+            arguments: callObj.arguments ?? fn?.arguments,
+            messageId: msg.id,
+            parentId: msg.parentId,
+            timestamp:
+                msg.timestamp ??
+                msg.createdAt ??
+                msg.created_at ??
+                msg.message?.timestamp,
+            sourceIndex,
+        });
+    }
+
+    return calls.filter((call) => Boolean(call.toolCallId || call.toolName));
 }
 
 function extractToolResult(
@@ -336,9 +420,17 @@ function extractToolResult(
         (msg.message as { role?: string } | undefined)?.role ||
         msg.role ||
         msg.speaker;
-    if (role !== "toolResult") return null;
-    const toolCallId = msg.message?.toolCallId;
-    const toolName = msg.message?.toolName;
+    if (role !== "toolResult" && role !== "tool") return null;
+    const toolCallId =
+        msg.message?.toolCallId ||
+        msg.message?.tool_call_id ||
+        (msg as { toolCallId?: string }).toolCallId;
+    const toolName =
+        msg.message?.toolName ||
+        msg.message?.tool_name ||
+        msg.message?.name ||
+        msg.message?.tool ||
+        (msg as { toolName?: string }).toolName;
     const details =
         (msg.message?.details as Record<string, unknown> | undefined) ||
         (msg as { details?: Record<string, unknown> }).details;
@@ -378,10 +470,16 @@ function extractContentArray(
 function extractToolDescription(item: {
     description?: string;
     arguments?: unknown;
+    function?: { description?: string; arguments?: unknown };
 }): string | undefined {
     if (item.description) return item.description;
+    if (item.function?.description) return item.function.description;
     if (item.arguments && typeof item.arguments === "object") {
         const args = item.arguments as Record<string, unknown>;
+        if (typeof args.description === "string") return args.description;
+    }
+    if (item.function?.arguments && typeof item.function.arguments === "object") {
+        const args = item.function.arguments as Record<string, unknown>;
         if (typeof args.description === "string") return args.description;
     }
     return undefined;
