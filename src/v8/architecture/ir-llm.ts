@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJson } from "../../utils.js";
@@ -29,6 +30,7 @@ interface EdgeCatalogFile {
         type?: string;
         layer?: string;
         status?: string;
+        group?: string;
     }>;
 }
 
@@ -48,12 +50,20 @@ function edgeCatalogPath(): string {
     return path.resolve(here, "../../../schema/v8-edge-catalog.json");
 }
 
-function loadAllowedPredicates(): Record<V8GraphLayer, Set<string>> {
+function loadAllowedPredicates(): {
+    allowed: Record<V8GraphLayer, Set<string>>;
+    grouped: Record<V8GraphLayer, Map<string, string[]>>;
+} {
     const data = readJson<EdgeCatalogFile>(edgeCatalogPath(), { edges: [] });
     const allowed: Record<V8GraphLayer, Set<string>> = {
         micro: new Set(),
         meso: new Set(),
         macro: new Set(),
+    };
+    const grouped: Record<V8GraphLayer, Map<string, string[]>> = {
+        micro: new Map(),
+        meso: new Map(),
+        macro: new Map(),
     };
     const edges = Array.isArray(data.edges) ? data.edges : [];
     for (const entry of edges) {
@@ -61,12 +71,16 @@ function loadAllowedPredicates(): Record<V8GraphLayer, Set<string>> {
         if (entry.status && entry.status !== "canonical") continue;
         if (entry.layer === "micro" || entry.layer === "meso" || entry.layer === "macro") {
             allowed[entry.layer].add(entry.type);
+            const group = entry.group || "other";
+            const list = grouped[entry.layer].get(group) || [];
+            list.push(entry.type);
+            grouped[entry.layer].set(group, list);
         }
     }
-    return allowed;
+    return { allowed, grouped };
 }
 
-const ALLOWED_PREDICATES = loadAllowedPredicates();
+const { allowed: ALLOWED_PREDICATES, grouped: ALLOWED_GROUPS } = loadAllowedPredicates();
 
 export function buildLlmIrJobs(
     units: V8Unit[],
@@ -116,12 +130,25 @@ export function writeIrLlmJobs(filePath: string, jobs: V8IrLlmJob[]): void {
 }
 
 export function loadLlmIrItems(
-    filePath: string,
+    input: { mdPath?: string; jsonlPath?: string },
     units: V8Unit[],
     evidenceSpans: V8EvidenceSpan[],
     sources: V8SourceRecord[]
 ): V8MemoryItem[] {
-    const raw = readJsonl<any>(filePath);
+    const mdPath = input.mdPath;
+    const jsonlPath = input.jsonlPath;
+    const fromMd =
+        mdPath && mdPath.trim().length > 0
+            ? parseMarkdownFile(mdPath, units, evidenceSpans, sources)
+            : [];
+    if (fromMd.length > 0) {
+        if (jsonlPath) {
+            writeJsonl(jsonlPath, fromMd);
+        }
+        return fromMd;
+    }
+    if (!jsonlPath) return [];
+    const raw = readJsonl<any>(jsonlPath);
     if (raw.length === 0) return [];
     const unitsById = new Map(units.map((u) => [u.id, u]));
     const sourcesById = new Map(sources.map((s) => [s.id, s]));
@@ -139,6 +166,38 @@ export function loadLlmIrItems(
         }
     }
     return items;
+}
+
+function parseMarkdownFile(
+    filePath: string,
+    units: V8Unit[],
+    evidenceSpans: V8EvidenceSpan[],
+    sources: V8SourceRecord[]
+): V8MemoryItem[] {
+    try {
+        const raw = readFileTrimmed(filePath);
+        if (!raw) return [];
+        const blocks = splitMarkdownItems(raw);
+        if (blocks.length === 0) return [];
+        const unitsById = new Map(units.map((u) => [u.id, u]));
+        const sourcesById = new Map(sources.map((s) => [s.id, s]));
+        const spansByUnit = new Map<string, V8EvidenceSpan[]>();
+        for (const span of evidenceSpans) {
+            const list = spansByUnit.get(span.unitId) || [];
+            list.push(span);
+            spansByUnit.set(span.unitId, list);
+        }
+        const items: V8MemoryItem[] = [];
+        for (const block of blocks) {
+            const rawItem = parseMarkdownItemBlock(block);
+            if (!rawItem) continue;
+            const item = normalizeLlmItem(rawItem, unitsById, sourcesById, spansByUnit);
+            if (item) items.push(item);
+        }
+        return items;
+    } catch {
+        return [];
+    }
 }
 
 function normalizeLlmItem(
@@ -242,6 +301,16 @@ function buildPrompt(input: {
         (span) => `- (${span.id}) ${sanitizeLine(span.text)}`
     );
     const allowed = Array.from(ALLOWED_PREDICATES[unit.layer] || []).sort();
+    const groupMap = ALLOWED_GROUPS[unit.layer];
+    const groupedLines =
+        groupMap && groupMap.size > 0
+            ? Array.from(groupMap.entries())
+                  .sort((a, b) => a[0].localeCompare(b[0]))
+                  .map(([group, relations]) => {
+                      const list = relations.slice().sort().join(", ");
+                      return `- ${group}: ${list}`;
+                  })
+            : [];
     const allowedLine = allowed.length
         ? `Allowed relations (${unit.layer}): ${allowed.join(", ")}`
         : "";
@@ -249,19 +318,37 @@ function buildPrompt(input: {
         "## 结构化关系抽取任务",
         "",
         "你没有任何项目背景信息，只有下面这段清洗后的文本和证据片段。",
-        "任务：从该文本中抽取关系，输出 JSON 数组；若没有可抽取关系，输出 []。",
+        "任务：从该文本中抽取关系，输出 Markdown；若没有可抽取关系，输出 `[]`。",
         "",
         "硬性规则：",
-        "- 只能使用 Allowed relations 列表内的关系类型",
+        "- 只能使用 Allowed relations 列表内的关系类型（按分组提示）",
         "- 只输出文本中明确支持的关系，不要做超出文本的推断",
         "- `evidence_span_ids` 必须来自提供的 span id 列表",
         "- `unit_id` 必须是当前 Unit ID",
-        "- 输出必须是 JSON 数组，不要任何解释或额外文本",
+        "- 输出必须是 Markdown，不要输出 JSON，不要任何解释或额外文本",
         "",
-        "每个 item 必须包含字段：",
-        "`item_type`, `subject`, `predicate`, `object`, `qualifiers`, `origin_type`, `evidence_span_ids`, `unit_id`, `confidence`",
+        "输出格式（严格遵守）：",
+        "",
+        "### Item",
+        "item_type: <type>",
+        "subject: <text>",
+        "predicate: <relation>",
+        "object: <text>",
+        "qualifiers: key=value; key=value (没有则留空)",
+        "origin_type: asserted|aggregated|inferred",
+        "evidence_span_ids: es_xxx, es_yyy",
+        "unit_id: <unit_id>",
+        "confidence: 0.0-1.0",
+        "",
+        "每条关系一个 `### Item`。",
+        "若无可抽取关系，输出：`[]`",
+        "",
+        "可选控制类（若文本明确表达偏好/目标/约束/决定等）：",
+        "- item_type 可用：preference, goal, constraint, decision, open_question, conversation_act, session_state, topic_state",
+        "- predicate 可用：prefers, requires, targets, decides, acts",
         "",
         allowedLine,
+        ...groupedLines,
         "",
         "### Unit",
         `Unit ID: ${unit.id}`,
@@ -285,4 +372,88 @@ function truncateLabel(text: string, maxLen = 120): string {
 
 function sanitizeLine(text: string, maxLen = 200): string {
     return truncateLabel(text, maxLen);
+}
+
+function readFileTrimmed(filePath: string): string {
+    try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        return raw.trim();
+    } catch {
+        return "";
+    }
+}
+
+function splitMarkdownItems(markdown: string): string[] {
+    if (!markdown) return [];
+    if (markdown.trim() === "[]") return [];
+    const parts = markdown.split(/^\s*###\s+Item\s*$/m);
+    if (parts.length <= 1) return [];
+    return parts.slice(1).map((part) => part.trim()).filter(Boolean);
+}
+
+function parseMarkdownItemBlock(block: string): Record<string, unknown> | null {
+    if (!block) return null;
+    const lines = block
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    if (lines.length === 0) return null;
+    const item: Record<string, unknown> = {};
+    for (const line of lines) {
+        const match = line.match(/^([a-zA-Z_]+)\s*:\s*(.*)$/);
+        if (!match) continue;
+        const key = match[1];
+        const value = match[2] || "";
+        switch (key) {
+            case "item_type":
+            case "subject":
+            case "predicate":
+            case "object":
+            case "origin_type":
+            case "unit_id":
+            case "label":
+                item[key] = value;
+                break;
+            case "confidence": {
+                const parsed = Number.parseFloat(value);
+                if (!Number.isNaN(parsed)) {
+                    item[key] = parsed;
+                }
+                break;
+            }
+            case "evidence_span_ids": {
+                item[key] = value
+                    .split(/[,，\s]+/)
+                    .map((id) => id.trim())
+                    .filter(Boolean);
+                break;
+            }
+            case "qualifiers": {
+                item[key] = parseQualifiers(value);
+                break;
+            }
+            default:
+                item[key] = value;
+        }
+    }
+    if (!item.item_type || !item.subject || !item.predicate || !item.object) {
+        return null;
+    }
+    return item;
+}
+
+function parseQualifiers(value: string): Record<string, string> {
+    if (!value) return {};
+    if (value === "-" || value === "none" || value === "null") return {};
+    const entries = value
+        .split(";")
+        .map((part) => part.trim())
+        .filter(Boolean);
+    const qualifiers: Record<string, string> = {};
+    for (const entry of entries) {
+        const [key, ...rest] = entry.split("=").map((part) => part.trim());
+        if (!key || rest.length === 0) continue;
+        qualifiers[key] = rest.join("=");
+    }
+    return qualifiers;
 }

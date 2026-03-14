@@ -19,7 +19,8 @@ export const MemoryConsolidateParams = Type.Object({
         Type.String({
             description:
                 "Optional command to run offline LLM IR extraction. " +
-                "Use {jobs} and {items} placeholders or rely on V8_IR_JOBS/V8_IR_ITEMS env vars.",
+                "Use {jobs}, {items_md}, {items_jsonl} placeholders (or {items} for md) " +
+                "or rely on V8_IR_JOBS/V8_IR_ITEMS_MD/V8_IR_ITEMS_JSONL env vars.",
         })
     ),
 });

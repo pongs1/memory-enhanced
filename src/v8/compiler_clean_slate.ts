@@ -41,10 +41,16 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const llmStatus = maybeRunIrLlm({
         command: options?.llmCommand,
         jobsPath: store.irLlmJobs,
-        itemsPath: store.irLlmItems,
+        itemsMdPath: store.irLlmItemsMd,
+        itemsJsonlPath: store.irLlmItems,
         timeoutMs: options?.llmCommandTimeoutMs,
     });
-    const llmItems = loadLlmIrItems(store.irLlmItems, units, evidenceSpans, sourceRecords);
+    const llmItems = loadLlmIrItems(
+        { mdPath: store.irLlmItemsMd, jsonlPath: store.irLlmItems },
+        units,
+        evidenceSpans,
+        sourceRecords
+    );
     const ruleItems = extractMemoryItems(sourceRecords, units, evidenceSpans);
     const memoryItems = [...ruleItems, ...llmItems];
     const { nodes, edges } = materializeGraph(memoryItems, units, evidenceSpans);
@@ -84,14 +90,17 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 function maybeRunIrLlm(input: {
     command?: string;
     jobsPath: string;
-    itemsPath: string;
+    itemsMdPath: string;
+    itemsJsonlPath: string;
     timeoutMs?: number;
 }): string {
     const command = (input.command || "").trim();
     if (!command) return "skipped";
     const interpolated = command
         .replace(/\{jobs\}/g, input.jobsPath)
-        .replace(/\{items\}/g, input.itemsPath);
+        .replace(/\{items_md\}/g, input.itemsMdPath)
+        .replace(/\{items_jsonl\}/g, input.itemsJsonlPath)
+        .replace(/\{items\}/g, input.itemsMdPath);
     try {
         const result = spawnSync(interpolated, {
             shell: true,
@@ -100,7 +109,9 @@ function maybeRunIrLlm(input: {
             env: {
                 ...process.env,
                 V8_IR_JOBS: input.jobsPath,
-                V8_IR_ITEMS: input.itemsPath,
+                V8_IR_ITEMS: input.itemsMdPath,
+                V8_IR_ITEMS_MD: input.itemsMdPath,
+                V8_IR_ITEMS_JSONL: input.itemsJsonlPath,
             },
         });
         if (result.error) {

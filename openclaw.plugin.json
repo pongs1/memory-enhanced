@@ -55,7 +55,7 @@
       "v8IrLlmCommand": {
         "type": "string",
         "default": "",
-        "description": "Optional offline LLM command to generate ir_llm_items.jsonl. Use {jobs}/{items} placeholders or V8_IR_JOBS/V8_IR_ITEMS env vars."
+        "description": "Optional offline LLM command to generate ir_llm_items.md (then parsed to jsonl). Use {jobs}, {items_md}, {items_jsonl} (or {items} for md) or V8_IR_JOBS/V8_IR_ITEMS_MD/V8_IR_ITEMS_JSONL env vars."
       },
       "v8IrLlmTimeoutMs": {
         "type": "number",
