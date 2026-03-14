@@ -414,6 +414,13 @@ For unitization, V8 may assemble one high-density text view from:
 
 This assembled view is a unitization aid, not a replacement for the underlying structured records.
 
+Persistence (recommended):
+
+- persist the assembled view as a Markdown file so it can be replayed without recombining raw fragments
+- store under `raw/observations/assembled/` (e.g., `raw/observations/assembled/op_<tool_call_id>.md`)
+- this Markdown is the **full, natural-language, high-density** view after merging multi-source observations and removing low-value noise
+  - it is not an `event` summary and should not replace raw observation JSONL
+
 Session-grounded source shape (observed in real traces):
 
 - assistant message with `content[].type = toolCall`, carrying `id`, `name`, and `arguments`

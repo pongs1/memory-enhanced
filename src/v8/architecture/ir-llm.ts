@@ -246,10 +246,10 @@ function buildPrompt(input: {
         ? `Allowed relations (${unit.layer}): ${allowed.join(", ")}`
         : "";
     return [
-        "## IR 抽取任务（无背景）",
+        "## 结构化关系抽取任务",
         "",
-        "你没有任何项目背景信息。只能使用下面提供的 Unit 文本和 Evidence spans。",
-        "任务：从该 Unit 中抽取 IR 关系，输出 JSON 数组；若没有可抽取关系，输出 []。",
+        "你没有任何项目背景信息，只有下面这段清洗后的文本和证据片段。",
+        "任务：从该文本中抽取关系，输出 JSON 数组；若没有可抽取关系，输出 []。",
         "",
         "硬性规则：",
         "- 只能使用 Allowed relations 列表内的关系类型",
