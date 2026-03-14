@@ -33,6 +33,11 @@ interface EdgeCatalogFile {
     edges?: Array<Partial<V8EdgeCatalogEntry> & { type?: string }>;
 }
 
+const recallContextCache = new Map<
+    string,
+    { mtime: number; context: RecallAssemblyContext }
+>();
+
 function edgeCatalogPath(): string {
     const here = path.dirname(fileURLToPath(import.meta.url));
     return path.resolve(here, "../../schema/v8-edge-catalog.json");
@@ -76,6 +81,14 @@ function loadJsonl<T>(filePath: string): T[] {
     }
 }
 
+function readMtime(filePath: string): number {
+    try {
+        return fs.statSync(filePath).mtimeMs;
+    } catch {
+        return 0;
+    }
+}
+
 function sanitizeText(text: string, maxChars = 520): string {
     return (text || "")
         .replace(/<!--[\\s\\S]*?-->/g, " ")
@@ -113,6 +126,19 @@ function resolveEvidenceSpanIds(
 
 export function loadRecallAssemblyContext(workspace: string): RecallAssemblyContext {
     const store = v8StorePaths(workspace);
+    const mtime = Math.max(
+        readMtime(store.graphNodes),
+        readMtime(store.graphEdges),
+        readMtime(store.evidenceSpans),
+        readMtime(store.sourceRecords),
+        readMtime(store.recallBundles)
+    );
+    const cacheKey = store.rootDir;
+    const cached = recallContextCache.get(cacheKey);
+    if (cached && cached.mtime === mtime) {
+        return cached.context;
+    }
+
     const nodes = loadJsonl<V8GraphNode>(store.graphNodes);
     const evidence = loadJsonl<V8EvidenceSpan>(store.evidenceSpans);
     const sources = loadJsonl<V8SourceRecord>(store.sourceRecords);
@@ -130,7 +156,7 @@ export function loadRecallAssemblyContext(workspace: string): RecallAssemblyCont
     const edgeKinds = loadEdgeCatalog();
     const policyByKindMode = buildPolicyMap(loadEdgeRuntimePolicy());
 
-    return {
+    const context: RecallAssemblyContext = {
         nodesById: new Map(nodes.map((node) => [node.id, node])),
         evidenceById: new Map(evidence.map((span) => [span.id, span])),
         sourcesById: new Map(sources.map((src) => [src.id, src])),
@@ -140,6 +166,8 @@ export function loadRecallAssemblyContext(workspace: string): RecallAssemblyCont
         policyByKindMode,
         recallBundlesById: new Map(recallBundles.map((bundle) => [bundle.bundleId, bundle])),
     };
+    recallContextCache.set(cacheKey, { mtime, context });
+    return context;
 }
 
 export function assembleRecallPrompts(
