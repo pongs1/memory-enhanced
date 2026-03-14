@@ -28,8 +28,15 @@ interface LoadedGraphData {
     adjacency: Map<string, V8GraphEdge[]>;
     reverseAdjacency: Map<string, V8GraphEdge[]>;
     nodeTokens: Map<string, Set<string>>;
+    degree: Map<string, number>;
     edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>;
     policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
+}
+
+interface RuntimeEdge {
+    edge: V8GraphEdge;
+    weight: number;
+    direction: V8EdgeRuntimePolicyEntry["direction"];
 }
 
 function loadJsonl<T>(filePath: string): T[] {
@@ -164,6 +171,10 @@ export class V8GraphScanner {
     private readonly nodeCooldowns = new Map<string, number>();
     private readonly bundleCooldowns = new Map<string, number>();
     private readonly sceneBiases = new Map<string, number>();
+    private readonly runtimeEdgeCache = new Map<
+        V8RecallMode,
+        { outgoing: Map<string, RuntimeEdge[]>; incoming: Map<string, RuntimeEdge[]> }
+    >();
     private recentWindow = "";
     private charsSinceLastScan = 0;
 
@@ -211,11 +222,14 @@ export class V8GraphScanner {
 
         const adjacency = new Map<string, V8GraphEdge[]>();
         const reverseAdjacency = new Map<string, V8GraphEdge[]>();
+        const degree = new Map<string, number>();
         for (const edge of edges) {
             if (!adjacency.has(edge.src)) adjacency.set(edge.src, []);
             adjacency.get(edge.src)!.push(edge);
             if (!reverseAdjacency.has(edge.dst)) reverseAdjacency.set(edge.dst, []);
             reverseAdjacency.get(edge.dst)!.push(edge);
+            degree.set(edge.src, (degree.get(edge.src) || 0) + 1);
+            degree.set(edge.dst, (degree.get(edge.dst) || 0) + 1);
         }
 
         const edgeKinds = loadEdgeCatalog();
@@ -227,9 +241,52 @@ export class V8GraphScanner {
             adjacency,
             reverseAdjacency,
             nodeTokens,
+            degree,
             edgeKinds,
             policyByKindMode,
         };
+    }
+
+    private getRuntimeEdges(mode: V8RecallMode) {
+        const cached = this.runtimeEdgeCache.get(mode);
+        if (cached) return cached;
+
+        const outgoing = new Map<string, RuntimeEdge[]>();
+        const incoming = new Map<string, RuntimeEdge[]>();
+
+        for (const edge of this.graph.edges) {
+            const kind = this.graph.edgeKinds.get(edge.type) || "semantic";
+            const policy = this.graph.policyByKindMode.get(policyKey(kind, mode));
+            if (!policy || policy.role !== "spread") {
+                continue;
+            }
+            const weight = clamp01(edge.confidence ?? 0.6) * policy.gain;
+            if (weight <= 0) continue;
+            const entry: RuntimeEdge = {
+                edge,
+                weight,
+                direction: policy.direction,
+            };
+            if (!outgoing.has(edge.src)) outgoing.set(edge.src, []);
+            outgoing.get(edge.src)!.push(entry);
+            if (!incoming.has(edge.dst)) incoming.set(edge.dst, []);
+            incoming.get(edge.dst)!.push(entry);
+        }
+
+        const limitEdges = (bucket: Map<string, RuntimeEdge[]>) => {
+            if (this.config.topKEdges <= 0) return;
+            for (const [nodeId, edges] of bucket.entries()) {
+                edges.sort((a, b) => b.weight - a.weight);
+                bucket.set(nodeId, edges.slice(0, this.config.topKEdges));
+            }
+        };
+
+        limitEdges(outgoing);
+        limitEdges(incoming);
+
+        const result = { outgoing, incoming };
+        this.runtimeEdgeCache.set(mode, result);
+        return result;
     }
 
     public refreshScene(signals: V8SceneSignal[], anchors: V8ControlAnchors): void {
@@ -398,39 +455,43 @@ export class V8GraphScanner {
     private spreadActivation(modeOverride?: V8RecallMode): void {
         const mode = modeOverride || this.mode;
         const nextEnergy = new Map<string, number>();
-        const degree = new Map<string, number>();
 
-        for (const edge of this.graph.edges) {
-            degree.set(edge.src, (degree.get(edge.src) || 0) + 1);
-            degree.set(edge.dst, (degree.get(edge.dst) || 0) + 1);
-        }
+        const degree = this.graph.degree;
+        const { outgoing, incoming } = this.getRuntimeEdges(mode);
 
-        for (const edge of this.graph.edges) {
-            const kind = this.graph.edgeKinds.get(edge.type) || "semantic";
-            const policy =
-                this.graph.policyByKindMode.get(policyKey(kind, mode));
-            if (!policy || policy.role !== "spread") {
-                continue;
+        for (const [nodeId, energy] of this.activations.entries()) {
+            if (energy <= 0.05) continue;
+            const nodePenalty = Math.pow(
+                Math.max(1, degree.get(nodeId) || 1),
+                this.config.hubPenaltyPower
+            );
+
+            const outEdges = outgoing.get(nodeId) || [];
+            for (const entry of outEdges) {
+                const canForward =
+                    entry.direction === "bidirectional" || entry.direction === "up";
+                if (!canForward) continue;
+                const transfer =
+                    (energy * entry.weight * this.config.forwardGain) / nodePenalty;
+                if (transfer <= 0) continue;
+                nextEnergy.set(
+                    entry.edge.dst,
+                    (nextEnergy.get(entry.edge.dst) || 0) + transfer
+                );
             }
 
-            const weight = clamp01(edge.confidence ?? 0.6) * policy.gain;
-
-            const srcEnergy = this.activations.get(edge.src) || 0;
-            const dstEnergy = this.activations.get(edge.dst) || 0;
-
-            const srcPenalty = Math.pow(Math.max(1, degree.get(edge.src) || 1), this.config.hubPenaltyPower);
-            const dstPenalty = Math.pow(Math.max(1, degree.get(edge.dst) || 1), this.config.hubPenaltyPower);
-
-            const canForward = policy.direction === "bidirectional" || policy.direction === "up";
-            const canReverse = policy.direction === "bidirectional" || policy.direction === "down";
-
-            if (canForward && srcEnergy > 0.05) {
-                const transfer = (srcEnergy * weight * this.config.forwardGain) / srcPenalty;
-                nextEnergy.set(edge.dst, (nextEnergy.get(edge.dst) || 0) + transfer);
-            }
-            if (canReverse && dstEnergy > 0.05) {
-                const transfer = (dstEnergy * weight * this.config.reverseGain) / dstPenalty;
-                nextEnergy.set(edge.src, (nextEnergy.get(edge.src) || 0) + transfer);
+            const inEdges = incoming.get(nodeId) || [];
+            for (const entry of inEdges) {
+                const canReverse =
+                    entry.direction === "bidirectional" || entry.direction === "down";
+                if (!canReverse) continue;
+                const transfer =
+                    (energy * entry.weight * this.config.reverseGain) / nodePenalty;
+                if (transfer <= 0) continue;
+                nextEnergy.set(
+                    entry.edge.src,
+                    (nextEnergy.get(entry.edge.src) || 0) + transfer
+                );
             }
         }
 
