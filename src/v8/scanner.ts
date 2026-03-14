@@ -255,6 +255,13 @@ export class V8GraphScanner {
         const incoming = new Map<string, RuntimeEdge[]>();
 
         for (const edge of this.graph.edges) {
+            if (
+                edge.state?.validity === "superseded" &&
+                mode !== "trajectory" &&
+                mode !== "audit"
+            ) {
+                continue;
+            }
             const kind = this.graph.edgeKinds.get(edge.type) || "semantic";
             const policy = this.graph.policyByKindMode.get(policyKey(kind, mode));
             if (!policy || policy.role !== "spread") {
@@ -308,6 +315,9 @@ export class V8GraphScanner {
         const nextBiases = new Map<string, number>();
 
         for (const [nodeId, tokens] of this.graph.nodeTokens.entries()) {
+            if (this.isNodeSuppressed(nodeId, this.mode)) {
+                continue;
+            }
             const overlap = overlapScore(signalTokens, tokens);
             if (overlap >= this.config.sceneOverlapThreshold) {
                 nextBiases.set(nodeId, overlap * this.config.sceneSignalGain);
@@ -327,6 +337,9 @@ export class V8GraphScanner {
 
         const tokens = new Set(tokenize(prompt));
         for (const [nodeId, nodeTokens] of this.graph.nodeTokens.entries()) {
+            if (this.isNodeSuppressed(nodeId, this.mode)) {
+                continue;
+            }
             const overlap = overlapScore(tokens, nodeTokens);
             if (overlap <= 0) continue;
             const bias = this.sceneBiases.get(nodeId) || 0;
@@ -354,6 +367,9 @@ export class V8GraphScanner {
 
         const tokens = new Set(tokenize(this.recentWindow));
         for (const [nodeId, nodeTokens] of this.graph.nodeTokens.entries()) {
+            if (this.isNodeSuppressed(nodeId, this.mode)) {
+                continue;
+            }
             const overlap = overlapScore(tokens, nodeTokens);
             if (overlap <= 0) continue;
             const bias = this.sceneBiases.get(nodeId) || 0;
@@ -371,6 +387,7 @@ export class V8GraphScanner {
             if (!tier) continue;
             const cooldownUntil = this.nodeCooldowns.get(nodeId) || 0;
             if (cooldownUntil > now) continue;
+            if (this.isNodeSuppressed(nodeId, this.mode)) continue;
 
             const node = this.graph.nodesById.get(nodeId);
             if (!node) continue;
@@ -396,6 +413,9 @@ export class V8GraphScanner {
             this.spreadActivation("oblique");
             const obliqueCandidates: V8ActivatedBundle[] = [];
             for (const [nodeId, energy] of this.activations.entries()) {
+                if (this.isNodeSuppressed(nodeId, "oblique")) {
+                    continue;
+                }
                 if (energy < this.config.secondWaveThreshold) continue;
                 const cooldownUntil = this.nodeCooldowns.get(nodeId) || 0;
                 if (cooldownUntil > now) continue;
@@ -460,6 +480,9 @@ export class V8GraphScanner {
         const { outgoing, incoming } = this.getRuntimeEdges(mode);
 
         for (const [nodeId, energy] of this.activations.entries()) {
+            if (this.isNodeSuppressed(nodeId, mode)) {
+                continue;
+            }
             if (energy <= 0.05) continue;
             const nodePenalty = Math.pow(
                 Math.max(1, degree.get(nodeId) || 1),
@@ -471,6 +494,9 @@ export class V8GraphScanner {
                 const canForward =
                     entry.direction === "bidirectional" || entry.direction === "up";
                 if (!canForward) continue;
+                if (this.isNodeSuppressed(entry.edge.dst, mode)) {
+                    continue;
+                }
                 const transfer =
                     (energy * entry.weight * this.config.forwardGain) / nodePenalty;
                 if (transfer <= 0) continue;
@@ -485,6 +511,9 @@ export class V8GraphScanner {
                 const canReverse =
                     entry.direction === "bidirectional" || entry.direction === "down";
                 if (!canReverse) continue;
+                if (this.isNodeSuppressed(entry.edge.src, mode)) {
+                    continue;
+                }
                 const transfer =
                     (energy * entry.weight * this.config.reverseGain) / nodePenalty;
                 if (transfer <= 0) continue;
@@ -498,5 +527,14 @@ export class V8GraphScanner {
         for (const [nodeId, energy] of nextEnergy.entries()) {
             this.activate(nodeId, energy);
         }
+    }
+
+    private isNodeSuppressed(nodeId: string, mode: V8RecallMode): boolean {
+        if (mode === "trajectory" || mode === "audit") {
+            return false;
+        }
+        const node = this.graph.nodesById.get(nodeId);
+        if (!node) return false;
+        return node.state?.validity === "superseded";
     }
 }
