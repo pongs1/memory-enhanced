@@ -7,11 +7,11 @@ import {
 import {
     normalizeSessionMessages,
     type RawSessionMessage,
-} from "./architecture/source-normalizer.js";
+} from "./architecture/narrative-normalizer.js";
 import { loadResolvedToolCleaningProfiles } from "./architecture/tool-cleaning-profiles.js";
 import { checkToolCatalogAgainstRules } from "./architecture/tool-catalog-check.js";
-import { loadNarrativeSourceRecords } from "./architecture/narrative-source.js";
-import { unitizeSourceRecords } from "./architecture/unitizer.js";
+import { loadNarrativeRecords } from "./architecture/narrative-source.js";
+import { unitizeNarrativeRecords } from "./architecture/unitizer.js";
 import { extractEvidenceSpans } from "./architecture/evidence.js";
 import { extractMemoryItems } from "./architecture/ir-extractor.js";
 import { buildLlmIrJobs, loadLlmIrItems, writeIrLlmJobs } from "./architecture/ir-llm.js";
@@ -19,9 +19,10 @@ import { materializeGraph } from "./architecture/graph-materializer.js";
 import { buildRuntimeProjections } from "./architecture/runtime-projection.js";
 import { readJsonl, writeJsonl } from "./architecture/io.js";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { V8SourceRecord, V8Unit } from "./types_v8.js";
+import type { V8NarrativeRecord, V8Unit } from "./types_v8.js";
 
 export interface CleanSlateBuildOptions {
     workspace?: string;
@@ -50,20 +51,20 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         profiles: toolCleaningProfiles,
     });
 
-    const traceSourceRecords: V8SourceRecord[] = [];
-    const linkedSourceRecords: V8SourceRecord[] = [];
+    const traceNarrativeRecords: V8NarrativeRecord[] = [];
+    const linkedNarrativeRecords: V8NarrativeRecord[] = [];
     for (const group of traceGroups) {
         const baseRecords = normalizeSessionMessages(group.messages, {
             sourceRefPrefix: group.sourceRefPrefix,
             workspace,
             toolCleaningProfiles,
         });
-        traceSourceRecords.push(...baseRecords);
+        traceNarrativeRecords.push(...baseRecords);
 
         const parentSessionId = deriveSessionIdFromSourceRef(group.sourceRefPrefix);
         const links = extractSessionLinksFromMessages(group.messages);
         if (links.length && sessionTraceDir) {
-            linkedSourceRecords.push(
+            linkedNarrativeRecords.push(
                 ...loadLinkedSessionRecords({
                     links,
                     parentSessionId,
@@ -74,18 +75,18 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             );
         }
     }
-    const traceRecords = [...traceSourceRecords, ...linkedSourceRecords];
+    const traceRecords = [...traceNarrativeRecords, ...linkedNarrativeRecords];
     persistAssembledObservationMarkdown(store.rawDir, traceRecords);
 
-    const narrativeSourceRecords = loadNarrativeSourceRecords(store.rawDir);
-    const sourceRecords = mergeNarrativeCoverage(
-        narrativeSourceRecords,
+    const narrativeSeedRecords = loadNarrativeRecords(store.rawDir);
+    const narrativeRecords = mergeNarrativeCoverage(
+        narrativeSeedRecords,
         traceRecords
     );
-    const units = unitizeSourceRecords(sourceRecords);
-    persistNarrativeUnitPreview(store.rawDir, units, sourceRecords);
-    const evidenceSpans = extractEvidenceSpans(units, sourceRecords);
-    const llmJobs = buildLlmIrJobs(units, evidenceSpans, sourceRecords);
+    const units = unitizeNarrativeRecords(narrativeRecords);
+    persistNarrativeUnitPreview(store.rawDir, units, narrativeRecords);
+    const evidenceSpans = extractEvidenceSpans(units, narrativeRecords);
+    const llmJobs = buildLlmIrJobs(units, evidenceSpans, narrativeRecords);
     writeIrLlmJobs(store.irLlmJobs, llmJobs);
     const llmStatus = maybeRunIrLlm({
         command: options?.llmCommand,
@@ -98,19 +99,19 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         { mdPath: store.irLlmItemsMd, jsonlPath: store.irLlmItems },
         units,
         evidenceSpans,
-        sourceRecords
+        narrativeRecords
     );
-    const ruleItems = extractMemoryItems(sourceRecords, units, evidenceSpans);
+    const ruleItems = extractMemoryItems(narrativeRecords, units, evidenceSpans);
     const memoryItems = [...ruleItems, ...llmItems];
     const { nodes, edges } = materializeGraph(memoryItems, units, evidenceSpans);
     const projections = buildRuntimeProjections({
         nodes,
         edges,
         evidenceSpans,
-        sources: sourceRecords,
+        sources: narrativeRecords,
     });
 
-    writeJsonl(store.sourceRecords, sourceRecords);
+    writeJsonl(store.narrativeRecords, narrativeRecords);
     writeJsonl(store.units, units);
     writeJsonl(store.evidenceSpans, evidenceSpans);
     writeJsonl(store.memoryItems, memoryItems);
@@ -121,7 +122,7 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     writeJsonl(store.recallBundles, projections.recallBundles);
 
     return {
-        sourceRecords,
+        narrativeRecords,
         units,
         evidenceSpans,
         memoryItems,
@@ -137,7 +138,7 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     };
 }
 
-function persistAssembledObservationMarkdown(rawDir: string, records: V8SourceRecord[]): void {
+function persistAssembledObservationMarkdown(rawDir: string, records: V8NarrativeRecord[]): void {
     if (!records.length) return;
     const outDir = path.join(rawDir, "observations", "assembled");
     fs.mkdirSync(outDir, { recursive: true });
@@ -316,10 +317,10 @@ function loadLinkedSessionRecords(input: {
     sessionTraceDir: string;
     toolCleaningProfiles: ReturnType<typeof loadResolvedToolCleaningProfiles>;
     workspace: string;
-}): V8SourceRecord[] {
+}): V8NarrativeRecord[] {
     const agentsRoot = resolveAgentsRoot(input.sessionTraceDir);
     if (!agentsRoot) return [];
-    const records: V8SourceRecord[] = [];
+    const records: V8NarrativeRecord[] = [];
     const sessionIndexCache = new Map<string, Map<string, string>>();
 
     for (const link of input.links) {
@@ -448,9 +449,9 @@ function deriveSessionIdFromSourceRef(sourceRefPrefix: string): string {
 }
 
 function mergeNarrativeCoverage(
-    narrativeRecords: V8SourceRecord[],
-    traceRecords: V8SourceRecord[]
-): V8SourceRecord[] {
+    narrativeRecords: V8NarrativeRecord[],
+    traceRecords: V8NarrativeRecord[]
+): V8NarrativeRecord[] {
     if (!traceRecords.length) return narrativeRecords;
     if (!narrativeRecords.length) {
         return traceRecords.map((record, idx) =>
@@ -479,27 +480,48 @@ function mergeNarrativeCoverage(
     return merged;
 }
 
-function buildCoverageKey(record: V8SourceRecord): string | null {
+function buildCoverageKey(record: V8NarrativeRecord): string | null {
     const sessionId = record.metadata?.sessionId || "default";
     const sourceCategory =
         record.metadata?.sourceCategory || inferSourceCategory(record);
     const sourceIndex =
         record.metadata?.sourceIndex || extractSourceIndexFromRef(record.sourceRef);
     if (sourceIndex) return `${sessionId}:${sourceCategory}:${sourceIndex}`;
+    const normalized = normalizeCoverageText(record, sourceCategory);
+    if (normalized) {
+        return `${sessionId}:${sourceCategory}:text:${hashText(normalized)}`;
+    }
     if (record.sourceRef) return `${sessionId}:${sourceCategory}:${record.sourceRef}`;
     return null;
 }
 
+function normalizeCoverageText(
+    record: V8NarrativeRecord,
+    sourceCategory: string
+): string | null {
+    let text = record.cleanText || record.rawText || "";
+    if (!text) return null;
+    if (sourceCategory === "operation") {
+        text = stripOperationHeading(text);
+    }
+    const normalized = text.replace(/\s+/g, " ").trim();
+    return normalized || null;
+}
+
+function hashText(text: string): string {
+    return createHash("sha1").update(text).digest("hex").slice(0, 16);
+}
+
 function convertTraceToNarrative(
-    record: V8SourceRecord,
+    record: V8NarrativeRecord,
     ordinal: number
-): V8SourceRecord {
+): V8NarrativeRecord {
     const sessionId = record.metadata?.sessionId || "default";
     const sourceCategory =
         record.metadata?.sourceCategory || inferSourceCategory(record);
     const sourceIndex =
         record.metadata?.sourceIndex || extractSourceIndexFromRef(record.sourceRef);
-    const id = `src_${sessionId}_narr_x${ordinal}`;
+    const id = `narr_${sessionId}_x${ordinal}`;
     const rawText = record.cleanText || record.rawText || "";
     const metadata: Record<string, string> = {
         sessionId,
@@ -542,7 +564,7 @@ function extractSourceIndexFromRef(sourceRef: string): string | undefined {
     return undefined;
 }
 
-function inferSourceCategory(record: V8SourceRecord): "conversation" | "operation" {
+function inferSourceCategory(record: V8NarrativeRecord): "conversation" | "operation" {
     const ref = record.sourceRef || "";
     if (ref.includes("#op-")) return "operation";
     const label = record.metadata?.narrativeLabel || "";
@@ -554,7 +576,7 @@ function sanitizeFileName(value: string): string {
     return value.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
-function persistOperationMarkdown(outDir: string, records: V8SourceRecord[]): void {
+function persistOperationMarkdown(outDir: string, records: V8NarrativeRecord[]): void {
     for (const record of records) {
         if (record.metadata?.sourceCategory !== "operation") continue;
         const toolCallId = record.metadata?.toolCallId;
@@ -572,7 +594,7 @@ interface NarrativeEntry {
     sessionId: string;
     sourceRef: string;
     sourceCategory: string;
-    speaker: V8SourceRecord["speaker"];
+    speaker: V8NarrativeRecord["speaker"];
     timestamp: string | null;
     text: string;
     toolName?: string;
@@ -584,7 +606,7 @@ interface NarrativeEntry {
     originLabel?: string;
 }
 
-function persistSessionNarratives(outDir: string, records: V8SourceRecord[]): void {
+function persistSessionNarratives(outDir: string, records: V8NarrativeRecord[]): void {
     const sessions = new Map<string, NarrativeEntry[]>();
     for (const record of records) {
         if (record.sourceType !== "session_trace") continue;
@@ -683,14 +705,15 @@ function renderSessionNarrative(
     const lines: string[] = [];
     lines.push("# Session Narrative");
     lines.push("");
-    lines.push(`Session: \`${sessionId}\``);
-    lines.push("");
     lines.push("## Timeline");
     lines.push("");
     for (const entry of entries) {
-        const label = buildEntryLabel(entry);
         const speakerLabel = formatSpeakerLabel(entry);
-        const header = label ? `### [${label}] ${speakerLabel}` : `### ${speakerLabel}`;
+        const metaParts = buildEntryMeta(entry);
+        const header =
+            metaParts.length > 0
+                ? `### ${speakerLabel} (${metaParts.join(" · ")})`
+                : `### ${speakerLabel}`;
         lines.push(header.trim());
         lines.push(entry.text);
         lines.push("");
@@ -701,21 +724,21 @@ function renderSessionNarrative(
 function persistNarrativeUnitPreview(
     rawDir: string,
     units: V8Unit[],
-    sources: V8SourceRecord[]
+    sources: V8NarrativeRecord[]
 ): void {
     const sourcesById = new Map(sources.map((source) => [source.id, source]));
     const sessions = new Map<
         string,
-        Map<string, { source: V8SourceRecord; units: V8Unit[] }>
+        Map<string, { source: V8NarrativeRecord; units: V8Unit[] }>
     >();
 
     for (const unit of units) {
-        const source = sourcesById.get(unit.sourceRecordId);
+        const source = sourcesById.get(unit.narrativeRecordId);
         if (!source || source.sourceType !== "session_narrative") continue;
         const sessionId = source.metadata?.sessionId || "default";
         const sessionBucket =
             sessions.get(sessionId) ||
-            new Map<string, { source: V8SourceRecord; units: V8Unit[] }>();
+            new Map<string, { source: V8NarrativeRecord; units: V8Unit[] }>();
         const recordBucket =
             sessionBucket.get(source.id) ||
             { source, units: [] as V8Unit[] };
@@ -805,43 +828,23 @@ function persistNarrativeUnitPreview(
     }
 }
 
-function buildEntryLabel(entry: NarrativeEntry): string | null {
+function buildEntryMeta(entry: NarrativeEntry): string[] {
     const parts: string[] = [];
     const originLabel = formatOriginLabel(entry);
     if (originLabel) parts.push(originLabel);
-    const refLabel = buildSourceLabel(entry);
-    if (refLabel) parts.push(refLabel);
     const shortTs = formatTimestampShort(entry.timestamp);
     if (shortTs) parts.push(shortTs);
-    return parts.length ? parts.join(" | ") : null;
-}
-
-function buildSourceLabel(entry: NarrativeEntry): string | null {
-    if (entry.sourceRef) {
-        const opMatch = entry.sourceRef.match(/#op-(\d+)/);
-        if (opMatch) return `op-${opMatch[1]}`;
-        const msgMatch = entry.sourceRef.match(/#(\d+)/);
-        if (msgMatch) return `#${msgMatch[1]}`;
-    }
-    if (typeof entry.sourceIndex === "number") {
-        return `#${entry.sourceIndex}`;
-    }
-    return null;
+    return parts;
 }
 
 function formatOriginLabel(entry: NarrativeEntry): string | null {
     const originKind = entry.originKind?.trim();
-    const originKey = entry.originSessionKey?.trim();
     const originLabel = entry.originLabel?.trim();
-    if (!originKind && !originKey && !originLabel) return null;
+    if (!originKind && !originLabel && !entry.originSessionKey) return null;
 
-    const kind = originKind || inferOriginKind(originKey);
+    const kind = originKind || inferOriginKind(entry.originSessionKey);
     if (originLabel) {
-        return kind ? `${kind}:${originLabel}` : originLabel;
-    }
-    if (originKey) {
-        const shortKey = formatSessionKeyShort(originKey);
-        return kind ? `${kind}:${shortKey}` : shortKey;
+        return kind ? `${kind} ${originLabel}` : originLabel;
     }
     return kind || null;
 }
@@ -853,17 +856,6 @@ function inferOriginKind(originKey?: string | null): string | null {
     return null;
 }
 
-function formatSessionKeyShort(key: string): string {
-    const match = key.match(/^agent:([^:]+):([^:]+):(.+)$/i);
-    if (match) {
-        const agentId = match[1];
-        const kind = match[2];
-        const rest = match[3];
-        const suffix = rest.length > 8 ? rest.slice(0, 8) : rest;
-        return `${agentId}:${kind}:${suffix}`;
-    }
-    return key.length > 20 ? key.slice(0, 20) : key;
-}
 
 function formatSpeakerLabel(entry: NarrativeEntry): string {
     if (entry.sourceCategory === "operation") {

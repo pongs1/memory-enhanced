@@ -323,7 +323,7 @@ export interface V8EdgeRuntimePolicyEntry {
     notes?: string;
 }
 
-export interface V8SourceRecord {
+export interface V8NarrativeRecord {
     id: string;
     sourceClass: V8SourceClass;
     sourceType: V8SourceType;
@@ -345,7 +345,7 @@ export interface V8SourceRecord {
 
 export interface V8Unit {
     id: string;
-    sourceRecordId: string;
+    narrativeRecordId: string;
     layer: V8GraphLayer;
     ordinal: number;
     charStart: number;
@@ -357,7 +357,7 @@ export interface V8Unit {
 
 export interface V8EvidenceSpan {
     id: string;
-    sourceRecordId: string;
+    narrativeRecordId: string;
     unitId: string;
     charStart: number;
     charEnd: number;
@@ -378,7 +378,7 @@ export interface V8EdgeQualifiers {
 
 export interface V8MemoryItem {
     id: string;
-    sourceRecordId: string;
+    narrativeRecordId: string;
     sourceRef: string;
     itemType: V8MemoryItemType;
     originType: V8MemoryOriginType;

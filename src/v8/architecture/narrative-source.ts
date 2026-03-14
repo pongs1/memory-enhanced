@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { V8SourceRecord } from "../types_v8.js";
+import type { V8NarrativeRecord } from "../types_v8.js";
 
 interface NarrativeEntry {
     label?: string | null;
@@ -9,20 +9,20 @@ interface NarrativeEntry {
     timestampRaw?: string | null;
 }
 
-export function loadNarrativeSourceRecords(rawDir: string): V8SourceRecord[] {
+export function loadNarrativeRecords(rawDir: string): V8NarrativeRecord[] {
     const assembledDir = path.join(rawDir, "observations", "assembled");
     if (!fs.existsSync(assembledDir)) return [];
     const files = fs
         .readdirSync(assembledDir)
         .filter((name) => name.endsWith("_narrative.md"));
-    const records: V8SourceRecord[] = [];
+    const records: V8NarrativeRecord[] = [];
     for (const file of files) {
         const fullPath = path.join(assembledDir, file);
         const content = fs.readFileSync(fullPath, "utf-8");
         const sessionId = parseSessionId(content, file);
         const entries = parseNarrativeEntries(content);
         entries.forEach((entry, idx) => {
-            const id = `src_${sessionId}_narr_${idx + 1}`;
+            const id = `narr_${sessionId}_${idx + 1}`;
             const sourceRef = `${fullPath}#entry-${idx + 1}`;
             const rawText = entry.text.trim();
             if (!rawText) return;
@@ -121,6 +121,16 @@ function parseHeader(value: string): {
             };
         }
     }
+    const parenIndex = trimmed.indexOf("(");
+    if (parenIndex > 0 && trimmed.endsWith(")")) {
+        const speaker = trimmed.slice(0, parenIndex).trim();
+        const meta = trimmed.slice(parenIndex + 1, -1).trim();
+        return {
+            label: meta || null,
+            speaker: speaker || "unknown",
+            timestamp: extractTimestamp(meta),
+        };
+    }
     return { speaker: trimmed || "unknown" };
 }
 
@@ -157,7 +167,7 @@ function detectSourceCategory(
     return "conversation";
 }
 
-function normalizeSpeaker(raw?: string): V8SourceRecord["speaker"] {
+function normalizeSpeaker(raw?: string): V8NarrativeRecord["speaker"] {
     if (!raw) return null;
     const lower = raw.toLowerCase();
     if (lower.includes("user")) return "user";
@@ -172,7 +182,7 @@ function normalizeTimestamp(value?: string | null): string | null {
     return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
-function detectLanguage(text: string): V8SourceRecord["language"] {
+function detectLanguage(text: string): V8NarrativeRecord["language"] {
     if (!text) return "unknown";
     const zhCount = (text.match(/[\u4e00-\u9fff]/g) || []).length;
     const enCount = (text.match(/[A-Za-z]/g) || []).length;

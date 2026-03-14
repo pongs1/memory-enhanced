@@ -21,7 +21,7 @@ import type {
     V8ScanResult,
     V8ScannerConfig,
     V8SceneSignal,
-    V8SourceRecord,
+    V8NarrativeRecord,
 } from "./types_v8.js";
 
 interface EdgeCatalogFile {
@@ -224,7 +224,7 @@ export class V8GraphScanner {
         const nodes = loadJsonl<V8GraphNode>(store.graphNodes);
         const graphEdges = loadJsonl<V8GraphEdge>(store.graphEdges);
         const evidenceSpans = loadJsonl<V8EvidenceSpan>(store.evidenceSpans);
-        const sources = loadJsonl<V8SourceRecord>(store.sourceRecords);
+        const sources = loadJsonl<V8NarrativeRecord>(store.narrativeRecords);
         const ignitionNodes = fs.existsSync(store.ignitionNodes)
             ? loadJsonl<V8IgnitionNodeProjection>(store.ignitionNodes)
             : [];
@@ -290,7 +290,7 @@ export class V8GraphScanner {
             for (const spanId of node.evidenceSpanIds || []) {
                 const span = spanById.get(spanId);
                 if (!span) continue;
-                const source = sourceById.get(span.sourceRecordId);
+                const source = sourceById.get(span.narrativeRecordId);
                 if (!source) continue;
                 if (source.sourceType === "skill_md") {
                     hasProcedural = true;

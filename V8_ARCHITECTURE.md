@@ -87,7 +87,7 @@ V8 keeps `L0 Control` and rewrites the rest around a shared ingestion model.
 |---|---|---|---|
 | `L0 Control` | active task, priority, handoff, resume | `.memory/active/focus_stack.json` | preserved as-is |
 | `L1 Raw Store` | raw evidence substrate | session traces, `memory/YYYY-MM-DD.md` | authoritative evidence |
-| `L2 Source Normalization` | classify and clean raw/curated/legacy inputs | normalized source records | strips old prompt noise and legacy tags |
+| `L2 Narrative Normalization` | classify and clean raw/curated/legacy inputs | normalized narrative records | strips old prompt noise and legacy tags |
 | `L3 Unit and Evidence` | segment text into `micro/meso/macro` units and evidence spans | unit/span stores | offsets are first-class |
 | `L4 Extraction IR` | unit-aligned bounded IR | item store | direct, evidence-backed structured output from units |
 | `L5 Normalization and Consolidation` | canonicalize and merge IR into durable memory objects | offline pipeline | alias merge, evidence merge, graph upsert prep |
@@ -280,7 +280,7 @@ Every high-level memory object must remain traceable to raw evidence.
 
 The path is:
 
-`graph node/edge -> memory item -> evidence span -> unit -> source record -> raw text`
+`graph node/edge -> memory item -> evidence span -> unit -> narrative record -> raw text`
 
 This gives V8 three recovery modes:
 
@@ -893,7 +893,7 @@ The old V8 compiler path is effectively deprecated:
 
 The new target path is:
 
-- source adapters produce normalized source records
+- source adapters produce normalized narrative records
 - unitizers produce units and evidence spans
 - extractors produce memory items
 - graph materializer produces graph nodes and edges

@@ -4,7 +4,7 @@ import type {
     V8MemoryOriginType,
     V8EvidenceSpan,
     V8Unit,
-    V8SourceRecord,
+    V8NarrativeRecord,
 } from "../types_v8.js";
 
 export interface IrExtractionConfig {
@@ -25,7 +25,7 @@ const DECISION_PATTERNS = [/决定|改为|改成|采用|弃用|切换|选择/gi]
 const CONVERSATION_ACT_PATTERNS = [/更正|纠正|不是|不对|澄清|确认/gi];
 
 export function extractMemoryItems(
-    sources: V8SourceRecord[],
+    sources: V8NarrativeRecord[],
     units: V8Unit[],
     evidenceSpans: V8EvidenceSpan[],
     config?: IrExtractionConfig
@@ -39,7 +39,7 @@ export function extractMemoryItems(
     for (const span of evidenceSpans) {
         const unit = unitsById.get(span.unitId);
         if (!unit) continue;
-        const source = sourceById.get(unit.sourceRecordId);
+        const source = sourceById.get(unit.narrativeRecordId);
         const text = span.text || unit.text;
         const speaker = source?.speaker ?? "unknown";
         const sourceCategory = source?.metadata?.sourceCategory;
@@ -56,7 +56,7 @@ export function extractMemoryItems(
                     predicate: controlPredicate(controlType),
                     object: normalizeObject(text),
                     label: truncateLabel(text),
-                    sourceRecordId: unit.sourceRecordId,
+                    narrativeRecordId: unit.narrativeRecordId,
                     sourceRef: source?.sourceRef ?? "",
                     evidenceSpanIds: [span.id],
                     unitIds: [unit.id],
@@ -74,7 +74,7 @@ export function extractMemoryItems(
                 predicate: "summarizes",
                 object: truncateLabel(text),
                 label: truncateLabel(text),
-                sourceRecordId: unit.sourceRecordId,
+                narrativeRecordId: unit.narrativeRecordId,
                 sourceRef: source?.sourceRef ?? "",
                 evidenceSpanIds: [span.id],
                 unitIds: [unit.id],
@@ -94,7 +94,7 @@ function buildItem(input: {
     predicate: string;
     object: string;
     label: string;
-    sourceRecordId: string;
+    narrativeRecordId: string;
     sourceRef: string;
     evidenceSpanIds: string[];
     unitIds: string[];
@@ -103,7 +103,7 @@ function buildItem(input: {
     const now = new Date().toISOString();
     return {
         id: `mi_${now}_${Math.random().toString(36).slice(2, 8)}`,
-        sourceRecordId: input.sourceRecordId,
+        narrativeRecordId: input.narrativeRecordId,
         sourceRef: input.sourceRef,
         itemType: input.itemType,
         originType: input.originType,

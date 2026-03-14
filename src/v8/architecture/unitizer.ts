@@ -1,4 +1,4 @@
-import type { V8SourceRecord, V8Unit } from "../types_v8.js";
+import type { V8NarrativeRecord, V8Unit } from "../types_v8.js";
 
 export interface UnitizerConfig {
     microMaxChars?: number;
@@ -22,8 +22,8 @@ const DEFAULT_CONFIG: Required<UnitizerConfig> = {
     macroMaxChars: 12000,
 };
 
-export function unitizeSourceRecords(
-    records: V8SourceRecord[],
+export function unitizeNarrativeRecords(
+    records: V8NarrativeRecord[],
     config?: UnitizerConfig
 ): V8Unit[] {
     const cfg = { ...DEFAULT_CONFIG, ...config };
@@ -53,7 +53,7 @@ export function unitizeSourceRecords(
                 });
                 return {
                     id,
-                    sourceRecordId: record.id,
+                    narrativeRecordId: record.id,
                     layer: "meso",
                     ordinal: idx + 1,
                     charStart: range.rawStart,
@@ -85,7 +85,7 @@ export function unitizeSourceRecords(
                 );
                 microUnits.push({
                     id: `unit_${record.id}_micro_${meso.ordinal}_${idx + 1}`,
-                    sourceRecordId: record.id,
+                    narrativeRecordId: record.id,
                     layer: "micro",
                     ordinal: idx + 1,
                     charStart: range.rawStart,
@@ -214,7 +214,7 @@ function sliceByLength(text: string, maxChars: number): string[] {
 }
 
 function buildMacroUnits(
-    record: V8SourceRecord,
+    record: V8NarrativeRecord,
     mesoUnits: V8Unit[],
     cfg: Required<UnitizerConfig>
 ): V8Unit[] {
@@ -230,7 +230,7 @@ function buildMacroUnits(
         const text = current.map((u) => u.text).join("\n\n");
         macroUnits.push({
             id,
-            sourceRecordId: record.id,
+            narrativeRecordId: record.id,
             layer: "macro",
             ordinal: macroUnits.length + 1,
             charStart: currentStart,
@@ -277,7 +277,7 @@ function buildMacroUnits(
 }
 
 function mapCleanRangeToRaw(
-    cleanMap: V8SourceRecord["cleanMap"],
+    cleanMap: V8NarrativeRecord["cleanMap"],
     cleanStart: number,
     cleanEnd: number
 ): { rawStart: number; rawEnd: number } {

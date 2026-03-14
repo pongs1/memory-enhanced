@@ -6,7 +6,7 @@ export interface V8StorePaths {
     rawDir: string;
     runtimeDir: string;
     sessionsDir: string;
-    sourceRecords: string;
+    narrativeRecords: string;
     units: string;
     evidenceSpans: string;
     memoryItems: string;
@@ -37,7 +37,7 @@ export function v8StorePaths(workspace: string): V8StorePaths {
         rawDir,
         runtimeDir,
         sessionsDir,
-        sourceRecords: path.join(rootDir, "source_records.jsonl"),
+        narrativeRecords: path.join(rootDir, "narrative_records.jsonl"),
         units: path.join(rootDir, "units.jsonl"),
         evidenceSpans: path.join(rootDir, "evidence_spans.jsonl"),
         memoryItems: path.join(rootDir, "memory_items.jsonl"),

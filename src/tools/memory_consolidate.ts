@@ -68,7 +68,7 @@ export async function executeMemoryConsolidate(
         output.toolCatalogCheck?.promptPath
             ? `toolCatalogPrompt=${output.toolCatalogCheck.promptPath}`
             : null,
-        `sourceRecords=${output.sourceRecords.length}`,
+        `narrativeRecords=${output.narrativeRecords.length}`,
         `units=${output.units.length}`,
         `evidenceSpans=${output.evidenceSpans.length}`,
         `memoryItems=${output.memoryItems.length}`,

@@ -36,7 +36,7 @@ The new V8 contracts are layered.
 
 These represent normalized inputs before any semantic extraction:
 
-- `V8SourceRecord`
+- `V8NarrativeRecord`
 - `V8SourceClass`
 - `V8SourceType`
 
@@ -76,7 +76,7 @@ The old `bundle/node/edge` layer can remain during migration, but it is no longe
 ```text
 src/v8/
   architecture/
-    source-normalizer.ts
+    narrative-normalizer.ts
     unitizer.ts
     evidence.ts
     ir-extractor.ts
@@ -102,7 +102,7 @@ src/v8/
 ```
 
 This layout makes the layering explicit.
-The adapters produce normalized source records.
+The adapters produce normalized narrative records.
 The architecture modules operate on shared contracts.
 
 ## 4. Core Literal Types
@@ -601,10 +601,10 @@ Detailed horizontal edge glossary:
 
 The ignition path also needs stable runtime literals and contracts.
 
-## 5. Source Record Contract
+## 5. Narrative Record Contract
 
 ```ts
-export interface V8SourceRecord {
+export interface V8NarrativeRecord {
   id: string;
   sourceClass: V8SourceClass;
   sourceType: V8SourceType;
@@ -637,7 +637,7 @@ Rules:
 ```ts
 export interface V8Unit {
   id: string;
-  sourceRecordId: string;
+  narrativeRecordId: string;
   layer: V8GraphLayer;
   ordinal: number;
   charStart: number;
@@ -649,7 +649,7 @@ export interface V8Unit {
 
 export interface V8EvidenceSpan {
   id: string;
-  sourceRecordId: string;
+  narrativeRecordId: string;
   unitId: string;
   charStart: number;
   charEnd: number;
@@ -661,7 +661,7 @@ export interface V8EvidenceSpan {
 
 Rules:
 
-- offsets always point back to source record text
+- offsets always point back to narrative record text
 - `charStart` and `charEnd` are traceability fields, not the primary unitization policy
 - units should be cut by semantic and discourse boundaries first, with size limits only as fallback guardrails
 - evidence spans may overlap
@@ -682,7 +682,7 @@ export interface V8EdgeQualifiers {
 
 export interface V8MemoryItem {
   id: string;
-  sourceRecordId: string;
+  narrativeRecordId: string;
   sourceRef: string;
   itemType: V8MemoryItemType;
   originType: V8MemoryOriginType;
@@ -958,7 +958,7 @@ Rules:
 - ignition is node-level, delivery is bundle-level
 - episodic activation must be gateable by day, episode, and source overlap
 - semantic and procedural bundles remain globally available
-- the scanner consumes ignition projections and recall bundle projections, not raw source records directly
+- the scanner consumes ignition projections and recall bundle projections, not raw narrative records directly
 - node cooldown and bundle cooldown are separate runtime controls
 - second-wave recall remains allowed after one propagation pass
 - tier is delivery policy, not graph ontology
@@ -978,7 +978,7 @@ The old compiler contracts are no longer the target design:
 
 The new boundary is:
 
-1. source adapters produce `V8SourceRecord[]`
+1. source adapters produce `V8NarrativeRecord[]`
 2. unitizer produces `V8Unit[]`
 3. evidence extractor produces `V8EvidenceSpan[]`
 4. IR extractor produces `V8MemoryItem[]`
@@ -1013,7 +1013,7 @@ If migration is required, the rewrite should happen in phases.
 
 ### Phase 2: normalize curated memory
 
-- adapt `knowledge_md` and `skill_md` into source records
+- adapt `knowledge_md` and `skill_md` into narrative records
 - strip legacy tags and scaffolding
 - preserve source anchors
 

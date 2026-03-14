@@ -9,7 +9,7 @@ import type {
     V8IgnitionEdgeProjection,
     V8IgnitionNodeProjection,
     V8RecallBundleProjection,
-    V8SourceRecord,
+    V8NarrativeRecord,
 } from "../types_v8.js";
 
 interface EdgeCatalogFile {
@@ -78,7 +78,7 @@ function toDayKey(timestamp: string | null): string | null {
 function classifyKind(
     spanIds: string[],
     spanById: Map<string, V8EvidenceSpan>,
-    sourceById: Map<string, V8SourceRecord>
+    sourceById: Map<string, V8NarrativeRecord>
 ): { kind: "episodic" | "semantic" | "procedural"; dayKey: string | null } {
     let hasProcedural = false;
     let hasCurated = false;
@@ -88,7 +88,7 @@ function classifyKind(
     for (const spanId of spanIds) {
         const span = spanById.get(spanId);
         if (!span) continue;
-        const source = sourceById.get(span.sourceRecordId);
+        const source = sourceById.get(span.narrativeRecordId);
         if (!source) continue;
         if (source.sourceType === "skill_md") {
             hasProcedural = true;
@@ -115,12 +115,12 @@ function classifyKind(
 function resolveSourceRef(
     spanIds: string[],
     spanById: Map<string, V8EvidenceSpan>,
-    sourceById: Map<string, V8SourceRecord>
+    sourceById: Map<string, V8NarrativeRecord>
 ): string | null {
     for (const spanId of spanIds) {
         const span = spanById.get(spanId);
         if (!span) continue;
-        const source = sourceById.get(span.sourceRecordId);
+        const source = sourceById.get(span.narrativeRecordId);
         if (source?.sourceRef) return source.sourceRef;
     }
     return null;
@@ -159,7 +159,7 @@ export function buildRuntimeProjections(input: {
     nodes: V8GraphNode[];
     edges: V8GraphEdge[];
     evidenceSpans: V8EvidenceSpan[];
-    sources: V8SourceRecord[];
+    sources: V8NarrativeRecord[];
 }): {
     ignitionNodes: V8IgnitionNodeProjection[];
     ignitionEdges: V8IgnitionEdgeProjection[];

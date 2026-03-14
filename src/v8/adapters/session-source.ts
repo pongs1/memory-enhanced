@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { readJsonl } from "../architecture/io.js";
-import type { RawSessionMessage } from "../architecture/source-normalizer.js";
+import type { RawSessionMessage } from "../architecture/narrative-normalizer.js";
 
 export interface SessionSourceOptions {
     sessionTraceDir?: string;

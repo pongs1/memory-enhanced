@@ -8,7 +8,7 @@ import type {
     V8GraphLayer,
     V8MemoryItem,
     V8MemoryItemType,
-    V8SourceRecord,
+    V8NarrativeRecord,
     V8Unit,
 } from "../types_v8.js";
 
@@ -16,7 +16,7 @@ export interface V8IrLlmJob {
     jobId: string;
     unitId: string;
     layer: V8GraphLayer;
-    sourceRecordId: string;
+    narrativeRecordId: string;
     sourceRef: string;
     speaker: string | null;
     language: string;
@@ -129,7 +129,7 @@ const { allowed: ALLOWED_PREDICATES, grouped: ALLOWED_GROUPS } = loadAllowedPred
 export function buildLlmIrJobs(
     units: V8Unit[],
     evidenceSpans: V8EvidenceSpan[],
-    sources: V8SourceRecord[]
+    sources: V8NarrativeRecord[]
 ): V8IrLlmJob[] {
     const spansByUnit = new Map<string, V8EvidenceSpan[]>();
     for (const span of evidenceSpans) {
@@ -146,7 +146,7 @@ export function buildLlmIrJobs(
             .slice()
             .sort((a, b) => b.score - a.score);
         const spanIds = spans.slice(0, maxSpanCount).map((span) => span.id);
-        const source = sourceById.get(unit.sourceRecordId);
+        const source = sourceById.get(unit.narrativeRecordId);
         const sourceCategory = source?.metadata?.sourceCategory;
         const operationPromotion = source?.metadata?.operationPromotion;
         if (
@@ -164,7 +164,7 @@ export function buildLlmIrJobs(
             jobId: `job_${unit.id}`,
             unitId: unit.id,
             layer: unit.layer,
-            sourceRecordId: unit.sourceRecordId,
+            narrativeRecordId: unit.narrativeRecordId,
             sourceRef: source?.sourceRef ?? "",
             speaker: source?.speaker ?? null,
             language: unit.language,
@@ -185,7 +185,7 @@ export function loadLlmIrItems(
     input: { mdPath?: string; jsonlPath?: string },
     units: V8Unit[],
     evidenceSpans: V8EvidenceSpan[],
-    sources: V8SourceRecord[]
+    sources: V8NarrativeRecord[]
 ): V8MemoryItem[] {
     const mdPath = input.mdPath;
     const jsonlPath = input.jsonlPath;
@@ -224,7 +224,7 @@ function parseMarkdownFile(
     filePath: string,
     units: V8Unit[],
     evidenceSpans: V8EvidenceSpan[],
-    sources: V8SourceRecord[]
+    sources: V8NarrativeRecord[]
 ): V8MemoryItem[] {
     try {
         const raw = readFileTrimmed(filePath);
@@ -255,7 +255,7 @@ function parseMarkdownFile(
 function normalizeLlmItem(
     raw: any,
     unitsById: Map<string, V8Unit>,
-    sourcesById: Map<string, V8SourceRecord>,
+    sourcesById: Map<string, V8NarrativeRecord>,
     spansByUnit: Map<string, V8EvidenceSpan[]>
 ): V8MemoryItem | null {
     if (!raw || typeof raw !== "object") return null;
@@ -268,7 +268,7 @@ function normalizeLlmItem(
     if (!unitId) return null;
     const unit = unitsById.get(unitId);
     if (!unit) return null;
-    const source = sourcesById.get(unit.sourceRecordId);
+    const source = sourcesById.get(unit.narrativeRecordId);
     const itemType =
         (typeof raw.itemType === "string" && raw.itemType) ||
         (typeof raw.item_type === "string" && raw.item_type) ||
@@ -318,7 +318,7 @@ function normalizeLlmItem(
             (typeof raw.id === "string" && raw.id) ||
             (typeof raw.memory_item_id === "string" && raw.memory_item_id) ||
             `mi_llm_${now}_${Math.random().toString(36).slice(2, 8)}`,
-        sourceRecordId: unit.sourceRecordId,
+        narrativeRecordId: unit.narrativeRecordId,
         sourceRef: source?.sourceRef ?? "",
         itemType: itemType as V8MemoryItemType,
         originType:
@@ -346,7 +346,7 @@ function normalizeLlmItem(
 function buildPrompt(input: {
     unit: V8Unit;
     spans: V8EvidenceSpan[];
-    source?: V8SourceRecord;
+    source?: V8NarrativeRecord;
 }): string {
     const unit = input.unit;
     const evidenceLines = input.spans.map(

@@ -19,13 +19,13 @@ import type {
     V8PackCacheRecord,
     V8RecallBundleProjection,
     V8RecallMode,
-    V8SourceRecord,
+    V8NarrativeRecord,
 } from "./types_v8.js";
 
 interface RecallAssemblyContext {
     nodesById: Map<string, V8GraphNode>;
     evidenceById: Map<string, V8EvidenceSpan>;
-    sourcesById: Map<string, V8SourceRecord>;
+    sourcesById: Map<string, V8NarrativeRecord>;
     edges: V8GraphEdge[];
     edgesByNode: Map<string, V8GraphEdge[]>;
     edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>;
@@ -103,7 +103,7 @@ function sanitizeText(text: string, maxChars = 520): string {
         .slice(0, maxChars);
 }
 
-function formatEvidence(span: V8EvidenceSpan, source?: V8SourceRecord): string {
+function formatEvidence(span: V8EvidenceSpan, source?: V8NarrativeRecord): string {
     const speaker = source?.speaker || span.speaker || "unknown";
     const ts = source?.timestamp ? ` @ ${source.timestamp}` : "";
     const text = sanitizeText(span.text, 420);
@@ -136,7 +136,7 @@ export function loadRecallAssemblyContext(workspace: string): RecallAssemblyCont
         readMtime(store.graphNodes),
         readMtime(store.graphEdges),
         readMtime(store.evidenceSpans),
-        readMtime(store.sourceRecords),
+        readMtime(store.narrativeRecords),
         readMtime(store.recallBundles),
         readMtime(store.hypothesisEdges),
         readMtime(store.packCache)
@@ -149,7 +149,7 @@ export function loadRecallAssemblyContext(workspace: string): RecallAssemblyCont
 
     const nodes = loadJsonl<V8GraphNode>(store.graphNodes);
     const evidence = loadJsonl<V8EvidenceSpan>(store.evidenceSpans);
-    const sources = loadJsonl<V8SourceRecord>(store.sourceRecords);
+    const sources = loadJsonl<V8NarrativeRecord>(store.narrativeRecords);
     const edges = loadJsonl<V8GraphEdge>(store.graphEdges);
     const recallBundles = loadJsonl<V8RecallBundleProjection>(store.recallBundles);
     const hypotheses = loadHypothesisEdges(workspace);
@@ -225,7 +225,7 @@ export function assembleRecallPrompts(
         for (const spanId of evidenceSpanIds.slice(0, maxEvidence)) {
             const span = context.evidenceById.get(spanId);
             if (!span) continue;
-            const source = context.sourcesById.get(span.sourceRecordId);
+            const source = context.sourcesById.get(span.narrativeRecordId);
             if (source?.sourceRef) {
                 sourceRefs.add(source.sourceRef);
             }

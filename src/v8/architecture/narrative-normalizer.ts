@@ -1,4 +1,4 @@
-import type { V8SourceRecord } from "../types_v8.js";
+import type { V8NarrativeRecord } from "../types_v8.js";
 import {
     getToolCleaningProfile,
     loadResolvedToolCleaningProfiles,
@@ -55,7 +55,7 @@ export interface RawSessionMessage {
     [key: string]: unknown;
 }
 
-export interface SourceNormalizationOptions {
+export interface NarrativeNormalizationOptions {
     sourceRefPrefix: string;
     sessionId?: string;
     cleanPatterns?: RegExp[];
@@ -79,8 +79,8 @@ const DEFAULT_CLEAN_PATTERNS: RegExp[] = [
 
 export function normalizeSessionMessages(
     messages: RawSessionMessage[],
-    options: SourceNormalizationOptions
-): V8SourceRecord[] {
+    options: NarrativeNormalizationOptions
+): V8NarrativeRecord[] {
     const sourceRefPrefix = options.sourceRefPrefix;
     const cleanPatterns = options.cleanPatterns || DEFAULT_CLEAN_PATTERNS;
     const sessionId =
@@ -109,7 +109,7 @@ export function normalizeSessionMessages(
                 msg.timestamp ?? msg.createdAt ?? msg.created_at
             );
             const sourceRef = `${sourceRefPrefix}#${index + 1}`;
-            const id = buildSourceRecordId(sessionId, index + 1);
+            const id = buildNarrativeRecordId(sessionId, index + 1);
 
             return {
                 id,
@@ -128,14 +128,14 @@ export function normalizeSessionMessages(
                     sourceCategory: "conversation",
                     sourceIndex: String(index + 1),
                 },
-            } satisfies V8SourceRecord;
+            } satisfies V8NarrativeRecord;
         })
-        .filter(Boolean) as V8SourceRecord[];
+        .filter(Boolean) as V8NarrativeRecord[];
 
     const operationRecords =
         options.includeOperations === false
             ? []
-            : buildOperationSourceRecords(messages, {
+            : buildOperationNarrativeRecords(messages, {
                   sourceRefPrefix,
                   sessionId,
                   cleanPatterns,
@@ -166,7 +166,7 @@ function extractText(msg: RawSessionMessage): string {
     return "";
 }
 
-function normalizeSpeaker(value?: string): V8SourceRecord["speaker"] {
+function normalizeSpeaker(value?: string): V8NarrativeRecord["speaker"] {
     if (!value) return null;
     const lower = value.toLowerCase();
     if (lower.includes("user")) return "user";
@@ -185,12 +185,12 @@ function normalizeTimestamp(value?: string | number): string | null {
     return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
-function buildSourceRecordId(sessionId: string, index: number): string {
-    return `src_${sessionId}_${index}`;
+function buildNarrativeRecordId(sessionId: string, index: number): string {
+    return `narr_${sessionId}_${index}`;
 }
 
 function buildOperationRecordId(sessionId: string, index: number): string {
-    return `src_${sessionId}_op_${index}`;
+    return `narr_${sessionId}_op_${index}`;
 }
 
 function deriveSessionId(sourceRefPrefix: string): string | null {
@@ -200,7 +200,7 @@ function deriveSessionId(sourceRefPrefix: string): string | null {
     return last.replace(/\.[^.]+$/, "") || null;
 }
 
-function detectLanguage(text: string): V8SourceRecord["language"] {
+function detectLanguage(text: string): V8NarrativeRecord["language"] {
     if (!text) return "unknown";
     const zhCount = (text.match(/[\u4e00-\u9fff]/g) || []).length;
     const enCount = (text.match(/[A-Za-z]/g) || []).length;
@@ -213,10 +213,10 @@ function detectLanguage(text: string): V8SourceRecord["language"] {
 function cleanTextWithMap(
     rawText: string,
     patterns: RegExp[]
-): { cleanText: string; cleanMap: V8SourceRecord["cleanMap"] } {
+): { cleanText: string; cleanMap: V8NarrativeRecord["cleanMap"] } {
     const ranges = collectRemovalRanges(rawText, patterns);
     const merged = mergeRanges(ranges);
-    const cleanMap: NonNullable<V8SourceRecord["cleanMap"]> = [];
+    const cleanMap: NonNullable<V8NarrativeRecord["cleanMap"]> = [];
     let cleanText = "";
     let cleanCursor = 0;
     let rawCursor = 0;
@@ -279,7 +279,7 @@ interface OperationProfile {
     rule?: ToolCleaningProfile;
 }
 
-function buildOperationSourceRecords(
+function buildOperationNarrativeRecords(
     messages: RawSessionMessage[],
     options: {
         sourceRefPrefix: string;
@@ -287,12 +287,12 @@ function buildOperationSourceRecords(
         cleanPatterns: RegExp[];
         toolCleaningProfiles?: Map<string, ToolCleaningProfile>;
     }
-): V8SourceRecord[] {
+): V8NarrativeRecord[] {
     const { sourceRefPrefix, sessionId, cleanPatterns, toolCleaningProfiles } =
         options;
     const toolCallMap = new Map<string, ToolCallInfo>();
     const pendingResults: ToolResultInfo[] = [];
-    const records: V8SourceRecord[] = [];
+    const records: V8NarrativeRecord[] = [];
 
     messages.forEach((msg, index) => {
         const toolCalls = extractToolCalls(msg, index);
@@ -570,7 +570,7 @@ function buildOperationRecord(
     sessionId: string,
     cleanPatterns: RegExp[],
     toolCleaningProfiles?: Map<string, ToolCleaningProfile>
-): V8SourceRecord {
+): V8NarrativeRecord {
     const toolName = call?.toolName || result?.toolName || "tool";
     const profile = classifyOperation(
         toolName,

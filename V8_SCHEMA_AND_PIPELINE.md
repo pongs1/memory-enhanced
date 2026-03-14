@@ -113,7 +113,7 @@ Legacy artifacts are not ingested:
 
 Do not emit new `event` artifacts. Episodic views should be derived from the canonical graph or assembled at runtime.
 
-## 3. Source Normalization Policy
+## 3. Narrative Normalization Policy
 
 Normalization does not mean semantic rewriting.
 It means turning heterogeneous sources into a stable source contract while preserving evidence value.
@@ -253,7 +253,7 @@ Recommended graph-adjacent layout:
     review_windows.jsonl
   graph/
     manifest.json
-    source_records.jsonl   # narrative-derived source records
+    narrative_records.jsonl   # narrative-derived records
     units.jsonl
     evidence_spans.jsonl
     memory_items.jsonl
@@ -275,20 +275,21 @@ The ignition layer still depends on compact read-time indexes:
 - `day_index.json`
 - `source_index.json`
 
-## 5. Source and Observation Contracts
+## 5. Narrative and Observation Contracts
 
-### 5.1 Source record contract
+### 5.1 Narrative record contract
 
-Each ingested source becomes a normalized source record.
+Each ingested narrative entry (assembled from session traces and tool results)
+becomes a normalized narrative record.
 
 Example:
 
 ```json
 {
-  "source_record_id": "src_20260312_001",
+  "narrative_record_id": "narr_20260312_001",
   "source_class": "raw|curated|legacy",
-  "source_type": "session_log|daily_log|knowledge_md|skill_md|event_jsonl",
-  "source_ref": "memory/2026-03-12.md#session-14",
+  "source_type": "session_trace|session_narrative|daily_log|knowledge_md|skill_md",
+  "source_ref": "/home/pongs/.openclaw/agents/main/sessions/...jsonl#142",
   "speaker": "user",
   "timestamp": "2026-03-12T09:11:02.000Z",
   "raw_text": "....",
@@ -303,7 +304,7 @@ Example:
 ### 5.2 Observation record contract
 
 Observation records are append-only runtime facts captured from OpenClaw hooks.
-They are not graph nodes and not source records by default.
+They are not graph nodes and not narrative records by default.
 
 Example:
 
@@ -343,7 +344,7 @@ Observation records are used for:
 - runtime scene refresh
 - recall attribution
 - fact feedback
-- optional promotion into source records or evidence spans
+- optional promotion into narrative records or evidence spans
 
 Rules:
 
@@ -615,6 +616,7 @@ Persistence (recommended):
 - filename: `session_<session_id>_narrative.md`
 - ordering: prefer timestamps; fall back to transcript order when timestamps are missing
 - keep it natural-language, not JSON or key-value dumps
+- avoid embedding internal IDs (record/unit/tool-call ids); keep those in metadata only
 - strip prompt scaffolding, hidden control tags, and other machine-only noise
 - coverage: if the narrative misses any trace entries, inject the cleaned trace text back
   into the narrative stream (timestamp order) before unitization
@@ -623,11 +625,11 @@ Persistence (recommended):
   narrative timeline with an explicit `subagent:`/`acp:` label (timestamp order)
 
 This view is the primary input for IR extraction and graph materialization.
-Evidence spans still trace back to the narrative-derived source records.
+Evidence spans still trace back to the narrative-derived records.
 
 ## 6. Unitization
 
-All source records are segmented into `micro`, `meso`, and `macro` units.
+All narrative records are segmented into `micro`, `meso`, and `macro` units.
 
 ### 6.1 Definitions
 
@@ -641,7 +643,7 @@ All source records are segmented into `micro`, `meso`, and `macro` units.
 ### 6.2 Rules
 
 - offsets are first-class
-- unit text is derived from the source record, not from old event summaries
+- unit text is derived from the narrative record, not from old event summaries
 - unit boundaries are driven primarily by semantic and discourse closure:
   - speaker-turn boundaries
   - sentence and clause completion
@@ -682,7 +684,7 @@ This prevents noisy tool payloads from polluting the unit layer while still pres
 ```json
 {
   "unit_id": "unit_20260312_013",
-  "source_record_id": "src_20260312_001",
+  "narrative_record_id": "narr_20260312_001",
   "layer": "meso",
   "ordinal": 3,
   "char_start": 186,
@@ -718,7 +720,7 @@ Example:
 ```json
 {
   "evidence_span_id": "es_20260312_021",
-  "source_record_id": "src_20260312_001",
+  "narrative_record_id": "narr_20260312_001",
   "unit_id": "unit_20260312_013",
   "char_start": 202,
   "char_end": 223,
@@ -796,7 +798,7 @@ Use explicit origin labels:
 ```json
 {
   "memory_item_id": "mi_20260312_004",
-  "source_record_id": "src_20260312_001",
+  "narrative_record_id": "narr_20260312_001",
   "source_ref": "memory/2026-03-12.md#session-14",
   "item_type": "constraint",
   "origin_type": "asserted",
@@ -1068,7 +1070,7 @@ Instead it should reprocess only the affected neighborhood around changed source
 
 Recommended rule:
 
-- append raw source records immutably
+- append raw narrative records immutably
 - identify touched `micro / meso / macro` units by source offsets
 - reopen a bounded neighborhood around the touched units
 - rerun extraction and graph materialization only inside that open window
