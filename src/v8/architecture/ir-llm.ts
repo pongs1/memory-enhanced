@@ -8,16 +8,18 @@ import type {
     V8GraphLayer,
     V8MemoryItem,
     V8MemoryItemType,
-    V8NarrativeRecord,
     V8Unit,
 } from "../types_v8.js";
 
 export interface V8IrLlmJob {
     jobId: string;
     unitId: string;
+    unitIds: string[];
     layer: V8GraphLayer;
     narrativeRecordId: string;
+    narrativeRecordIds: string[];
     sourceRef: string;
+    sourceRefs: string[];
     speaker: string | null;
     language: string;
     text: string;
@@ -89,6 +91,18 @@ const ITEM_TYPES_BY_LAYER: Record<V8GraphLayer, string[]> = {
     ],
 };
 
+interface LlmBatchConfig {
+    maxUnits: number;
+    maxChars: number;
+    maxEvidenceSpans: number;
+}
+
+const BATCH_CONFIG_BY_LAYER: Record<V8GraphLayer, LlmBatchConfig> = {
+    micro: { maxUnits: 8, maxChars: 2600, maxEvidenceSpans: 24 },
+    meso: { maxUnits: 4, maxChars: 4200, maxEvidenceSpans: 18 },
+    macro: { maxUnits: 2, maxChars: 6000, maxEvidenceSpans: 12 },
+};
+
 function edgeCatalogPath(): string {
     const here = path.dirname(fileURLToPath(import.meta.url));
     return path.resolve(here, "../../../schema/v8-edge-catalog.json");
@@ -128,53 +142,152 @@ const { allowed: ALLOWED_PREDICATES, grouped: ALLOWED_GROUPS } = loadAllowedPred
 
 export function buildLlmIrJobs(
     units: V8Unit[],
-    evidenceSpans: V8EvidenceSpan[],
-    sources: V8NarrativeRecord[]
+    evidenceSpans: V8EvidenceSpan[]
 ): V8IrLlmJob[] {
-    const spansByUnit = new Map<string, V8EvidenceSpan[]>();
-    for (const span of evidenceSpans) {
-        const list = spansByUnit.get(span.unitId) || [];
-        list.push(span);
-        spansByUnit.set(span.unitId, list);
-    }
-    const sourceById = new Map(sources.map((s) => [s.id, s]));
-    const jobs: V8IrLlmJob[] = [];
+    const evidenceIndex = buildEvidenceIndex(units, evidenceSpans);
 
-    const maxSpanCount = 8;
-    for (const unit of units) {
-        const spans = (spansByUnit.get(unit.id) || [])
-            .slice()
-            .sort((a, b) => b.score - a.score);
-        const spanIds = spans.slice(0, maxSpanCount).map((span) => span.id);
-        const source = sourceById.get(unit.narrativeRecordId);
-        const sourceCategory = source?.metadata?.sourceCategory;
-        const operationPromotion = source?.metadata?.operationPromotion;
-        if (
-            sourceCategory === "operation" &&
-            operationPromotion !== "llm_ir"
-        ) {
-            continue;
+    const jobs: V8IrLlmJob[] = [];
+    for (const layer of evidenceIndex.layerOrder) {
+        const layerUnits = (evidenceIndex.unitsByLayer.get(layer) || []).filter((unit) =>
+            unit.text.trim().length > 0
+        );
+        const batchConfig = BATCH_CONFIG_BY_LAYER[layer];
+        let batch: V8Unit[] = [];
+        let batchChars = 0;
+
+        const flush = () => {
+            if (batch.length === 0) return;
+            const spansByUnit = new Map<string, V8EvidenceSpan[]>();
+            for (const unit of batch) {
+                spansByUnit.set(unit.id, evidenceIndex.spansByUnit.get(unit.id) || []);
+            }
+            const perUnitLimit = Math.max(
+                1,
+                Math.floor(batchConfig.maxEvidenceSpans / Math.max(1, batch.length))
+            );
+            const supportSpans = batch
+                .flatMap((unit) =>
+                    (spansByUnit.get(unit.id) || []).slice(0, perUnitLimit)
+                )
+                .sort((a, b) => b.score - a.score);
+            const dedupedSpans = dedupeSpans(supportSpans).slice(0, batchConfig.maxEvidenceSpans);
+            const prompt = buildPrompt({
+                layer,
+                units: batch,
+                spansByUnit: new Map(
+                    batch.map((unit) => [unit.id, (spansByUnit.get(unit.id) || []).slice(0, 8)])
+                ),
+            });
+            jobs.push({
+                jobId: `job_${layer}_${batch[0].id}_${batch[batch.length - 1].id}`,
+                unitId: batch[0].id,
+                unitIds: batch.map((unit) => unit.id),
+                layer,
+                narrativeRecordId: batch[0].narrativeRecordId,
+                narrativeRecordIds: Array.from(new Set(batch.map((unit) => unit.narrativeRecordId))),
+                sourceRef: batch[0].narrativeRef,
+                sourceRefs: Array.from(new Set(batch.map((unit) => unit.narrativeRef))),
+                speaker: batch[0].speaker ?? null,
+                language: batch[0].language,
+                text: batch.map((unit) => unit.text.trim()).filter(Boolean).join("\n\n"),
+                evidenceSpanIds: dedupedSpans.map((span) => span.id),
+                prompt,
+            });
+            batch = [];
+            batchChars = 0;
+        };
+
+        for (const unit of layerUnits) {
+            const unitChars = unit.text.trim().length;
+            const wouldOverflow =
+                batch.length > 0 &&
+                (batch.length >= batchConfig.maxUnits ||
+                    batchChars + unitChars > batchConfig.maxChars);
+            if (wouldOverflow) {
+                flush();
+            }
+            batch.push(unit);
+            batchChars += unitChars;
         }
-        const prompt = buildPrompt({
-            unit,
-            spans: spans.slice(0, maxSpanCount),
-            source,
-        });
-        jobs.push({
-            jobId: `job_${unit.id}`,
-            unitId: unit.id,
-            layer: unit.layer,
-            narrativeRecordId: unit.narrativeRecordId,
-            sourceRef: source?.sourceRef ?? "",
-            speaker: source?.speaker ?? null,
-            language: unit.language,
-            text: unit.text,
-            evidenceSpanIds: spanIds,
-            prompt,
-        });
+        flush();
     }
 
     return jobs;
+}
+
+interface EvidenceIndex {
+    spansByUnit: Map<string, V8EvidenceSpan[]>;
+    unitsByLayer: Map<V8GraphLayer, V8Unit[]>;
+    layerOrder: V8GraphLayer[];
+}
+
+function buildEvidenceIndex(
+    units: V8Unit[],
+    evidenceSpans: V8EvidenceSpan[]
+): EvidenceIndex {
+    const spansByNarrative = new Map<string, V8EvidenceSpan[]>();
+    for (const span of evidenceSpans) {
+        const list = spansByNarrative.get(span.narrativeRecordId) || [];
+        list.push(span);
+        spansByNarrative.set(span.narrativeRecordId, list);
+    }
+    for (const list of spansByNarrative.values()) {
+        list.sort((a, b) => a.charStart - b.charStart);
+    }
+
+    const spansByUnit = new Map<string, V8EvidenceSpan[]>();
+    const unitsByLayer = new Map<V8GraphLayer, V8Unit[]>();
+    for (const unit of units) {
+        const layerBucket = unitsByLayer.get(unit.layer) || [];
+        layerBucket.push(unit);
+        unitsByLayer.set(unit.layer, layerBucket);
+        spansByUnit.set(unit.id, collectSupportingSpans(unit, spansByNarrative));
+    }
+
+    return {
+        spansByUnit,
+        unitsByLayer,
+        layerOrder: ["macro", "meso", "micro"],
+    };
+}
+
+function collectSupportingSpans(
+    unit: V8Unit,
+    spansByNarrative: Map<string, V8EvidenceSpan[]>
+): V8EvidenceSpan[] {
+    const spans = spansByNarrative.get(unit.narrativeRecordId) || [];
+    if (spans.length === 0) return [];
+    let lo = 0;
+    let hi = spans.length;
+    while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (spans[mid].charStart < unit.charStart) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    const collected: V8EvidenceSpan[] = [];
+    for (let idx = lo; idx < spans.length; idx += 1) {
+        const span = spans[idx];
+        if (span.charStart >= unit.charEnd) break;
+        if (span.charStart >= unit.charStart && span.charEnd <= unit.charEnd) {
+            collected.push(span);
+        }
+    }
+    return collected;
+}
+
+function dedupeSpans(spans: V8EvidenceSpan[]): V8EvidenceSpan[] {
+    const seen = new Set<string>();
+    const output: V8EvidenceSpan[] = [];
+    for (const span of spans) {
+        if (seen.has(span.id)) continue;
+        seen.add(span.id);
+        output.push(span);
+    }
+    return output;
 }
 
 export function writeIrLlmJobs(filePath: string, jobs: V8IrLlmJob[]): void {
@@ -184,14 +297,13 @@ export function writeIrLlmJobs(filePath: string, jobs: V8IrLlmJob[]): void {
 export function loadLlmIrItems(
     input: { mdPath?: string; jsonlPath?: string },
     units: V8Unit[],
-    evidenceSpans: V8EvidenceSpan[],
-    sources: V8NarrativeRecord[]
+    evidenceSpans: V8EvidenceSpan[]
 ): V8MemoryItem[] {
     const mdPath = input.mdPath;
     const jsonlPath = input.jsonlPath;
     const fromMd =
         mdPath && mdPath.trim().length > 0
-            ? parseMarkdownFile(mdPath, units, evidenceSpans, sources)
+            ? parseMarkdownFile(mdPath, units, evidenceSpans)
             : [];
     if (fromMd.length > 0) {
         if (jsonlPath) {
@@ -203,7 +315,6 @@ export function loadLlmIrItems(
     const raw = readJsonl<any>(jsonlPath);
     if (raw.length === 0) return [];
     const unitsById = new Map(units.map((u) => [u.id, u]));
-    const sourcesById = new Map(sources.map((s) => [s.id, s]));
     const spansByUnit = new Map<string, V8EvidenceSpan[]>();
     for (const span of evidenceSpans) {
         const list = spansByUnit.get(span.unitId) || [];
@@ -212,7 +323,7 @@ export function loadLlmIrItems(
     }
     const items: V8MemoryItem[] = [];
     for (const entry of raw) {
-        const item = normalizeLlmItem(entry, unitsById, sourcesById, spansByUnit);
+        const item = normalizeLlmItem(entry, unitsById, spansByUnit);
         if (item) {
             items.push(item);
         }
@@ -223,8 +334,7 @@ export function loadLlmIrItems(
 function parseMarkdownFile(
     filePath: string,
     units: V8Unit[],
-    evidenceSpans: V8EvidenceSpan[],
-    sources: V8NarrativeRecord[]
+    evidenceSpans: V8EvidenceSpan[]
 ): V8MemoryItem[] {
     try {
         const raw = readFileTrimmed(filePath);
@@ -232,7 +342,6 @@ function parseMarkdownFile(
         const blocks = splitMarkdownItems(raw);
         if (blocks.length === 0) return [];
         const unitsById = new Map(units.map((u) => [u.id, u]));
-        const sourcesById = new Map(sources.map((s) => [s.id, s]));
         const spansByUnit = new Map<string, V8EvidenceSpan[]>();
         for (const span of evidenceSpans) {
             const list = spansByUnit.get(span.unitId) || [];
@@ -243,7 +352,7 @@ function parseMarkdownFile(
         for (const block of blocks) {
             const rawItem = parseMarkdownItemBlock(block);
             if (!rawItem) continue;
-            const item = normalizeLlmItem(rawItem, unitsById, sourcesById, spansByUnit);
+            const item = normalizeLlmItem(rawItem, unitsById, spansByUnit);
             if (item) items.push(item);
         }
         return items;
@@ -255,7 +364,6 @@ function parseMarkdownFile(
 function normalizeLlmItem(
     raw: any,
     unitsById: Map<string, V8Unit>,
-    sourcesById: Map<string, V8NarrativeRecord>,
     spansByUnit: Map<string, V8EvidenceSpan[]>
 ): V8MemoryItem | null {
     if (!raw || typeof raw !== "object") return null;
@@ -264,11 +372,12 @@ function normalizeLlmItem(
             ? raw.unitId
             : typeof raw.unit_id === "string"
               ? raw.unit_id
+              : Array.isArray(raw.unit_ids) && typeof raw.unit_ids[0] === "string"
+                ? raw.unit_ids[0]
               : "";
     if (!unitId) return null;
     const unit = unitsById.get(unitId);
     if (!unit) return null;
-    const source = sourcesById.get(unit.narrativeRecordId);
     const itemType =
         (typeof raw.itemType === "string" && raw.itemType) ||
         (typeof raw.item_type === "string" && raw.item_type) ||
@@ -319,7 +428,7 @@ function normalizeLlmItem(
             (typeof raw.memory_item_id === "string" && raw.memory_item_id) ||
             `mi_llm_${now}_${Math.random().toString(36).slice(2, 8)}`,
         narrativeRecordId: unit.narrativeRecordId,
-        sourceRef: source?.sourceRef ?? "",
+        sourceRef: unit.narrativeRef,
         itemType: itemType as V8MemoryItemType,
         originType:
             (typeof raw.originType === "string" && raw.originType) ||
@@ -344,16 +453,13 @@ function normalizeLlmItem(
 }
 
 function buildPrompt(input: {
-    unit: V8Unit;
-    spans: V8EvidenceSpan[];
-    source?: V8NarrativeRecord;
+    layer: V8GraphLayer;
+    units: V8Unit[];
+    spansByUnit: Map<string, V8EvidenceSpan[]>;
 }): string {
-    const unit = input.unit;
-    const evidenceLines = input.spans.map(
-        (span) => `- (${span.id}) ${sanitizeLine(span.text)}`
-    );
-    const allowed = Array.from(ALLOWED_PREDICATES[unit.layer] || []).sort();
-    const groupMap = ALLOWED_GROUPS[unit.layer];
+    const { layer, units, spansByUnit } = input;
+    const allowed = Array.from(ALLOWED_PREDICATES[layer] || []).sort();
+    const groupMap = ALLOWED_GROUPS[layer];
     const groupedLines =
         groupMap && groupMap.size > 0
             ? Array.from(groupMap.entries())
@@ -364,22 +470,35 @@ function buildPrompt(input: {
                   })
             : [];
     const allowedLine = allowed.length
-        ? `Allowed relations (${unit.layer}): ${allowed.join(", ")}`
+        ? `Allowed relations (${layer}): ${allowed.join(", ")}`
         : "";
-    const itemTypeLine = ITEM_TYPES_BY_LAYER[unit.layer]?.length
-        ? `Allowed item_type (${unit.layer}): ${ITEM_TYPES_BY_LAYER[unit.layer].join(", ")}`
+    const itemTypeLine = ITEM_TYPES_BY_LAYER[layer]?.length
+        ? `Allowed item_type (${layer}): ${ITEM_TYPES_BY_LAYER[layer].join(", ")}`
         : "";
-    const sourceCategory = input.source?.metadata?.sourceCategory ?? "conversation";
-    const operationKind = input.source?.metadata?.operationKind;
+    const unitBlocks = units.flatMap((unit) => {
+        const evidenceLines = (spansByUnit.get(unit.id) || []).map(
+            (span) => `- (${span.id}) ${sanitizeLine(span.text)}`
+        );
+        return [
+            `#### Unit ${unit.id}`,
+            `speaker: ${unit.speaker ?? "unknown"}`,
+            `timestamp: ${unit.timestamp ?? "unknown"}`,
+            `source_category: ${unit.sourceCategory || "conversation"}`,
+            unit.text.trim(),
+            evidenceLines.length ? "evidence_spans:" : null,
+            ...evidenceLines,
+            "",
+        ].filter(Boolean);
+    });
     return [
-        "Please extract only evidence-backed relations from the text below.",
+        "Please extract only evidence-backed relations from the batched units below.",
         "If nothing can be extracted, output `[]` only.",
         "",
         "Rules:",
         "- Use only the relations listed under Allowed relations (by group).",
         "- Do not infer beyond the text; skip vague or speculative claims.",
-        "- `evidence_span_ids` must come from the provided span list.",
-        "- `unit_id` must be the current Unit ID.",
+        "- `evidence_span_ids` must come from the provided evidence spans.",
+        "- `unit_id` must be one of the listed Unit IDs.",
         "- Output Markdown only. No JSON. No extra commentary.",
         "",
         "Output format:",
@@ -405,16 +524,11 @@ function buildPrompt(input: {
         itemTypeLine,
         ...groupedLines,
         "",
-        "### Unit",
-        `Unit ID: ${unit.id}`,
-        `Layer: ${unit.layer}`,
-        `Speaker: ${input.source?.speaker ?? "unknown"}`,
-        `Source category: ${sourceCategory}${operationKind ? ` (${operationKind})` : ""}`,
+        "### Batch",
+        `Layer: ${layer}`,
+        `Unit IDs: ${units.map((unit) => unit.id).join(", ")}`,
         "",
-        unit.text.trim(),
-        "",
-        "### Evidence spans",
-        ...evidenceLines,
+        ...unitBlocks,
     ]
         .filter(Boolean)
         .join("\n");
@@ -470,6 +584,13 @@ function parseMarkdownItemBlock(block: string): Record<string, unknown> | null {
             case "label":
                 item[key] = value;
                 break;
+            case "unit_ids": {
+                item[key] = value
+                    .split(/[,，\s]+/)
+                    .map((id) => id.trim())
+                    .filter(Boolean);
+                break;
+            }
             case "confidence": {
                 const parsed = Number.parseFloat(value);
                 if (!Number.isNaN(parsed)) {
