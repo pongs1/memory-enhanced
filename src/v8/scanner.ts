@@ -13,6 +13,7 @@ import type {
     V8EvidenceSpan,
     V8GraphEdge,
     V8GraphNode,
+    V8IgnitionEdgeProjection,
     V8IgnitionNodeProjection,
     V8RecallMode,
     V8ScanResult,
@@ -218,11 +219,14 @@ export class V8GraphScanner {
     private loadGraph(): LoadedGraphData {
         const store = v8StorePaths(this.workspace);
         const nodes = loadJsonl<V8GraphNode>(store.graphNodes);
-        const edges = loadJsonl<V8GraphEdge>(store.graphEdges);
+        const graphEdges = loadJsonl<V8GraphEdge>(store.graphEdges);
         const evidenceSpans = loadJsonl<V8EvidenceSpan>(store.evidenceSpans);
         const sources = loadJsonl<V8SourceRecord>(store.sourceRecords);
         const ignitionNodes = fs.existsSync(store.ignitionNodes)
             ? loadJsonl<V8IgnitionNodeProjection>(store.ignitionNodes)
+            : [];
+        const ignitionEdges = fs.existsSync(store.ignitionEdges)
+            ? loadJsonl<V8IgnitionEdgeProjection>(store.ignitionEdges)
             : [];
 
         const nodesById = new Map<string, V8GraphNode>();
@@ -309,10 +313,30 @@ export class V8GraphScanner {
             }
         }
 
+        const runtimeEdges: V8GraphEdge[] =
+            ignitionEdges.length > 0
+                ? ignitionEdges.map((edge, index) => ({
+                      id: edge.edgeId || `edge_runtime_${index + 1}`,
+                      type: edge.type,
+                      src: edge.srcNodeId,
+                      dst: edge.dstNodeId,
+                      layer: "cross",
+                      originType: "aggregated",
+                      sourceItemIds: [],
+                      evidenceSpanIds: [],
+                      qualifiers: {},
+                      confidence: edge.score ?? 0.6,
+                      state: {
+                          scope: "session",
+                          validity: "active",
+                      },
+                  }))
+                : graphEdges;
+
         const adjacency = new Map<string, V8GraphEdge[]>();
         const reverseAdjacency = new Map<string, V8GraphEdge[]>();
         const degree = new Map<string, number>();
-        for (const edge of edges) {
+        for (const edge of runtimeEdges) {
             if (!adjacency.has(edge.src)) adjacency.set(edge.src, []);
             adjacency.get(edge.src)!.push(edge);
             if (!reverseAdjacency.has(edge.dst)) reverseAdjacency.set(edge.dst, []);
@@ -325,7 +349,7 @@ export class V8GraphScanner {
         const policyByKindMode = buildPolicyMap(loadEdgeRuntimePolicy());
         const scopeAnchorsByNode = new Map<string, string[]>();
         const scopeNodes = new Set<string>();
-        for (const edge of edges) {
+        for (const edge of runtimeEdges) {
             const kind = edgeKinds.get(edge.type) || "semantic";
             if (kind !== "scope_anchor") continue;
             scopeNodes.add(edge.dst);
@@ -337,7 +361,7 @@ export class V8GraphScanner {
         return {
             nodesById,
             ignitionNodesById,
-            edges,
+            edges: runtimeEdges,
             adjacency,
             reverseAdjacency,
             nodeTokens,
