@@ -769,16 +769,17 @@ export class V8GraphScanner {
             if (node.state?.validity === "superseded") {
                 return true;
             }
-            const scopedTo = this.graph.scopeAnchorsByNode.get(nodeId);
-            if (scopedTo && scopedTo.length > 0) {
-                if (this.activeScopeIds && this.activeScopeIds.size > 0) {
-                    for (const scopeId of scopedTo) {
-                        if (this.activeScopeIds.has(scopeId)) {
-                            return false;
-                        }
+        }
+
+        const scopedTo = this.graph.scopeAnchorsByNode.get(nodeId);
+        if (scopedTo && scopedTo.length > 0) {
+            if (this.activeScopeIds && this.activeScopeIds.size > 0) {
+                for (const scopeId of scopedTo) {
+                    if (this.activeScopeIds.has(scopeId)) {
+                        return false;
                     }
-                    return true;
                 }
+                return true;
             }
         }
 
