@@ -606,6 +606,8 @@ export class V8GraphScanner {
                         ? node.bestEvidenceSpanIds
                         : node.evidenceSpanIds;
             const bundleId = projection?.bundleId || nodeId;
+            const bundleCooldownUntil = this.bundleCooldowns.get(bundleId) || 0;
+            if (bundleCooldownUntil > now) continue;
 
             candidates.push({
                 bundleId,
@@ -642,6 +644,8 @@ export class V8GraphScanner {
                             ? node.bestEvidenceSpanIds
                             : node.evidenceSpanIds;
                 const bundleId = projection?.bundleId || nodeId;
+                const bundleCooldownUntil = this.bundleCooldowns.get(bundleId) || 0;
+                if (bundleCooldownUntil > now) continue;
                 obliqueCandidates.push({
                     bundleId,
                     nodeIds: [nodeId],
