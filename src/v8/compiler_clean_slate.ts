@@ -9,11 +9,14 @@ import { buildLlmIrJobs, loadLlmIrItems, writeIrLlmJobs } from "./architecture/i
 import { materializeGraph } from "./architecture/graph-materializer.js";
 import { buildRuntimeProjections } from "./architecture/runtime-projection.js";
 import { writeJsonl } from "./architecture/io.js";
+import { spawnSync } from "node:child_process";
 
 export interface CleanSlateBuildOptions {
     workspace?: string;
     sessionTraceDir?: string;
     maxSessionFiles?: number;
+    llmCommand?: string;
+    llmCommandTimeoutMs?: number;
 }
 
 export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
@@ -35,6 +38,12 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const evidenceSpans = extractEvidenceSpans(units, sourceRecords);
     const llmJobs = buildLlmIrJobs(units, evidenceSpans, sourceRecords);
     writeIrLlmJobs(store.irLlmJobs, llmJobs);
+    const llmStatus = maybeRunIrLlm({
+        command: options?.llmCommand,
+        jobsPath: store.irLlmJobs,
+        itemsPath: store.irLlmItems,
+        timeoutMs: options?.llmCommandTimeoutMs,
+    });
     const llmItems = loadLlmIrItems(store.irLlmItems, units, evidenceSpans, sourceRecords);
     const ruleItems = extractMemoryItems(sourceRecords, units, evidenceSpans);
     const memoryItems = [...ruleItems, ...llmItems];
@@ -63,10 +72,45 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         memoryItems,
         llmJobs,
         llmItems,
+        llmStatus,
         nodes,
         edges,
         ignitionNodes: projections.ignitionNodes,
         ignitionEdges: projections.ignitionEdges,
         recallBundles: projections.recallBundles,
     };
+}
+
+function maybeRunIrLlm(input: {
+    command?: string;
+    jobsPath: string;
+    itemsPath: string;
+    timeoutMs?: number;
+}): string {
+    const command = (input.command || "").trim();
+    if (!command) return "skipped";
+    const interpolated = command
+        .replace(/\{jobs\}/g, input.jobsPath)
+        .replace(/\{items\}/g, input.itemsPath);
+    try {
+        const result = spawnSync(interpolated, {
+            shell: true,
+            encoding: "utf-8",
+            timeout: input.timeoutMs ?? 30 * 60 * 1000,
+            env: {
+                ...process.env,
+                V8_IR_JOBS: input.jobsPath,
+                V8_IR_ITEMS: input.itemsPath,
+            },
+        });
+        if (result.error) {
+            return `failed: ${result.error.message}`;
+        }
+        if (typeof result.status === "number" && result.status !== 0) {
+            return `exit ${result.status}`;
+        }
+        return "completed";
+    } catch (err) {
+        return `failed: ${err instanceof Error ? err.message : "unknown error"}`;
+    }
 }

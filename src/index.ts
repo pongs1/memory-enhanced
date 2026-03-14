@@ -55,6 +55,8 @@ export default function register(api: OpenClawPluginApi) {
             enableV8GraphRecall?: boolean;
             v8CleanSlateMode?: boolean;
             v8SessionTraceDir?: string;
+            v8IrLlmCommand?: string;
+            v8IrLlmTimeoutMs?: number;
             v8PackCacheTtlDays?: number;
             v8ScannerConfig?: Partial<V8ScannerConfig>;
             v8FeedbackConfig?: Partial<V8FeedbackConfig>;

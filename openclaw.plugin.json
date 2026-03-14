@@ -52,6 +52,16 @@
         "default": "/home/pongs/.openclaw/agents/main/sessions",
         "description": "OpenClaw session transcript directory"
       },
+      "v8IrLlmCommand": {
+        "type": "string",
+        "default": "",
+        "description": "Optional offline LLM command to generate ir_llm_items.jsonl. Use {jobs}/{items} placeholders or V8_IR_JOBS/V8_IR_ITEMS env vars."
+      },
+      "v8IrLlmTimeoutMs": {
+        "type": "number",
+        "default": 1800000,
+        "description": "Timeout (ms) for offline LLM command execution"
+      },
       "v8PackCacheTtlDays": {
         "type": "number",
         "default": 7,
