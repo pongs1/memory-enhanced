@@ -46,6 +46,8 @@ export async function executeMemoryConsolidate(
         `units=${output.units.length}`,
         `evidenceSpans=${output.evidenceSpans.length}`,
         `memoryItems=${output.memoryItems.length}`,
+        `llmJobs=${output.llmJobs.length}`,
+        `llmItems=${output.llmItems.length}`,
         `graphNodes=${output.nodes.length}`,
         `graphEdges=${output.edges.length}`,
         `ignitionNodes=${output.ignitionNodes.length}`,

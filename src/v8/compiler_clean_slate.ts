@@ -5,6 +5,7 @@ import { normalizeSessionMessages } from "./architecture/source-normalizer.js";
 import { unitizeSourceRecords } from "./architecture/unitizer.js";
 import { extractEvidenceSpans } from "./architecture/evidence.js";
 import { extractMemoryItems } from "./architecture/ir-extractor.js";
+import { buildLlmIrJobs, loadLlmIrItems, writeIrLlmJobs } from "./architecture/ir-llm.js";
 import { materializeGraph } from "./architecture/graph-materializer.js";
 import { buildRuntimeProjections } from "./architecture/runtime-projection.js";
 import { writeJsonl } from "./architecture/io.js";
@@ -32,7 +33,11 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
     const units = unitizeSourceRecords(sourceRecords);
     const evidenceSpans = extractEvidenceSpans(units, sourceRecords);
-    const memoryItems = extractMemoryItems(sourceRecords, units, evidenceSpans);
+    const llmJobs = buildLlmIrJobs(units, evidenceSpans, sourceRecords);
+    writeIrLlmJobs(store.irLlmJobs, llmJobs);
+    const llmItems = loadLlmIrItems(store.irLlmItems, units, evidenceSpans, sourceRecords);
+    const ruleItems = extractMemoryItems(sourceRecords, units, evidenceSpans);
+    const memoryItems = [...ruleItems, ...llmItems];
     const { nodes, edges } = materializeGraph(memoryItems, units, evidenceSpans);
     const projections = buildRuntimeProjections({
         nodes,
@@ -56,6 +61,8 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         units,
         evidenceSpans,
         memoryItems,
+        llmJobs,
+        llmItems,
         nodes,
         edges,
         ignitionNodes: projections.ignitionNodes,
