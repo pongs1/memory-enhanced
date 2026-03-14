@@ -140,9 +140,12 @@ export function buildLlmIrJobs(
     const sourceById = new Map(sources.map((s) => [s.id, s]));
     const jobs: V8IrLlmJob[] = [];
 
+    const maxSpanCount = 8;
     for (const unit of units) {
-        const spans = (spansByUnit.get(unit.id) || []).slice().sort((a, b) => b.score - a.score);
-        const spanIds = spans.slice(0, 6).map((span) => span.id);
+        const spans = (spansByUnit.get(unit.id) || [])
+            .slice()
+            .sort((a, b) => b.score - a.score);
+        const spanIds = spans.slice(0, maxSpanCount).map((span) => span.id);
         const source = sourceById.get(unit.sourceRecordId);
         const sourceCategory = source?.metadata?.sourceCategory;
         const operationPromotion = source?.metadata?.operationPromotion;
@@ -154,7 +157,7 @@ export function buildLlmIrJobs(
         }
         const prompt = buildPrompt({
             unit,
-            spans: spans.slice(0, 6),
+            spans: spans.slice(0, maxSpanCount),
             source,
         });
         jobs.push({
@@ -369,34 +372,34 @@ function buildPrompt(input: {
     const sourceCategory = input.source?.metadata?.sourceCategory ?? "conversation";
     const operationKind = input.source?.metadata?.operationKind;
     return [
-        "任务：从下方文本中抽取关系，输出 Markdown；若无可抽取关系，输出 `[]`。",
+        "Please extract only evidence-backed relations from the text below.",
+        "If nothing can be extracted, output `[]` only.",
         "",
-        "硬性规则：",
-        "- 只能使用 Allowed relations 列表内的关系类型（按分组提示）",
-        "- 只输出文本中明确支持的关系，不要做超出文本的推断",
-        "- `evidence_span_ids` 必须来自提供的 span id 列表",
-        "- `unit_id` 必须是当前 Unit ID",
-        "- 输出必须是 Markdown，不要输出 JSON，不要任何解释或额外文本",
+        "Rules:",
+        "- Use only the relations listed under Allowed relations (by group).",
+        "- Do not infer beyond the text; skip vague or speculative claims.",
+        "- `evidence_span_ids` must come from the provided span list.",
+        "- `unit_id` must be the current Unit ID.",
+        "- Output Markdown only. No JSON. No extra commentary.",
         "",
-        "输出格式（严格遵守）：",
-        "",
+        "Output format:",
         "### Item",
         "item_type: <type>",
         "subject: <text>",
         "predicate: <relation>",
         "object: <text>",
-        "qualifiers: key=value; key=value (没有则留空)",
+        "qualifiers: key=value; key=value (leave blank if none)",
         "origin_type: asserted|aggregated|inferred",
         "evidence_span_ids: es_xxx, es_yyy",
         "unit_id: <unit_id>",
         "confidence: 0.0-1.0",
         "",
-        "每条关系一个 `### Item`。",
-        "若无可抽取关系，输出：`[]`",
+        "One relation per `### Item` block.",
+        "If none, output: `[]`",
         "",
-        "可选控制类（若文本明确表达偏好/目标/约束/决定等）：",
-        "- item_type 可用：preference, goal, constraint, decision, open_question, conversation_act, session_state, topic_state",
-        "- predicate 可用：prefers, requires, targets, decides, acts",
+        "Optional control types (only if explicitly stated):",
+        "- item_type: preference, goal, constraint, decision, open_question, conversation_act, session_state, topic_state",
+        "- predicate: prefers, requires, targets, decides, acts",
         "",
         allowedLine,
         itemTypeLine,

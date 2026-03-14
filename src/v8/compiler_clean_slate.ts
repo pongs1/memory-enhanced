@@ -3,6 +3,7 @@ import { ensureV8StoreDirs } from "./paths_v8.js";
 import { loadSessionTraces } from "./adapters/session-source.js";
 import { normalizeSessionMessages } from "./architecture/source-normalizer.js";
 import { loadResolvedToolCleaningProfiles } from "./architecture/tool-cleaning-profiles.js";
+import { checkToolCatalogAgainstRules } from "./architecture/tool-catalog-check.js";
 import { unitizeSourceRecords } from "./architecture/unitizer.js";
 import { extractEvidenceSpans } from "./architecture/evidence.js";
 import { extractMemoryItems } from "./architecture/ir-extractor.js";
@@ -32,6 +33,10 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         maxFiles: options?.maxSessionFiles,
     });
     const toolCleaningProfiles = loadResolvedToolCleaningProfiles(workspace);
+    const toolCatalogCheck = checkToolCatalogAgainstRules({
+        workspace,
+        profiles: toolCleaningProfiles,
+    });
 
     const sourceRecords = traceGroups.flatMap((group) =>
         normalizeSessionMessages(group.messages, {
@@ -87,6 +92,7 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         llmJobs,
         llmItems,
         llmStatus,
+        toolCatalogCheck,
         nodes,
         edges,
         ignitionNodes: projections.ignitionNodes,

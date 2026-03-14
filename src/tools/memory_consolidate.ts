@@ -61,6 +61,12 @@ export async function executeMemoryConsolidate(
         `sessionTraceDir=${sessionTraceDir || "default"}`,
         maxSessionFiles ? `maxSessionFiles=${maxSessionFiles}` : null,
         llmCommand ? `llmStatus=${output.llmStatus}` : null,
+        output.toolCatalogCheck
+            ? `toolCatalogCheck=${output.toolCatalogCheck.status} tools=${output.toolCatalogCheck.toolCount} rules=${output.toolCatalogCheck.ruleCount}`
+            : null,
+        output.toolCatalogCheck?.promptPath
+            ? `toolCatalogPrompt=${output.toolCatalogCheck.promptPath}`
+            : null,
         `sourceRecords=${output.sourceRecords.length}`,
         `units=${output.units.length}`,
         `evidenceSpans=${output.evidenceSpans.length}`,

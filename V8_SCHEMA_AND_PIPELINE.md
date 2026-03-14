@@ -425,6 +425,20 @@ Rules:
 - memory/session reflection tools should default to `metadata_only` or `evidence_only` to avoid recursive re-ingestion of already canonical sources
 - unknown or changed tools still fall back to payload-shape heuristics until OpenClaw publishes a new runtime profile
 
+### 5.4.0a Tool catalog coverage check (startup)
+
+During `memory_consolidate`, V8 should compare:
+
+- `raw/observations/tool_catalog_snapshot.json` (tool list)
+- merged cleaning rules (baseline + runtime)
+
+If the catalog and rules do not match, V8 must:
+
+- write a prompt to `raw/observations/tool_cleaning_profile_review.md`
+- include the mismatch summary in the consolidate output
+
+The prompt should instruct an offline LLM to inspect tool implementations and draft cleaning profiles for missing tools, plus mark obsolete entries as `deprecated`.
+
 ### 5.4.1 Tool catalog snapshot contract
 
 V8 should **not** query or reconstruct the live OpenClaw tool registry by itself during memory consolidation.
