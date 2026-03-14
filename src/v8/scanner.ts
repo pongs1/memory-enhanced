@@ -29,6 +29,8 @@ interface LoadedGraphData {
     reverseAdjacency: Map<string, V8GraphEdge[]>;
     nodeTokens: Map<string, Set<string>>;
     degree: Map<string, number>;
+    scopeAnchorsByNode: Map<string, string[]>;
+    scopeNodes: Set<string>;
     edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>;
     policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
 }
@@ -180,6 +182,7 @@ export class V8GraphScanner {
         { outgoing: Map<string, RuntimeEdge[]>; incoming: Map<string, RuntimeEdge[]> }
     >();
     private readonly runtimeReweightCache = new Map<V8RecallMode, ReweightEdge[]>();
+    private activeScopeIds: Set<string> | null = null;
     private recentWindow = "";
     private charsSinceLastScan = 0;
 
@@ -239,6 +242,16 @@ export class V8GraphScanner {
 
         const edgeKinds = loadEdgeCatalog();
         const policyByKindMode = buildPolicyMap(loadEdgeRuntimePolicy());
+        const scopeAnchorsByNode = new Map<string, string[]>();
+        const scopeNodes = new Set<string>();
+        for (const edge of edges) {
+            const kind = edgeKinds.get(edge.type) || "semantic";
+            if (kind !== "scope_anchor") continue;
+            scopeNodes.add(edge.dst);
+            const list = scopeAnchorsByNode.get(edge.src) || [];
+            list.push(edge.dst);
+            scopeAnchorsByNode.set(edge.src, list);
+        }
 
         return {
             nodesById,
@@ -247,6 +260,8 @@ export class V8GraphScanner {
             reverseAdjacency,
             nodeTokens,
             degree,
+            scopeAnchorsByNode,
+            scopeNodes,
             edgeKinds,
             policyByKindMode,
         };
@@ -343,6 +358,8 @@ export class V8GraphScanner {
 
         const signalTokens = new Set(tokenize(combined));
         const nextBiases = new Map<string, number>();
+
+        this.updateActiveScopes(signalTokens);
 
         for (const [nodeId, tokens] of this.graph.nodeTokens.entries()) {
             if (this.isNodeSuppressed(nodeId, this.mode)) {
@@ -629,7 +646,22 @@ export class V8GraphScanner {
         }
         const node = this.graph.nodesById.get(nodeId);
         if (!node) return false;
-        return node.state?.validity === "superseded";
+        if (node.state?.validity === "superseded") {
+            return true;
+        }
+        const scopedTo = this.graph.scopeAnchorsByNode.get(nodeId);
+        if (!scopedTo || scopedTo.length === 0) {
+            return false;
+        }
+        if (!this.activeScopeIds || this.activeScopeIds.size === 0) {
+            return false;
+        }
+        for (const scopeId of scopedTo) {
+            if (this.activeScopeIds.has(scopeId)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private isStateNode(nodeId: string): boolean {
@@ -638,5 +670,25 @@ export class V8GraphScanner {
         if (!node.memoryType) return false;
         if (node.memoryType.endsWith("_state")) return true;
         return node.memoryType === "session_state" || node.memoryType === "topic_state";
+    }
+
+    private updateActiveScopes(signalTokens: Set<string>): void {
+        if (signalTokens.size === 0 || this.graph.scopeNodes.size === 0) {
+            this.activeScopeIds = null;
+            return;
+        }
+        const active = new Set<string>();
+        for (const scopeId of this.graph.scopeNodes) {
+            const node = this.graph.nodesById.get(scopeId);
+            if (!node) continue;
+            const tokens = new Set(
+                tokenize([node.canonicalLabel, ...(node.aliases || [])].join(" "))
+            );
+            const overlap = overlapScore(signalTokens, tokens);
+            if (overlap >= this.config.sceneOverlapThreshold) {
+                active.add(scopeId);
+            }
+        }
+        this.activeScopeIds = active.size > 0 ? active : null;
     }
 }
