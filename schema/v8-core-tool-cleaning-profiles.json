@@ -238,7 +238,7 @@
       },
       "result_hints": {
         "text_keys": ["content", "text", "output", "result"],
-        "metadata_keys": ["status", "sessionKey", "runId"]
+        "metadata_keys": ["status", "childSessionKey", "sessionKey", "runId"]
       },
       "cleaning_mode": "tool_operation",
       "promotion": "evidence_only",

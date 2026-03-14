@@ -620,6 +620,9 @@ Persistence (recommended):
 - strip prompt scaffolding, hidden control tags, and other machine-only noise
 - coverage: if the narrative misses any trace entries, inject the cleaned trace text back
   into the narrative stream (timestamp order) before unitization
+- subagent/acp coverage: when `sessions_spawn` returns `childSessionKey`, resolve the child
+  session transcript via `sessions.json`, clean it, and merge its entries into the parent
+  narrative timeline with an explicit `subagent:`/`acp:` label (timestamp order)
 
 This view is the primary input for IR extraction and graph materialization.
 Evidence spans still trace back to the narrative-derived source records.

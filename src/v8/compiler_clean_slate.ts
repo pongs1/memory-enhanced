@@ -1,7 +1,13 @@
 import { resolveWorkspace } from "../utils.js";
 import { ensureV8StoreDirs } from "./paths_v8.js";
-import { loadSessionTraces } from "./adapters/session-source.js";
-import { normalizeSessionMessages } from "./architecture/source-normalizer.js";
+import {
+    loadSessionTraces,
+    resolveSessionTraceDir,
+} from "./adapters/session-source.js";
+import {
+    normalizeSessionMessages,
+    type RawSessionMessage,
+} from "./architecture/source-normalizer.js";
 import { loadResolvedToolCleaningProfiles } from "./architecture/tool-cleaning-profiles.js";
 import { checkToolCatalogAgainstRules } from "./architecture/tool-catalog-check.js";
 import { loadNarrativeSourceRecords } from "./architecture/narrative-source.js";
@@ -11,7 +17,7 @@ import { extractMemoryItems } from "./architecture/ir-extractor.js";
 import { buildLlmIrJobs, loadLlmIrItems, writeIrLlmJobs } from "./architecture/ir-llm.js";
 import { materializeGraph } from "./architecture/graph-materializer.js";
 import { buildRuntimeProjections } from "./architecture/runtime-projection.js";
-import { writeJsonl } from "./architecture/io.js";
+import { readJsonl, writeJsonl } from "./architecture/io.js";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -33,25 +39,48 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         sessionTraceDir: options?.sessionTraceDir,
         maxFiles: options?.maxSessionFiles,
     });
+    const sessionTraceDir =
+        resolveSessionTraceDir(workspace, options?.sessionTraceDir) ||
+        (traceGroups.length > 0
+            ? path.dirname(traceGroups[0].sourceRefPrefix)
+            : null);
     const toolCleaningProfiles = loadResolvedToolCleaningProfiles(workspace);
     const toolCatalogCheck = checkToolCatalogAgainstRules({
         workspace,
         profiles: toolCleaningProfiles,
     });
 
-    const traceSourceRecords = traceGroups.flatMap((group) =>
-        normalizeSessionMessages(group.messages, {
+    const traceSourceRecords: V8SourceRecord[] = [];
+    const linkedSourceRecords: V8SourceRecord[] = [];
+    for (const group of traceGroups) {
+        const baseRecords = normalizeSessionMessages(group.messages, {
             sourceRefPrefix: group.sourceRefPrefix,
             workspace,
             toolCleaningProfiles,
-        })
-    );
-    persistAssembledObservationMarkdown(store.rawDir, traceSourceRecords);
+        });
+        traceSourceRecords.push(...baseRecords);
+
+        const parentSessionId = deriveSessionIdFromSourceRef(group.sourceRefPrefix);
+        const links = extractSessionLinksFromMessages(group.messages);
+        if (links.length && sessionTraceDir) {
+            linkedSourceRecords.push(
+                ...loadLinkedSessionRecords({
+                    links,
+                    parentSessionId,
+                    sessionTraceDir,
+                    toolCleaningProfiles,
+                    workspace,
+                })
+            );
+        }
+    }
+    const traceRecords = [...traceSourceRecords, ...linkedSourceRecords];
+    persistAssembledObservationMarkdown(store.rawDir, traceRecords);
 
     const narrativeSourceRecords = loadNarrativeSourceRecords(store.rawDir);
     const sourceRecords = mergeNarrativeCoverage(
         narrativeSourceRecords,
-        traceSourceRecords
+        traceRecords
     );
     const units = unitizeSourceRecords(sourceRecords);
     persistNarrativeUnitPreview(store.rawDir, units, sourceRecords);
@@ -114,6 +143,308 @@ function persistAssembledObservationMarkdown(rawDir: string, records: V8SourceRe
     fs.mkdirSync(outDir, { recursive: true });
     persistOperationMarkdown(outDir, records);
     persistSessionNarratives(outDir, records);
+}
+
+interface SessionLinkRef {
+    childSessionKey: string;
+    runId?: string;
+    label?: string;
+    runtime?: string;
+}
+
+function extractSessionLinksFromMessages(messages: RawSessionMessage[]): SessionLinkRef[] {
+    const callMeta = new Map<string, { label?: string; runtime?: string }>();
+    for (const msg of messages) {
+        const content = msg.message?.content;
+        if (!Array.isArray(content)) continue;
+        for (const entry of content) {
+            if (!entry) continue;
+            const toolName =
+                (entry.name as string | undefined) ||
+                (entry.toolName as string | undefined) ||
+                (entry.tool_name as string | undefined) ||
+                (entry.tool as string | undefined) ||
+                (entry.function as { name?: string } | undefined)?.name;
+            if (!toolName || toolName !== "sessions_spawn") continue;
+            const toolCallId =
+                (entry.id as string | undefined) ||
+                (entry.toolCallId as string | undefined) ||
+                (entry.tool_call_id as string | undefined) ||
+                "";
+            if (!toolCallId) continue;
+            const args = extractToolArgs(entry);
+            const meta: { label?: string; runtime?: string } = {};
+            if (typeof args?.label === "string" && args.label.trim()) {
+                meta.label = args.label.trim();
+            }
+            if (typeof args?.runtime === "string" && args.runtime.trim()) {
+                meta.runtime = args.runtime.trim();
+            }
+            callMeta.set(toolCallId, meta);
+        }
+    }
+
+    const links: SessionLinkRef[] = [];
+    const seen = new Set<string>();
+    for (const msg of messages) {
+        const role =
+            (msg.message as { role?: string } | undefined)?.role ||
+            msg.role ||
+            msg.speaker;
+        if (role !== "toolResult" && role !== "tool") continue;
+        const toolName =
+            msg.message?.toolName ||
+            msg.message?.tool_name ||
+            msg.message?.name ||
+            msg.message?.tool ||
+            (msg as { toolName?: string }).toolName;
+        if (toolName !== "sessions_spawn") continue;
+
+        const toolCallId =
+            msg.message?.toolCallId ||
+            msg.message?.tool_call_id ||
+            (msg as { toolCallId?: string }).toolCallId ||
+            "";
+        const details =
+            (msg.message?.details as Record<string, unknown> | undefined) ||
+            (msg as { details?: Record<string, unknown> }).details ||
+            {};
+        const parsed = extractChildSessionDetails(details, msg);
+        if (!parsed.childSessionKey) continue;
+        if (parsed.status && parsed.status !== "accepted") continue;
+        if (seen.has(parsed.childSessionKey)) continue;
+        seen.add(parsed.childSessionKey);
+        const meta = toolCallId ? callMeta.get(toolCallId) : undefined;
+        links.push({
+            childSessionKey: parsed.childSessionKey,
+            runId: parsed.runId,
+            label: meta?.label,
+            runtime: meta?.runtime || inferOriginKind(parsed.childSessionKey) || undefined,
+        });
+    }
+    return links;
+}
+
+function extractToolArgs(entry: {
+    arguments?: unknown;
+    function?: { arguments?: unknown };
+}): Record<string, unknown> | null {
+    const raw = entry.arguments ?? entry.function?.arguments;
+    if (!raw) return null;
+    if (typeof raw === "string") {
+        try {
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+        } catch {
+            return null;
+        }
+    }
+    return typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+}
+
+function extractChildSessionDetails(
+    details: Record<string, unknown>,
+    msg: RawSessionMessage
+): { childSessionKey?: string; runId?: string; status?: string } {
+    const status = typeof details.status === "string" ? details.status : undefined;
+    const childSessionKey =
+        (typeof details.childSessionKey === "string" && details.childSessionKey) ||
+        (typeof (details as any).child_session_key === "string" &&
+            (details as any).child_session_key) ||
+        (typeof details.sessionKey === "string" &&
+            details.sessionKey.includes(":subagent:") ? details.sessionKey : "") ||
+        (typeof details.sessionKey === "string" &&
+            details.sessionKey.includes(":acp:") ? details.sessionKey : "");
+    const runId =
+        (typeof details.runId === "string" && details.runId) ||
+        (typeof (details as any).run_id === "string" && (details as any).run_id) ||
+        undefined;
+    if (childSessionKey) {
+        return { childSessionKey, runId, status };
+    }
+    const fallbackText = extractToolResultTextLite(msg);
+    if (fallbackText && fallbackText.trim().startsWith("{")) {
+        try {
+            const parsed = JSON.parse(fallbackText);
+            if (parsed && typeof parsed === "object") {
+                const child =
+                    (parsed as any).childSessionKey ||
+                    (parsed as any).child_session_key ||
+                    (parsed as any).sessionKey;
+                if (typeof child === "string" && child) {
+                    const parsedStatus =
+                        typeof (parsed as any).status === "string" ? (parsed as any).status : status;
+                    const parsedRunId =
+                        typeof (parsed as any).runId === "string"
+                            ? (parsed as any).runId
+                            : runId;
+                    return {
+                        childSessionKey: child,
+                        runId: parsedRunId,
+                        status: parsedStatus,
+                    };
+                }
+            }
+        } catch {
+            // ignore parse errors
+        }
+    }
+    return { status };
+}
+
+function extractToolResultTextLite(msg: RawSessionMessage): string {
+    const content =
+        msg.content ??
+        msg.text ??
+        msg.body ??
+        msg.message?.content ??
+        "";
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+        return content
+            .map((entry) =>
+                typeof entry?.text === "string" ? entry.text : ""
+            )
+            .join("\n");
+    }
+    return "";
+}
+
+function loadLinkedSessionRecords(input: {
+    links: SessionLinkRef[];
+    parentSessionId: string;
+    sessionTraceDir: string;
+    toolCleaningProfiles: ReturnType<typeof loadResolvedToolCleaningProfiles>;
+    workspace: string;
+}): V8SourceRecord[] {
+    const agentsRoot = resolveAgentsRoot(input.sessionTraceDir);
+    if (!agentsRoot) return [];
+    const records: V8SourceRecord[] = [];
+    const sessionIndexCache = new Map<string, Map<string, string>>();
+
+    for (const link of input.links) {
+        const agentId = parseAgentIdFromSessionKey(link.childSessionKey);
+        if (!agentId) continue;
+        const sessionsDir = path.join(agentsRoot, agentId, "sessions");
+        if (!fs.existsSync(sessionsDir)) continue;
+        const sessionId = resolveSessionIdFromStore(
+            sessionsDir,
+            link.childSessionKey,
+            sessionIndexCache
+        );
+        if (!sessionId) continue;
+        const filePath = resolveSessionTracePath(sessionsDir, sessionId);
+        if (!filePath) continue;
+        const messages = readSessionTraceFile(filePath);
+        if (!messages.length) continue;
+        const linkedRecords = normalizeSessionMessages(messages, {
+            sourceRefPrefix: filePath,
+            sessionId: input.parentSessionId,
+            workspace: input.workspace,
+            toolCleaningProfiles: input.toolCleaningProfiles,
+        });
+        const originKind = link.runtime || inferOriginKind(link.childSessionKey) || "subagent";
+        for (const record of linkedRecords) {
+            record.metadata.originSessionKey = link.childSessionKey;
+            record.metadata.originSessionId = sessionId;
+            record.metadata.originAgentId = agentId;
+            record.metadata.originRuntime = originKind;
+            if (link.label) {
+                record.metadata.originLabel = link.label;
+            }
+            record.metadata.sourceOrigin = originKind;
+        }
+        records.push(...linkedRecords);
+    }
+
+    return records;
+}
+
+function resolveAgentsRoot(sessionTraceDir: string): string | null {
+    if (!sessionTraceDir) return null;
+    const resolved = path.resolve(sessionTraceDir);
+    const base = path.basename(resolved);
+    if (base === "sessions") {
+        return path.dirname(path.dirname(resolved));
+    }
+    return path.dirname(resolved);
+}
+
+function parseAgentIdFromSessionKey(sessionKey: string): string | null {
+    if (!sessionKey) return null;
+    const match = sessionKey.match(/^agent:([^:]+):/i);
+    return match ? match[1] : null;
+}
+
+function resolveSessionIdFromStore(
+    sessionsDir: string,
+    sessionKey: string,
+    cache: Map<string, Map<string, string>>
+): string | null {
+    const index = loadSessionIndex(sessionsDir, cache);
+    return index.get(sessionKey) || null;
+}
+
+function loadSessionIndex(
+    sessionsDir: string,
+    cache: Map<string, Map<string, string>>
+): Map<string, string> {
+    const cached = cache.get(sessionsDir);
+    if (cached) return cached;
+    const index = new Map<string, string>();
+    const filePath = path.join(sessionsDir, "sessions.json");
+    try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(raw) as Record<string, { sessionId?: string }>;
+        for (const [key, value] of Object.entries(parsed || {})) {
+            if (typeof value?.sessionId === "string") {
+                index.set(key, value.sessionId);
+            }
+        }
+    } catch {
+        // ignore missing or invalid index
+    }
+    cache.set(sessionsDir, index);
+    return index;
+}
+
+function resolveSessionTracePath(sessionsDir: string, sessionId: string): string | null {
+    const jsonl = path.join(sessionsDir, `${sessionId}.jsonl`);
+    if (fs.existsSync(jsonl)) return jsonl;
+    const json = path.join(sessionsDir, `${sessionId}.json`);
+    if (fs.existsSync(json)) return json;
+    return null;
+}
+
+function readSessionTraceFile(filePath: string): RawSessionMessage[] {
+    if (filePath.endsWith(".jsonl")) {
+        return readJsonl<RawSessionMessage>(filePath).filter(isMessageRecord);
+    }
+    try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+            return (parsed as RawSessionMessage[]).filter(isMessageRecord);
+        }
+        if (Array.isArray(parsed?.messages)) {
+            return (parsed.messages as RawSessionMessage[]).filter(isMessageRecord);
+        }
+    } catch {
+        // ignore parse errors
+    }
+    return [];
+}
+
+function isMessageRecord(record: RawSessionMessage): boolean {
+    if (!record) return false;
+    if ((record as { type?: string }).type === "message") return true;
+    return Boolean((record as any).message || (record as any).content || (record as any).text);
+}
+
+function deriveSessionIdFromSourceRef(sourceRefPrefix: string): string {
+    if (!sourceRefPrefix) return "default";
+    const last = sourceRefPrefix.split(/[\\/]/).pop() || sourceRefPrefix;
+    return last.replace(/\.[^.]+$/, "") || "default";
 }
 
 function mergeNarrativeCoverage(
@@ -245,6 +576,11 @@ interface NarrativeEntry {
     text: string;
     toolName?: string;
     sourceIndex?: number | null;
+    originKind?: string;
+    originSessionKey?: string;
+    originSessionId?: string;
+    originAgentId?: string;
+    originLabel?: string;
 }
 
 function persistSessionNarratives(outDir: string, records: V8SourceRecord[]): void {
@@ -269,6 +605,11 @@ function persistSessionNarratives(outDir: string, records: V8SourceRecord[]): vo
                     : text,
             toolName: record.metadata?.toolName,
             sourceIndex,
+            originKind: record.metadata?.sourceOrigin || record.metadata?.originRuntime,
+            originSessionKey: record.metadata?.originSessionKey,
+            originSessionId: record.metadata?.originSessionId,
+            originAgentId: record.metadata?.originAgentId,
+            originLabel: record.metadata?.originLabel,
         };
         const bucket = sessions.get(sessionId) || [];
         bucket.push(entry);
@@ -402,6 +743,22 @@ function persistNarrativeUnitPreview(
             if (record.metadata?.narrativeLabel) {
                 lines.push(`label: ${record.metadata.narrativeLabel}`);
             }
+            const originLabel = formatOriginLabel({
+                sessionId: record.metadata?.sessionId || "default",
+                sourceRef: record.sourceRef,
+                sourceCategory: record.metadata?.sourceCategory || "conversation",
+                speaker: record.speaker,
+                timestamp: record.timestamp,
+                text,
+                originKind: record.metadata?.sourceOrigin || record.metadata?.originRuntime,
+                originSessionKey: record.metadata?.originSessionKey,
+                originSessionId: record.metadata?.originSessionId,
+                originAgentId: record.metadata?.originAgentId,
+                originLabel: record.metadata?.originLabel,
+            });
+            if (originLabel) {
+                lines.push(`origin: ${originLabel}`);
+            }
             if (record.speaker) {
                 lines.push(`speaker: ${record.speaker}`);
             }
@@ -449,6 +806,8 @@ function persistNarrativeUnitPreview(
 
 function buildEntryLabel(entry: NarrativeEntry): string | null {
     const parts: string[] = [];
+    const originLabel = formatOriginLabel(entry);
+    if (originLabel) parts.push(originLabel);
     const refLabel = buildSourceLabel(entry);
     if (refLabel) parts.push(refLabel);
     const shortTs = formatTimestampShort(entry.timestamp);
@@ -467,6 +826,42 @@ function buildSourceLabel(entry: NarrativeEntry): string | null {
         return `#${entry.sourceIndex}`;
     }
     return null;
+}
+
+function formatOriginLabel(entry: NarrativeEntry): string | null {
+    const originKind = entry.originKind?.trim();
+    const originKey = entry.originSessionKey?.trim();
+    const originLabel = entry.originLabel?.trim();
+    if (!originKind && !originKey && !originLabel) return null;
+
+    const kind = originKind || inferOriginKind(originKey);
+    if (originLabel) {
+        return kind ? `${kind}:${originLabel}` : originLabel;
+    }
+    if (originKey) {
+        const shortKey = formatSessionKeyShort(originKey);
+        return kind ? `${kind}:${shortKey}` : shortKey;
+    }
+    return kind || null;
+}
+
+function inferOriginKind(originKey?: string | null): string | null {
+    if (!originKey) return null;
+    if (originKey.includes(":acp:")) return "acp";
+    if (originKey.includes(":subagent:")) return "subagent";
+    return null;
+}
+
+function formatSessionKeyShort(key: string): string {
+    const match = key.match(/^agent:([^:]+):([^:]+):(.+)$/i);
+    if (match) {
+        const agentId = match[1];
+        const kind = match[2];
+        const rest = match[3];
+        const suffix = rest.length > 8 ? rest.slice(0, 8) : rest;
+        return `${agentId}:${kind}:${suffix}`;
+    }
+    return key.length > 20 ? key.slice(0, 20) : key;
 }
 
 function formatSpeakerLabel(entry: NarrativeEntry): string {
