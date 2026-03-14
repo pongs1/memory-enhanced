@@ -39,6 +39,10 @@ interface RuntimeEdge {
     direction: V8EdgeRuntimePolicyEntry["direction"];
 }
 
+interface ReweightEdge {
+    edge: V8GraphEdge;
+}
+
 function loadJsonl<T>(filePath: string): T[] {
     try {
         const content = fs.readFileSync(filePath, "utf-8").trim();
@@ -175,6 +179,7 @@ export class V8GraphScanner {
         V8RecallMode,
         { outgoing: Map<string, RuntimeEdge[]>; incoming: Map<string, RuntimeEdge[]> }
     >();
+    private readonly runtimeReweightCache = new Map<V8RecallMode, ReweightEdge[]>();
     private recentWindow = "";
     private charsSinceLastScan = 0;
 
@@ -294,6 +299,31 @@ export class V8GraphScanner {
         const result = { outgoing, incoming };
         this.runtimeEdgeCache.set(mode, result);
         return result;
+    }
+
+    private getReweightEdges(mode: V8RecallMode): ReweightEdge[] {
+        const cached = this.runtimeReweightCache.get(mode);
+        if (cached) return cached;
+
+        const edges: ReweightEdge[] = [];
+        for (const edge of this.graph.edges) {
+            if (
+                edge.state?.validity === "superseded" &&
+                mode !== "trajectory" &&
+                mode !== "audit"
+            ) {
+                continue;
+            }
+            const kind = this.graph.edgeKinds.get(edge.type) || "semantic";
+            const policy = this.graph.policyByKindMode.get(policyKey(kind, mode));
+            if (!policy || policy.role !== "reweight") {
+                continue;
+            }
+            edges.push({ edge });
+        }
+
+        this.runtimeReweightCache.set(mode, edges);
+        return edges;
     }
 
     public refreshScene(signals: V8SceneSignal[], anchors: V8ControlAnchors): void {
@@ -472,6 +502,68 @@ export class V8GraphScanner {
         }
     }
 
+    private applyReweight(mode: V8RecallMode): void {
+        const edges = this.getReweightEdges(mode);
+        if (edges.length === 0) return;
+
+        const profileMode = mode === "profile" || mode === "oblique";
+        const trajectoryMode = mode === "trajectory" || mode === "audit";
+        const deltas = new Map<string, number>();
+
+        const pushDelta = (nodeId: string, delta: number) => {
+            if (!delta) return;
+            deltas.set(nodeId, (deltas.get(nodeId) || 0) + delta);
+        };
+
+        for (const entry of edges) {
+            const edge = entry.edge;
+            if (!this.isStateNode(edge.src) || !this.isStateNode(edge.dst)) {
+                continue;
+            }
+
+            const srcEnergy = this.activations.get(edge.src) || 0;
+            const dstEnergy = this.activations.get(edge.dst) || 0;
+            if (srcEnergy <= 0 && dstEnergy <= 0) {
+                continue;
+            }
+
+            switch (edge.type) {
+                case "state_supersedes_state": {
+                    if (profileMode) {
+                        pushDelta(edge.dst, -0.5 * srcEnergy);
+                        pushDelta(edge.src, 0.1 * srcEnergy);
+                    } else if (trajectoryMode) {
+                        pushDelta(edge.dst, 0.3 * srcEnergy);
+                        pushDelta(edge.src, 0.18 * dstEnergy);
+                    }
+                    break;
+                }
+                case "state_refines_state": {
+                    if (profileMode) {
+                        pushDelta(edge.dst, -0.3 * srcEnergy);
+                        pushDelta(edge.src, 0.08 * srcEnergy);
+                    } else if (trajectoryMode) {
+                        pushDelta(edge.dst, 0.18 * srcEnergy);
+                        pushDelta(edge.src, 0.12 * dstEnergy);
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        for (const [nodeId, delta] of deltas.entries()) {
+            const current = this.activations.get(nodeId) || 0;
+            const next = clamp01(current + delta);
+            if (next <= 0.01) {
+                this.activations.delete(nodeId);
+            } else {
+                this.activations.set(nodeId, next);
+            }
+        }
+    }
+
     private spreadActivation(modeOverride?: V8RecallMode): void {
         const mode = modeOverride || this.mode;
         const nextEnergy = new Map<string, number>();
@@ -527,6 +619,8 @@ export class V8GraphScanner {
         for (const [nodeId, energy] of nextEnergy.entries()) {
             this.activate(nodeId, energy);
         }
+
+        this.applyReweight(mode);
     }
 
     private isNodeSuppressed(nodeId: string, mode: V8RecallMode): boolean {
@@ -536,5 +630,13 @@ export class V8GraphScanner {
         const node = this.graph.nodesById.get(nodeId);
         if (!node) return false;
         return node.state?.validity === "superseded";
+    }
+
+    private isStateNode(nodeId: string): boolean {
+        const node = this.graph.nodesById.get(nodeId);
+        if (!node) return false;
+        if (!node.memoryType) return false;
+        if (node.memoryType.endsWith("_state")) return true;
+        return node.memoryType === "session_state" || node.memoryType === "topic_state";
     }
 }
