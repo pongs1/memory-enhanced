@@ -13,6 +13,7 @@ import type {
     V8EdgeRuntimePolicyEntry,
     V8GraphEdge,
     V8GraphNode,
+    V8RecallBundleProjection,
     V8RecallMode,
     V8SourceRecord,
 } from "./types_v8.js";
@@ -25,6 +26,7 @@ interface RecallAssemblyContext {
     edgesByNode: Map<string, V8GraphEdge[]>;
     edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>;
     policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
+    recallBundlesById: Map<string, V8RecallBundleProjection>;
 }
 
 interface EdgeCatalogFile {
@@ -91,10 +93,17 @@ function formatEvidence(span: V8EvidenceSpan, source?: V8SourceRecord): string {
 
 function resolveEvidenceSpanIds(
     bundle: V8ActivatedBundle,
-    node: V8GraphNode
+    node: V8GraphNode,
+    recallBundle?: V8RecallBundleProjection
 ): string[] {
     if (bundle.evidenceSpanIds && bundle.evidenceSpanIds.length > 0) {
         return bundle.evidenceSpanIds;
+    }
+    if (recallBundle?.bestEvidenceSpanIds && recallBundle.bestEvidenceSpanIds.length > 0) {
+        return recallBundle.bestEvidenceSpanIds;
+    }
+    if (recallBundle?.evidenceSpanIds && recallBundle.evidenceSpanIds.length > 0) {
+        return recallBundle.evidenceSpanIds;
     }
     if (node.bestEvidenceSpanIds && node.bestEvidenceSpanIds.length > 0) {
         return node.bestEvidenceSpanIds;
@@ -108,6 +117,7 @@ export function loadRecallAssemblyContext(workspace: string): RecallAssemblyCont
     const evidence = loadJsonl<V8EvidenceSpan>(store.evidenceSpans);
     const sources = loadJsonl<V8SourceRecord>(store.sourceRecords);
     const edges = loadJsonl<V8GraphEdge>(store.graphEdges);
+    const recallBundles = loadJsonl<V8RecallBundleProjection>(store.recallBundles);
 
     const edgesByNode = new Map<string, V8GraphEdge[]>();
     for (const edge of edges) {
@@ -128,6 +138,7 @@ export function loadRecallAssemblyContext(workspace: string): RecallAssemblyCont
         edgesByNode,
         edgeKinds,
         policyByKindMode,
+        recallBundlesById: new Map(recallBundles.map((bundle) => [bundle.bundleId, bundle])),
     };
 }
 
@@ -141,13 +152,18 @@ export function assembleRecallPrompts(
     const maxEvidence = mode === "audit" ? 8 : mode === "trajectory" ? 6 : 4;
 
     for (const bundle of input.bundles) {
-        const node = context.nodesById.get(bundle.bundleId);
+        const recallBundle = context.recallBundlesById.get(bundle.bundleId);
+        const node = context.nodesById.get(recallBundle?.nodeIds?.[0] || bundle.bundleId);
         if (!node) continue;
 
-        let evidenceSpanIds = resolveEvidenceSpanIds(bundle, node);
+        let evidenceSpanIds = resolveEvidenceSpanIds(bundle, node, recallBundle);
         if (isStructuralMode) {
             const structural = collectBacktraceEvidence(
-                bundle.nodeIds.length > 0 ? bundle.nodeIds : [bundle.bundleId],
+                recallBundle?.nodeIds && recallBundle.nodeIds.length > 0
+                    ? recallBundle.nodeIds
+                    : bundle.nodeIds.length > 0
+                      ? bundle.nodeIds
+                      : [bundle.bundleId],
                 mode,
                 context
             );
@@ -171,11 +187,19 @@ export function assembleRecallPrompts(
         }
 
         const header = `<!-- Memory Recall (${bundle.tier}) -->`;
+        const title = recallBundle?.title || node.canonicalLabel;
+        const summaryText = recallBundle?.summaryText || "";
         const body = [
-            `Topic: ${sanitizeText(node.canonicalLabel, 120)}`,
+            `Topic: ${sanitizeText(title || node.canonicalLabel, 120)}`,
+            summaryText && summaryText !== title
+                ? `Summary: ${sanitizeText(summaryText, 200)}`
+                : null,
+            recallBundle?.packType ? `Pack: ${recallBundle.packType}` : null,
             `Evidence:`,
             ...evidenceLines.map((line) => `- ${line}`),
-        ].join("\\n");
+        ]
+            .filter(Boolean)
+            .join("\\n");
 
         const prompt = `${header}\\n${body}\\n<!-- End Memory Recall -->`;
 
