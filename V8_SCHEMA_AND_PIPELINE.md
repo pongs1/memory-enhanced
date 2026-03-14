@@ -448,6 +448,28 @@ Rules:
 - use this assembled Markdown text as the preferred unitizer input for tool operations because it is denser and easier to segment than raw fragmented transcript records
 - do not force unrelated lifecycle records into the same assembled text block
 
+### 5.6 Session narrative view (assembled)
+
+In addition to tool-specific assembly, V8 should persist a **session-level narrative** that merges all cleaned text:
+
+- user + assistant conversation
+- system/agent lifecycle messages that are part of the visible trace
+- assembled tool operation snapshots (from 5.5)
+
+This narrative is a **derived, high-density Markdown view** for replay and offline LLM extraction.
+It must not replace `source_records` or the raw observation ledger.
+
+Persistence (recommended):
+
+- store under `raw/observations/assembled/`
+- filename: `session_<session_id>_narrative.md`
+- ordering: prefer timestamps; fall back to transcript order when timestamps are missing
+- keep it natural-language, not JSON or key-value dumps
+- strip prompt scaffolding, hidden control tags, and other machine-only noise
+
+This view is a convenient input for IR extraction or debugging,
+but the graph and evidence spans must still trace back to canonical source records.
+
 ## 6. Unitization
 
 All source records are segmented into `micro`, `meso`, and `macro` units.

@@ -111,6 +111,7 @@ export function normalizeSessionMessages(
                     sessionId,
                     sourceRef,
                     sourceCategory: "conversation",
+                    sourceIndex: String(index + 1),
                 },
             } satisfies V8SourceRecord;
         })
@@ -560,6 +561,10 @@ function buildOperationRecord(
         sourceCategory: "operation",
         toolName,
     };
+    const sourceIndex = result?.sourceIndex ?? call?.sourceIndex;
+    if (typeof sourceIndex === "number") {
+        metadata.sourceIndex = String(sourceIndex + 1);
+    }
     if (call?.toolCallId) metadata.toolCallId = call.toolCallId;
     if (call?.messageId !== undefined) {
         metadata.toolCallMessageId = String(call.messageId);

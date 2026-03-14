@@ -95,6 +95,15 @@ function persistAssembledObservationMarkdown(rawDir: string, records: V8SourceRe
     if (!records.length) return;
     const outDir = path.join(rawDir, "observations", "assembled");
     fs.mkdirSync(outDir, { recursive: true });
+    persistOperationMarkdown(outDir, records);
+    persistSessionNarratives(outDir, records);
+}
+
+function sanitizeFileName(value: string): string {
+    return value.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function persistOperationMarkdown(outDir: string, records: V8SourceRecord[]): void {
     for (const record of records) {
         if (record.metadata?.sourceCategory !== "operation") continue;
         const toolCallId = record.metadata?.toolCallId;
@@ -108,8 +117,168 @@ function persistAssembledObservationMarkdown(rawDir: string, records: V8SourceRe
     }
 }
 
-function sanitizeFileName(value: string): string {
-    return value.replace(/[^a-zA-Z0-9._-]/g, "_");
+interface NarrativeEntry {
+    sessionId: string;
+    sourceRef: string;
+    sourceCategory: string;
+    speaker: V8SourceRecord["speaker"];
+    timestamp: string | null;
+    text: string;
+    toolName?: string;
+    sourceIndex?: number | null;
+}
+
+function persistSessionNarratives(outDir: string, records: V8SourceRecord[]): void {
+    const sessions = new Map<string, NarrativeEntry[]>();
+    for (const record of records) {
+        if (record.sourceType !== "session_trace") continue;
+        const rawText = record.cleanText || record.rawText || "";
+        const text = rawText.trim();
+        if (!text) continue;
+        const sessionId = record.metadata?.sessionId || "default";
+        const sourceCategory = record.metadata?.sourceCategory || "conversation";
+        const sourceIndex = toNumber(record.metadata?.sourceIndex);
+        const entry: NarrativeEntry = {
+            sessionId,
+            sourceRef: record.sourceRef,
+            sourceCategory,
+            speaker: record.speaker,
+            timestamp: record.timestamp,
+            text:
+                sourceCategory === "operation"
+                    ? stripOperationHeading(text)
+                    : text,
+            toolName: record.metadata?.toolName,
+            sourceIndex,
+        };
+        const bucket = sessions.get(sessionId) || [];
+        bucket.push(entry);
+        sessions.set(sessionId, bucket);
+    }
+
+    for (const [sessionId, entries] of sessions.entries()) {
+        entries.sort(compareNarrativeEntries);
+        const markdown = renderSessionNarrative(sessionId, entries);
+        if (!markdown.trim()) continue;
+        const fileName =
+            sanitizeFileName(`session_${sessionId}_narrative`) + ".md";
+        try {
+            fs.writeFileSync(path.join(outDir, fileName), markdown, "utf-8");
+        } catch {
+            // ignore write failures to keep consolidation moving
+        }
+    }
+}
+
+function compareNarrativeEntries(a: NarrativeEntry, b: NarrativeEntry): number {
+    const aTime = parseTimestampMs(a.timestamp);
+    const bTime = parseTimestampMs(b.timestamp);
+    if (aTime !== null && bTime !== null && aTime !== bTime) {
+        return aTime - bTime;
+    }
+    if (aTime !== null && bTime === null) return -1;
+    if (aTime === null && bTime !== null) return 1;
+    const aKey = computeSortKey(a);
+    const bKey = computeSortKey(b);
+    if (aKey !== null && bKey !== null && aKey !== bKey) {
+        return aKey - bKey;
+    }
+    if (aKey !== null && bKey === null) return -1;
+    if (aKey === null && bKey !== null) return 1;
+    return a.sourceRef.localeCompare(b.sourceRef);
+}
+
+function computeSortKey(entry: NarrativeEntry): number | null {
+    const fromRef = parseSourceRefIndex(entry.sourceRef);
+    const base = fromRef ?? entry.sourceIndex ?? null;
+    if (base === null) return null;
+    return entry.sourceCategory === "operation" ? base + 0.5 : base;
+}
+
+function parseSourceRefIndex(sourceRef: string): number | null {
+    const opMatch = sourceRef.match(/#op-(\d+)/);
+    if (opMatch) return Number(opMatch[1]);
+    const msgMatch = sourceRef.match(/#(\d+)/);
+    if (msgMatch) return Number(msgMatch[1]);
+    return null;
+}
+
+function parseTimestampMs(value: string | null): number | null {
+    if (!value) return null;
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+}
+
+function toNumber(value?: string): number | null {
+    if (!value) return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function renderSessionNarrative(
+    sessionId: string,
+    entries: NarrativeEntry[]
+): string {
+    const lines: string[] = [];
+    lines.push("# Session Narrative");
+    lines.push("");
+    lines.push(`Session: \`${sessionId}\``);
+    lines.push("");
+    lines.push("## Timeline");
+    lines.push("");
+    for (const entry of entries) {
+        const label = buildEntryLabel(entry);
+        const speakerLabel = formatSpeakerLabel(entry);
+        const header = label ? `### [${label}] ${speakerLabel}` : `### ${speakerLabel}`;
+        lines.push(header.trim());
+        lines.push(entry.text);
+        lines.push("");
+    }
+    return lines.join("\n").trim() + "\n";
+}
+
+function buildEntryLabel(entry: NarrativeEntry): string | null {
+    const parts: string[] = [];
+    const refLabel = buildSourceLabel(entry);
+    if (refLabel) parts.push(refLabel);
+    if (entry.timestamp) parts.push(entry.timestamp);
+    return parts.length ? parts.join(" | ") : null;
+}
+
+function buildSourceLabel(entry: NarrativeEntry): string | null {
+    if (entry.sourceRef) {
+        const opMatch = entry.sourceRef.match(/#op-(\d+)/);
+        if (opMatch) return `op-${opMatch[1]}`;
+        const msgMatch = entry.sourceRef.match(/#(\d+)/);
+        if (msgMatch) return `#${msgMatch[1]}`;
+    }
+    if (typeof entry.sourceIndex === "number") {
+        return `#${entry.sourceIndex}`;
+    }
+    return null;
+}
+
+function formatSpeakerLabel(entry: NarrativeEntry): string {
+    if (entry.sourceCategory === "operation") {
+        const toolLabel = entry.toolName ? ` (tool \`${entry.toolName}\`)` : " (tool)";
+        return `assistant${toolLabel}`;
+    }
+    if (entry.speaker) return entry.speaker;
+    return "unknown";
+}
+
+function stripOperationHeading(text: string): string {
+    const lines = text.split("\n");
+    if (!lines.length) return text;
+    const first = lines[0].trim().toLowerCase();
+    if (
+        first.startsWith("#### tool operation") ||
+        first.startsWith("### tool operation") ||
+        first.startsWith("### tool execution snapshot")
+    ) {
+        return lines.slice(1).join("\n").trimStart();
+    }
+    return text;
 }
 
 function maybeRunIrLlm(input: {
