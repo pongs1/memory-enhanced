@@ -554,6 +554,13 @@ export interface V8ScannerConfig {
     sceneOverlapThreshold: number;
 }
 
+export interface V8FeedbackConfig {
+    modelAdoptionThresholdZh: number;
+    modelAdoptionThresholdEn: number;
+    toolAdoptionThresholdZh: number;
+    toolAdoptionThresholdEn: number;
+}
+
 export interface V8ActivatedBundle {
     bundleId: string;
     nodeIds: string[];

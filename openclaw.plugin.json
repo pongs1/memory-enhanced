@@ -62,6 +62,12 @@
         "default": {},
         "additionalProperties": true,
         "description": "Optional overrides for V8 scanner thresholds (see V8ScannerConfig)"
+      },
+      "v8FeedbackConfig": {
+        "type": "object",
+        "default": {},
+        "additionalProperties": true,
+        "description": "Optional overrides for V8 feedback thresholds (model/tool adoption by language)"
       }
     }
   },

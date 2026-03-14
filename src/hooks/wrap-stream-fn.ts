@@ -20,6 +20,7 @@ import { recordFeedback, recordFeedbackRecords } from "../v8/feedback-store.js";
 import { readJsonl } from "../v8/architecture/io.js";
 import type {
     V8ControlAnchors,
+    V8FeedbackConfig,
     V8GraphNode,
     V8SceneSignal,
     V8ScannerConfig,
@@ -41,7 +42,8 @@ const MODEL_FEEDBACK_WINDOW_MS = 8 * 60 * 1000;
 const MODEL_FEEDBACK_COOLDOWN_MS = 10 * 60 * 1000;
 const MODEL_NEUTRAL_COOLDOWN_MS = 10 * 60 * 1000;
 const TOOL_FEEDBACK_WINDOW_MS = 2 * 60 * 1000;
-const MODEL_ADOPTION_THRESHOLD = 0.22;
+const DEFAULT_MODEL_ADOPTION_THRESHOLD = 0.22;
+const DEFAULT_TOOL_ADOPTION_THRESHOLD = 0.22;
 
 interface OutputWatchdogState {
     charsStreamed: number;
@@ -222,6 +224,29 @@ function extractToolSceneSignals(event: any): V8SceneSignal[] {
     return signals;
 }
 
+function summarizeToolObservationForMatch(event: any): string {
+    const toolName = typeof event?.toolName === "string" ? event.toolName : "";
+    const observation = summarizeObservationValue(
+        event?.output ||
+        event?.result ||
+        event?.response ||
+        event?.content ||
+        event?.text ||
+        event?.body,
+        360
+    );
+    if (!observation) return "";
+    const trimmed = observation.trim();
+    if (!trimmed) return "";
+    const noisyTool = isNoisyToolName(toolName);
+    const shortEnough = trimmed.length <= 140;
+    const compactEnough = trimmed.length <= 240 && trimmed.split("\n").length <= 2;
+    if (noisyTool && !shortEnough && !compactEnough) {
+        return "";
+    }
+    return trimmed;
+}
+
 function getLegacyScanner(sessionId: string, workspace: string): AssociativeScanner {
     if (!scanners.has(sessionId)) {
         scanners.set(sessionId, new AssociativeScanner(workspace));
@@ -356,6 +381,41 @@ function calculateTokenOverlap(sourceText: string, referenceText: string): numbe
     return matches / referenceTokens.length;
 }
 
+function detectLanguage(sample: string): "zh" | "en" {
+    const text = sample || "";
+    if (!text) return "en";
+    const cjkCount = (text.match(/[\u4e00-\u9fff]/g) || []).length;
+    const latinCount = (text.match(/[a-zA-Z]/g) || []).length;
+    if (cjkCount === 0) return "en";
+    if (latinCount === 0) return "zh";
+    return cjkCount >= latinCount ? "zh" : "en";
+}
+
+function normalizeThreshold(value: unknown, fallback: number): number {
+    const numeric =
+        typeof value === "number" && Number.isFinite(value) ? value : fallback;
+    return Math.max(0, Math.min(1, numeric));
+}
+
+function resolveAdoptionThreshold(
+    text: string,
+    config: Partial<V8FeedbackConfig> | undefined,
+    kind: "model" | "tool"
+): number {
+    const lang = detectLanguage(text);
+    if (kind === "model") {
+        const fallback = DEFAULT_MODEL_ADOPTION_THRESHOLD;
+        return lang === "zh"
+            ? normalizeThreshold(config?.modelAdoptionThresholdZh, fallback)
+            : normalizeThreshold(config?.modelAdoptionThresholdEn, fallback);
+    }
+
+    const fallback = DEFAULT_TOOL_ADOPTION_THRESHOLD;
+    return lang === "zh"
+        ? normalizeThreshold(config?.toolAdoptionThresholdZh, fallback)
+        : normalizeThreshold(config?.toolAdoptionThresholdEn, fallback);
+}
+
 function loadNodeLabels(workspace: string): Map<string, NodeLabelEntry> {
     const store = v8StorePaths(workspace);
     let stat: fs.Stats | null = null;
@@ -399,7 +459,8 @@ function collectTraceNodeIds(trace: V8RecallTrace, preferTiered = true): string[
 function evaluateRecallAdoption(
     outputText: string,
     nodeIds: string[],
-    labelMap: Map<string, NodeLabelEntry>
+    labelMap: Map<string, NodeLabelEntry>,
+    threshold: number
 ): string[] {
     const matches: string[] = [];
     if (!outputText || nodeIds.length === 0) return matches;
@@ -409,7 +470,7 @@ function evaluateRecallAdoption(
         const labelText = [entry.label, ...entry.aliases].filter(Boolean).join(" ");
         if (!labelText) continue;
         const score = calculateTokenOverlap(outputText, labelText);
-        if (score >= MODEL_ADOPTION_THRESHOLD) {
+        if (score >= threshold) {
             matches.push(nodeId);
         }
     }
@@ -443,11 +504,13 @@ function detectToolFailure(event: any): boolean {
 function applyModelAdoptionFeedback(
     workspace: string,
     sessionId: string,
-    recentOutput: string
+    recentOutput: string,
+    feedbackConfig?: Partial<V8FeedbackConfig>
 ) {
     if (!recentOutput) return;
     const recallTraces = getRecentRecallTraces(sessionId, MODEL_FEEDBACK_WINDOW_MS);
     if (recallTraces.length === 0) return;
+    const threshold = resolveAdoptionThreshold(recentOutput, feedbackConfig, "model");
     const labelMap = loadNodeLabels(workspace);
     for (const trace of recallTraces) {
         const cooldownKey = `${sessionId}:${trace.traceId}`;
@@ -457,7 +520,12 @@ function applyModelAdoptionFeedback(
         }
         const nodeIds = collectTraceNodeIds(trace);
         if (nodeIds.length === 0) continue;
-        const matched = evaluateRecallAdoption(recentOutput, nodeIds, labelMap);
+        const matched = evaluateRecallAdoption(
+            recentOutput,
+            nodeIds,
+            labelMap,
+            threshold
+        );
         if (matched.length === 0) {
             const neutralKey = `${sessionId}:${trace.traceId}:neutral`;
             const lastNeutral = modelNeutralCooldowns.get(neutralKey) || 0;
@@ -955,6 +1023,7 @@ function warnMissingLiveInterrupt(
 
 export function registerStreamWrapper(api: any, pluginConfig: any) {
     const v8ScannerConfig = (pluginConfig?.v8ScannerConfig || {}) as Partial<V8ScannerConfig>;
+    const v8FeedbackConfig = (pluginConfig?.v8FeedbackConfig || {}) as Partial<V8FeedbackConfig>;
     // We assume the user's OpenClaw modification exposes a "wrap_stream_fn" hook
     // that allows us to wrap the raw provider stream function.
     api.on("wrap_stream_fn", async (event: any, ctx: any) => {
@@ -1208,12 +1277,57 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                 !detectToolFailure(event)
             ) {
                 const recallTraces = getRecentRecallTraces(sid, TOOL_FEEDBACK_WINDOW_MS);
+                const observation = summarizeToolObservationForMatch(event);
+                const threshold = resolveAdoptionThreshold(
+                    observation,
+                    v8FeedbackConfig,
+                    "tool"
+                );
+                const labelMap = observation ? loadNodeLabels(workspace) : null;
                 for (const trace of recallTraces) {
                     const nodeIds = collectTraceNodeIds(trace);
                     if (nodeIds.length === 0) continue;
+                    if (!observation || !labelMap) {
+                        recordFeedbackRecords(workspace, [
+                            {
+                                targets: nodeIds,
+                                label: "memory_ignored_neutral",
+                                polarity: "neutral",
+                                scope: "scene",
+                                reason: "tool_success_no_observation",
+                                sessionId: sid,
+                                recallTraceId: trace.traceId,
+                                source: "tool" as const,
+                            },
+                        ]);
+                        continue;
+                    }
+
+                    const matched = evaluateRecallAdoption(
+                        observation,
+                        nodeIds,
+                        labelMap,
+                        threshold
+                    );
+                    if (matched.length === 0) {
+                        recordFeedbackRecords(workspace, [
+                            {
+                                targets: nodeIds,
+                                label: "memory_ignored_neutral",
+                                polarity: "neutral",
+                                scope: "scene",
+                                reason: "tool_success_no_match",
+                                sessionId: sid,
+                                recallTraceId: trace.traceId,
+                                source: "tool" as const,
+                            },
+                        ]);
+                        continue;
+                    }
+
                     recordFeedbackRecords(workspace, [
                         {
-                            targets: nodeIds,
+                            targets: matched,
                             label: "memory_helped",
                             polarity: "positive",
                             scope: "scene",
@@ -1246,7 +1360,12 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
         const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
         const watchdog = outputWatchdogs.get(sid);
         if (watchdog?.recentOutput) {
-            applyModelAdoptionFeedback(workspace, sid, watchdog.recentOutput);
+            applyModelAdoptionFeedback(
+                workspace,
+                sid,
+                watchdog.recentOutput,
+                v8FeedbackConfig
+            );
         }
         outputWatchdogs.delete(sid);
         scanners.delete(sid);

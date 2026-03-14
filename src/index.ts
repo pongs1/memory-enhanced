@@ -38,7 +38,7 @@ import {
     refreshFeedbackStore,
 } from "./v8/feedback-store.js";
 import { takeRecentRecallTraces } from "./v8/feedback-runtime.js";
-import type { V8ScannerConfig } from "./v8/types_v8.js";
+import type { V8FeedbackConfig, V8ScannerConfig } from "./v8/types_v8.js";
 
 // @ts-ignore
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
@@ -57,6 +57,7 @@ export default function register(api: OpenClawPluginApi) {
             v8SessionTraceDir?: string;
             v8PackCacheTtlDays?: number;
             v8ScannerConfig?: Partial<V8ScannerConfig>;
+            v8FeedbackConfig?: Partial<V8FeedbackConfig>;
         }
         | undefined;
 
