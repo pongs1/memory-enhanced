@@ -148,6 +148,11 @@ export function buildRuntimeProjections(input: {
     const recallBundles: V8RecallBundleProjection[] = [];
 
     for (const node of input.nodes) {
+        if (node.memoryType === "evidence") continue;
+        if (node.memoryType === "discourse_unit") continue;
+        if (node.primaryLayer !== "micro") continue;
+        if (node.id.startsWith("node_edge_")) continue;
+
         const spanIds = node.evidenceSpanIds || [];
         const bestSpanIds = node.bestEvidenceSpanIds || [];
         const { kind, dayKey } = classifyKind(spanIds, spanById, sourceById);
