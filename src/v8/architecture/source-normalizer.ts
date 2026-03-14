@@ -63,6 +63,8 @@ const DEFAULT_CLEAN_PATTERNS: RegExp[] = [
     /<!--\s*Task Ledger[\s\S]*?-->/gi,
     /Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi,
     /^Current time:[^\n]*$/gim,
+    /^.*Read HEARTBEAT\.md.*$/gim,
+    /^.*HEARTBEAT_OK.*$/gim,
 ];
 
 export function normalizeSessionMessages(

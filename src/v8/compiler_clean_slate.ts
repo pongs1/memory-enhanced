@@ -241,7 +241,8 @@ function buildEntryLabel(entry: NarrativeEntry): string | null {
     const parts: string[] = [];
     const refLabel = buildSourceLabel(entry);
     if (refLabel) parts.push(refLabel);
-    if (entry.timestamp) parts.push(entry.timestamp);
+    const shortTs = formatTimestampShort(entry.timestamp);
+    if (shortTs) parts.push(shortTs);
     return parts.length ? parts.join(" | ") : null;
 }
 
@@ -260,8 +261,7 @@ function buildSourceLabel(entry: NarrativeEntry): string | null {
 
 function formatSpeakerLabel(entry: NarrativeEntry): string {
     if (entry.sourceCategory === "operation") {
-        const toolLabel = entry.toolName ? ` (tool \`${entry.toolName}\`)` : " (tool)";
-        return `assistant${toolLabel}`;
+        return "assistant (tool)";
     }
     if (entry.speaker) return entry.speaker;
     return "unknown";
@@ -279,6 +279,14 @@ function stripOperationHeading(text: string): string {
         return lines.slice(1).join("\n").trimStart();
     }
     return text;
+}
+
+function formatTimestampShort(value: string | null): string | null {
+    if (!value) return null;
+    const parsed = Date.parse(value);
+    if (Number.isNaN(parsed)) return null;
+    const iso = new Date(parsed).toISOString();
+    return iso.replace("T", " ").slice(0, 16);
 }
 
 function maybeRunIrLlm(input: {
