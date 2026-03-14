@@ -409,6 +409,22 @@ Promotion rules:
   - rich result text or structured details such as `excerpt`, `summary`, `output`, `result`
 - this is required so custom tools can still become operation evidence even when they are not part of a predefined tool catalog
 
+### 5.4.0 Shipped core-tool baseline
+
+Before OpenClaw emits a live `tool_cleaning_profiles.json`, V8 should ship a baseline profile set for the current built-in core tools.
+
+Persistence:
+
+- `schema/v8-core-tool-cleaning-profiles.json`
+
+Rules:
+
+- this baseline exists only to keep the first consolidation passes clean and usable
+- runtime-generated `raw/observations/tool_cleaning_profiles.json` overrides or extends the shipped baseline
+- built-in file/web/content tools should default to `llm_ir` when they expose real artifact text
+- memory/session reflection tools should default to `metadata_only` or `evidence_only` to avoid recursive re-ingestion of already canonical sources
+- unknown or changed tools still fall back to payload-shape heuristics until OpenClaw publishes a new runtime profile
+
 ### 5.4.1 Tool catalog snapshot contract
 
 V8 should **not** query or reconstruct the live OpenClaw tool registry by itself during memory consolidation.

@@ -2,6 +2,7 @@ import { resolveWorkspace } from "../utils.js";
 import { ensureV8StoreDirs } from "./paths_v8.js";
 import { loadSessionTraces } from "./adapters/session-source.js";
 import { normalizeSessionMessages } from "./architecture/source-normalizer.js";
+import { loadResolvedToolCleaningProfiles } from "./architecture/tool-cleaning-profiles.js";
 import { unitizeSourceRecords } from "./architecture/unitizer.js";
 import { extractEvidenceSpans } from "./architecture/evidence.js";
 import { extractMemoryItems } from "./architecture/ir-extractor.js";
@@ -30,10 +31,13 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         sessionTraceDir: options?.sessionTraceDir,
         maxFiles: options?.maxSessionFiles,
     });
+    const toolCleaningProfiles = loadResolvedToolCleaningProfiles(workspace);
 
     const sourceRecords = traceGroups.flatMap((group) =>
         normalizeSessionMessages(group.messages, {
             sourceRefPrefix: group.sourceRefPrefix,
+            workspace,
+            toolCleaningProfiles,
         })
     );
     persistAssembledObservationMarkdown(store.rawDir, sourceRecords);

@@ -1,4 +1,11 @@
 import type { V8SourceRecord } from "../types_v8.js";
+import {
+    getToolCleaningProfile,
+    loadResolvedToolCleaningProfiles,
+    type OperationKind,
+    type OperationPromotion,
+    type ToolCleaningProfile,
+} from "./tool-cleaning-profiles.js";
 
 export interface RawSessionMessage {
     id?: string | number;
@@ -53,6 +60,8 @@ export interface SourceNormalizationOptions {
     sessionId?: string;
     cleanPatterns?: RegExp[];
     includeOperations?: boolean;
+    workspace?: string;
+    toolCleaningProfiles?: Map<string, ToolCleaningProfile>;
 }
 
 const DEFAULT_CLEAN_PATTERNS: RegExp[] = [
@@ -76,6 +85,9 @@ export function normalizeSessionMessages(
     const cleanPatterns = options.cleanPatterns || DEFAULT_CLEAN_PATTERNS;
     const sessionId =
         options.sessionId || deriveSessionId(sourceRefPrefix) || "default";
+    const toolCleaningProfiles =
+        options.toolCleaningProfiles ||
+        loadResolvedToolCleaningProfiles(options.workspace);
 
     const conversationRecords = messages
         .map((msg, index) => {
@@ -127,6 +139,7 @@ export function normalizeSessionMessages(
                   sourceRefPrefix,
                   sessionId,
                   cleanPatterns,
+                  toolCleaningProfiles,
               });
 
     return [...conversationRecords, ...operationRecords];
@@ -260,27 +273,23 @@ interface ToolResultInfo {
     sourceIndex: number;
 }
 
-type OperationPromotion = "metadata_only" | "evidence_only" | "llm_ir";
-
 interface OperationProfile {
-    kind:
-        | "read_artifact"
-        | "web_lookup"
-        | "artifact_write"
-        | "content_extraction"
-        | "filesystem_probe"
-        | "process_control"
-        | "legacy_memory_write"
-        | "command_execution"
-        | "tool_operation";
+    kind: OperationKind;
     promotion: OperationPromotion;
+    rule?: ToolCleaningProfile;
 }
 
 function buildOperationSourceRecords(
     messages: RawSessionMessage[],
-    options: { sourceRefPrefix: string; sessionId: string; cleanPatterns: RegExp[] }
+    options: {
+        sourceRefPrefix: string;
+        sessionId: string;
+        cleanPatterns: RegExp[];
+        toolCleaningProfiles?: Map<string, ToolCleaningProfile>;
+    }
 ): V8SourceRecord[] {
-    const { sourceRefPrefix, sessionId, cleanPatterns } = options;
+    const { sourceRefPrefix, sessionId, cleanPatterns, toolCleaningProfiles } =
+        options;
     const toolCallMap = new Map<string, ToolCallInfo>();
     const pendingResults: ToolResultInfo[] = [];
     const records: V8SourceRecord[] = [];
@@ -316,7 +325,8 @@ function buildOperationSourceRecords(
             opIndex,
             sourceRefPrefix,
             sessionId,
-            cleanPatterns
+            cleanPatterns,
+            toolCleaningProfiles
         );
         records.push(record);
         if (result.toolCallId) {
@@ -333,7 +343,8 @@ function buildOperationSourceRecords(
             opIndex,
             sourceRefPrefix,
             sessionId,
-            cleanPatterns
+            cleanPatterns,
+            toolCleaningProfiles
         );
         records.push(record);
     }
@@ -557,13 +568,19 @@ function buildOperationRecord(
     index: number,
     sourceRefPrefix: string,
     sessionId: string,
-    cleanPatterns: RegExp[]
+    cleanPatterns: RegExp[],
+    toolCleaningProfiles?: Map<string, ToolCleaningProfile>
 ): V8SourceRecord {
     const toolName = call?.toolName || result?.toolName || "tool";
-    const profile = classifyOperation(toolName, call?.arguments, result);
+    const profile = classifyOperation(
+        toolName,
+        call?.arguments,
+        result,
+        toolCleaningProfiles
+    );
     const description = call?.description?.trim();
     const inputSummary = summarizeToolArguments(call?.arguments, profile);
-    const resultSummary = summarizeToolResult(result);
+    const resultSummary = summarizeToolResult(result, profile);
     const output = summarizeToolOutput(toolName, call?.arguments, result, profile);
 
     const lines: string[] = [];
@@ -637,7 +654,23 @@ function buildOperationRecord(
 function classifyOperation(
     toolName: string,
     args: unknown,
-    result: ToolResultInfo | null
+    result: ToolResultInfo | null,
+    toolCleaningProfiles?: Map<string, ToolCleaningProfile>
+): OperationProfile {
+    const rule = getToolCleaningProfile(toolCleaningProfiles, toolName);
+    const heuristic = classifyOperationHeuristically(toolName, args, result, rule);
+    return {
+        kind: rule?.kind ?? heuristic.kind,
+        promotion: rule?.promotion ?? heuristic.promotion,
+        rule,
+    };
+}
+
+function classifyOperationHeuristically(
+    toolName: string,
+    args: unknown,
+    result: ToolResultInfo | null,
+    rule?: ToolCleaningProfile
 ): OperationProfile {
     const name = toolName.toLowerCase();
     const argRecord = toRecord(args);
@@ -646,42 +679,42 @@ function classifyOperation(
             ? argRecord.command.toLowerCase()
             : "";
     const resultText = (result?.contentText || "").trim();
-    const detailText = extractStructuredDetailText(result?.details);
-    const richPayload = extractWritablePayload(args);
+    const detailText = extractStructuredDetailText(result?.details, rule);
+    const richPayload = extractWritablePayload(args, rule);
     const hasRichText = isHighSignalText(resultText || detailText || richPayload || "");
 
     if (name === "read") {
-        return { kind: "read_artifact", promotion: "llm_ir" };
+        return { kind: "read_artifact", promotion: "llm_ir", rule };
     }
     if (
         name === "web_search" ||
         name.includes("search") ||
         name.includes("browser") ||
         name.includes("fetch") ||
-        typeof argRecord?.query === "string" ||
-        typeof argRecord?.url === "string"
+        hasQueryReference(argRecord, rule) ||
+        hasUrlReference(argRecord, rule)
     ) {
-        return { kind: "web_lookup", promotion: "llm_ir" };
+        return { kind: "web_lookup", promotion: "llm_ir", rule };
     }
     if (name === "memory_record") {
-        return { kind: "legacy_memory_write", promotion: "metadata_only" };
+        return { kind: "legacy_memory_write", promotion: "metadata_only", rule };
     }
     if (
-        hasArtifactReference(argRecord) &&
+        hasArtifactReference(argRecord, rule) &&
         (hasRichText || looksLikeReadCommand(command) || looksLikeContentExtractionCommand(command))
     ) {
-        return { kind: "read_artifact", promotion: "llm_ir" };
+        return { kind: "read_artifact", promotion: "llm_ir", rule };
     }
     if (
         name === "write" ||
         name === "edit" ||
         name === "apply_patch" ||
-        hasWritablePayload(argRecord)
+        hasWritablePayload(argRecord, rule)
     ) {
-        return { kind: "artifact_write", promotion: "llm_ir" };
+        return { kind: "artifact_write", promotion: "llm_ir", rule };
     }
     if (name === "process") {
-        return { kind: "process_control", promotion: "metadata_only" };
+        return { kind: "process_control", promotion: "metadata_only", rule };
     }
     if (
         name === "exec" ||
@@ -691,23 +724,23 @@ function classifyOperation(
         name === "python"
     ) {
         if (looksLikeContentExtractionCommand(command)) {
-            return { kind: "content_extraction", promotion: "llm_ir" };
+            return { kind: "content_extraction", promotion: "llm_ir", rule };
         }
         if (looksLikeReadCommand(command)) {
-            return { kind: "read_artifact", promotion: "llm_ir" };
+            return { kind: "read_artifact", promotion: "llm_ir", rule };
         }
         if (looksLikeFilesystemProbe(command)) {
-            return { kind: "filesystem_probe", promotion: "evidence_only" };
+            return { kind: "filesystem_probe", promotion: "evidence_only", rule };
         }
-        return { kind: "command_execution", promotion: "evidence_only" };
+        return { kind: "command_execution", promotion: "evidence_only", rule };
     }
     if (hasRichText) {
-        return { kind: "tool_operation", promotion: "llm_ir" };
+        return { kind: "tool_operation", promotion: "llm_ir", rule };
     }
     if (result?.contentText?.trim()) {
-        return { kind: "tool_operation", promotion: "evidence_only" };
+        return { kind: "tool_operation", promotion: "evidence_only", rule };
     }
-    return { kind: "tool_operation", promotion: "metadata_only" };
+    return { kind: "tool_operation", promotion: "metadata_only", rule };
 }
 
 function buildOperationIntro(
@@ -715,7 +748,7 @@ function buildOperationIntro(
     args: unknown,
     profile: OperationProfile
 ): string {
-    const target = extractOperationTarget(args);
+    const target = extractOperationTarget(args, profile.rule);
     switch (profile.kind) {
         case "read_artifact":
             return target
@@ -749,6 +782,7 @@ function summarizeToolArguments(
     if (typeof args !== "object") return String(args);
     const obj = args as Record<string, unknown>;
     const parts: string[] = [];
+    const seenKeys = new Set<string>();
     const add = (label: string, value: unknown, code = false) => {
         if (value === null || value === undefined) return;
         if (typeof value === "string") {
@@ -761,20 +795,35 @@ function summarizeToolArguments(
             parts.push(`${label} ${String(value)}`);
         }
     };
-    add("command", obj.command, true);
-    add("path", obj.path, true);
-    add("file_path", obj.file_path, true);
-    add("file", obj.file, true);
-    add("offset", obj.offset);
-    add("limit", obj.limit);
-    add("start", obj.start);
-    add("end", obj.end);
-    add("query", obj.query);
-    add("url", obj.url, true);
-    add("action", obj.action);
-    add("session", obj.sessionId);
-    add("pid", obj.pid);
-    if (profile.kind === "artifact_write" && hasWritablePayload(obj)) {
+    const addKey = (key: string, code = false) => {
+        if (!key || seenKeys.has(key)) return;
+        seenKeys.add(key);
+        add(key, obj[key], code);
+    };
+    const inputHints = profile.rule?.inputHints;
+    for (const key of inputHints?.commandKeys || []) addKey(key, true);
+    for (const key of [
+        ...(inputHints?.artifactKeys || []),
+        ...(inputHints?.urlKeys || []),
+    ]) {
+        addKey(key, true);
+    }
+    for (const key of inputHints?.queryKeys || []) addKey(key);
+    for (const key of inputHints?.metadataKeys || []) addKey(key);
+    addKey("command", true);
+    addKey("path", true);
+    addKey("file_path", true);
+    addKey("file", true);
+    addKey("offset");
+    addKey("limit");
+    addKey("start");
+    addKey("end");
+    addKey("query");
+    addKey("url", true);
+    addKey("action");
+    addKey("sessionId");
+    addKey("pid");
+    if (profile.kind === "artifact_write" && hasWritablePayload(obj, profile.rule)) {
         parts.push("payload present");
     }
     if (parts.length) return parts.join(", ");
@@ -785,7 +834,10 @@ function summarizeToolArguments(
     }
 }
 
-function summarizeToolResult(result: ToolResultInfo | null): string | null {
+function summarizeToolResult(
+    result: ToolResultInfo | null,
+    profile?: OperationProfile
+): string | null {
     if (!result) return null;
     const details = result.details || {};
     const status =
@@ -807,6 +859,17 @@ function summarizeToolResult(result: ToolResultInfo | null): string | null {
     if (typeof details.pid === "number") {
         parts.push(`pid ${details.pid}`);
     }
+    for (const key of profile?.rule?.resultHints?.metadataKeys || []) {
+        if (["status", "exitCode", "durationMs", "sessionId", "pid"].includes(key)) {
+            continue;
+        }
+        const value = details[key];
+        if (typeof value === "string" && value.trim()) {
+            parts.push(`${key} ${trimLongText(value.trim(), 80)}`);
+        } else if (typeof value === "number" || typeof value === "boolean") {
+            parts.push(`${key} ${String(value)}`);
+        }
+    }
     return `Result: ${parts.join(", ")}.`;
 }
 
@@ -817,28 +880,44 @@ function summarizeToolOutput(
     profile: OperationProfile
 ): string | null {
     const cleaned = normalizeOutputWhitespace(
-        stripUntrustedBlocks(result?.contentText || "")
+        stripUntrustedBlocks(resolveResultText(result, profile))
     );
     switch (profile.kind) {
         case "web_lookup":
-            return formatWebLookupOutput(args, cleaned);
+            return formatWebLookupOutput(args, cleaned, profile);
         case "artifact_write":
             return formatWrittenPayload(args, cleaned);
         case "read_artifact":
-            return formatReadLikeOutput(args, cleaned, 2600, 90);
+            return formatReadLikeOutput(args, cleaned, 2600, 90, profile);
         case "content_extraction":
-            return formatReadLikeOutput(args, cleaned, 2200, 80);
+            return formatReadLikeOutput(args, cleaned, 2200, 80, profile);
         case "filesystem_probe":
-            return cleaned ? limitTextByLines(cleaned, 700, 18) : null;
+            return cleaned
+                ? limitTextByLines(
+                      cleaned,
+                      resolveMaxChars(700, profile),
+                      resolveMaxLines(18, profile)
+                  )
+                : null;
         case "legacy_memory_write":
             {
                 const legacyPayload = formatWrittenPayload(args, cleaned);
                 return legacyPayload
-                    ? limitTextByLines(legacyPayload, 600, 16)
+                    ? limitTextByLines(
+                          legacyPayload,
+                          resolveMaxChars(600, profile),
+                          resolveMaxLines(16, profile)
+                      )
                     : null;
             }
         case "process_control":
-            return cleaned ? limitTextByLines(cleaned, 240, 6) : null;
+            return cleaned
+                ? limitTextByLines(
+                      cleaned,
+                      resolveMaxChars(240, profile),
+                      resolveMaxLines(6, profile)
+                  )
+                : null;
         default: {
             if (!cleaned) return null;
             const isCommandLike =
@@ -848,18 +927,26 @@ function summarizeToolOutput(
                 (typeof args === "object" &&
                     args !== null &&
                     typeof (args as Record<string, unknown>).command === "string");
-            const maxChars = isCommandLike ? 900 : 1600;
-            const maxLines = isCommandLike ? 24 : 40;
+            const maxChars = resolveMaxChars(
+                isCommandLike ? 900 : 1600,
+                profile
+            );
+            const maxLines = resolveMaxLines(
+                isCommandLike ? 24 : 40,
+                profile
+            );
             return limitTextByLines(cleaned, maxChars, maxLines);
         }
     }
 }
 
 function extractStructuredDetailText(
-    details?: Record<string, unknown>
+    details?: Record<string, unknown>,
+    rule?: ToolCleaningProfile
 ): string {
     if (!details) return "";
-    const preferredKeys = [
+    const preferredKeys = uniqueKeys([
+        ...(rule?.resultHints?.textKeys || []),
         "excerpt",
         "summary",
         "output",
@@ -869,7 +956,7 @@ function extractStructuredDetailText(
         "result",
         "body",
         "content",
-    ];
+    ]);
     for (const key of preferredKeys) {
         const value = details[key];
         const text = stringifyStructuredValue(value);
@@ -878,10 +965,20 @@ function extractStructuredDetailText(
     return "";
 }
 
-function formatWebLookupOutput(args: unknown, text: string): string | null {
+function formatWebLookupOutput(
+    args: unknown,
+    text: string,
+    profile: OperationProfile
+): string | null {
     const parsed = tryParseJson(text);
     if (!parsed || typeof parsed !== "object") {
-        return text ? limitTextByLines(text, 1500, 32) : null;
+        return text
+            ? limitTextByLines(
+                  text,
+                  resolveMaxChars(1500, profile),
+                  resolveMaxLines(32, profile)
+              )
+            : null;
     }
     const record = parsed as Record<string, unknown>;
     if (
@@ -894,10 +991,19 @@ function formatWebLookupOutput(args: unknown, text: string): string | null {
     }
     const results = Array.isArray(record.results) ? record.results : [];
     if (results.length === 0) {
-        return text ? limitTextByLines(text, 1200, 28) : null;
+        return text
+            ? limitTextByLines(
+                  text,
+                  resolveMaxChars(1200, profile),
+                  resolveMaxLines(28, profile)
+              )
+            : null;
     }
     const lines: string[] = [];
-    const query = readNamedString(args, ["query", "q"]);
+    const query = readNamedString(
+        args,
+        uniqueKeys([...(profile.rule?.inputHints?.queryKeys || []), "query", "q"])
+    );
     const provider =
         typeof record.provider === "string" ? record.provider : "unknown";
     const count =
@@ -929,7 +1035,11 @@ function formatWebLookupOutput(args: unknown, text: string): string | null {
         lines.push(`- ${parts.join(" | ")}`);
         if (description) lines.push(description);
     }
-    return limitTextByLines(lines.join("\n"), 2200, 50);
+    return limitTextByLines(
+        lines.join("\n"),
+        resolveMaxChars(2200, profile),
+        resolveMaxLines(50, profile)
+    );
 }
 
 function formatWrittenPayload(args: unknown, text: string): string | null {
@@ -944,14 +1054,23 @@ function formatReadLikeOutput(
     args: unknown,
     text: string,
     maxChars: number,
-    maxLines: number
+    maxLines: number,
+    profile: OperationProfile
 ): string | null {
     if (!text) {
-        const payload = extractWritablePayload(args);
+        const payload = extractWritablePayload(args, profile.rule);
         if (!payload) return null;
-        return limitTextByLines(payload, maxChars, maxLines);
+        return limitTextByLines(
+            payload,
+            resolveMaxChars(maxChars, profile),
+            resolveMaxLines(maxLines, profile)
+        );
     }
-    return limitTextByLines(text, maxChars, maxLines);
+    return limitTextByLines(
+        text,
+        resolveMaxChars(maxChars, profile),
+        resolveMaxLines(maxLines, profile)
+    );
 }
 
 function summarizeOperationError(record: Record<string, unknown>): string {
@@ -1018,29 +1137,50 @@ function tryParseJson(text: string): unknown {
     }
 }
 
-function hasWritablePayload(value: Record<string, unknown> | null): boolean {
+function hasWritablePayload(
+    value: Record<string, unknown> | null,
+    rule?: ToolCleaningProfile
+): boolean {
     if (!value) return false;
-    return Boolean(
-        stringifyStructuredValue(value.content) ||
-            stringifyStructuredValue(value.text) ||
-            stringifyStructuredValue(value.body) ||
-            stringifyStructuredValue(value.data) ||
-            stringifyStructuredValue(value.payload) ||
-            stringifyStructuredValue(value.patch)
-    );
+    for (const key of uniqueKeys([
+        ...(rule?.inputHints?.payloadKeys || []),
+        "content",
+        "text",
+        "body",
+        "data",
+        "payload",
+        "patch",
+        "new_string",
+        "old_string",
+    ])) {
+        if (stringifyStructuredValue(value[key])) {
+            return true;
+        }
+    }
+    return false;
 }
 
-function extractWritablePayload(args: unknown): string | null {
+function extractWritablePayload(
+    args: unknown,
+    rule?: ToolCleaningProfile
+): string | null {
     const record = toRecord(args);
     if (!record) return null;
-    const payload =
-        stringifyStructuredValue(record.content) ||
-        stringifyStructuredValue(record.text) ||
-        stringifyStructuredValue(record.body) ||
-        stringifyStructuredValue(record.data) ||
-        stringifyStructuredValue(record.payload) ||
-        stringifyStructuredValue(record.patch);
-    return payload ? normalizeOutputWhitespace(payload) : null;
+    for (const key of uniqueKeys([
+        ...(rule?.inputHints?.payloadKeys || []),
+        "content",
+        "text",
+        "body",
+        "data",
+        "payload",
+        "patch",
+        "new_string",
+        "old_string",
+    ])) {
+        const payload = stringifyStructuredValue(record[key]);
+        if (payload) return normalizeOutputWhitespace(payload);
+    }
+    return null;
 }
 
 function stringifyStructuredValue(value: unknown): string {
@@ -1096,27 +1236,17 @@ function toRecord(value: unknown): Record<string, unknown> | null {
     return value as Record<string, unknown>;
 }
 
-function extractOperationTarget(args: unknown): string | null {
+function extractOperationTarget(
+    args: unknown,
+    rule?: ToolCleaningProfile
+): string | null {
     const record = toRecord(args);
     if (!record) return null;
-    const direct =
-        readNamedString(record, [
-            "path",
-            "file_path",
-            "file",
-            "url",
-            "target",
-            "pdf_path",
-            "document_path",
-        ]) || null;
-    if (direct) return wrapInlineCode(trimLongText(direct, 220));
-    return null;
-}
-
-function hasArtifactReference(value: Record<string, unknown> | null): boolean {
-    if (!value) return false;
-    return Boolean(
-        readNamedString(value, [
+    const direct = readNamedString(
+        record,
+        uniqueKeys([
+            ...(rule?.inputHints?.artifactKeys || []),
+            ...(rule?.inputHints?.urlKeys || []),
             "path",
             "file_path",
             "file",
@@ -1125,6 +1255,57 @@ function hasArtifactReference(value: Record<string, unknown> | null): boolean {
             "pdf_path",
             "document_path",
         ])
+    );
+    if (direct) return wrapInlineCode(trimLongText(direct, 220));
+    return null;
+}
+
+function hasArtifactReference(
+    value: Record<string, unknown> | null,
+    rule?: ToolCleaningProfile
+): boolean {
+    if (!value) return false;
+    return Boolean(
+        readNamedString(
+            value,
+            uniqueKeys([
+                ...(rule?.inputHints?.artifactKeys || []),
+                ...(rule?.inputHints?.urlKeys || []),
+            "path",
+            "file_path",
+            "file",
+            "url",
+            "target",
+            "pdf_path",
+            "document_path",
+            ])
+        )
+    );
+}
+
+function hasQueryReference(
+    value: Record<string, unknown> | null,
+    rule?: ToolCleaningProfile
+): boolean {
+    if (!value) return false;
+    return Boolean(
+        readNamedString(
+            value,
+            uniqueKeys([...(rule?.inputHints?.queryKeys || []), "query", "q"])
+        )
+    );
+}
+
+function hasUrlReference(
+    value: Record<string, unknown> | null,
+    rule?: ToolCleaningProfile
+): boolean {
+    if (!value) return false;
+    return Boolean(
+        readNamedString(
+            value,
+            uniqueKeys([...(rule?.inputHints?.urlKeys || []), "url"])
+        )
     );
 }
 
@@ -1201,6 +1382,29 @@ function limitTextByLines(text: string, maxChars: number, maxLines: number): str
     return output;
 }
 
+function resolveResultText(
+    result: ToolResultInfo | null,
+    profile: OperationProfile
+): string {
+    if (!result) return "";
+    const detailText = extractStructuredDetailText(result.details, profile.rule);
+    return detailText || result.contentText || "";
+}
+
+function resolveMaxChars(
+    fallback: number,
+    profile: OperationProfile
+): number {
+    return profile.rule?.maxChars ?? fallback;
+}
+
+function resolveMaxLines(
+    fallback: number,
+    profile: OperationProfile
+): number {
+    return profile.rule?.maxLines ?? fallback;
+}
+
 function trimLongText(text: string, maxChars: number): string {
     if (text.length <= maxChars) return text;
     return text.slice(0, maxChars) + "…";
@@ -1212,6 +1416,10 @@ function wrapInlineCode(text: string): string {
 
 function trimTrailingPeriod(text: string): string {
     return text.replace(/[。．.]\s*$/, "");
+}
+
+function uniqueKeys(values: string[]): string[] {
+    return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function collectRemovalRanges(text: string, patterns: RegExp[]): Array<[number, number]> {

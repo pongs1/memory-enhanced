@@ -1,0 +1,466 @@
+{
+  "profile_version": "v8.1",
+  "generated_from": [
+    "memory-enhanced/V8_SCHEMA_AND_PIPELINE.md",
+    "/home/pongs/openclaw/src/agents/tool-catalog.ts"
+  ],
+  "notes": [
+    "These shipped baseline profiles cover OpenClaw core tools before runtime-generated profiles exist.",
+    "Runtime tool_cleaning_profiles.json should override or extend these defaults when available.",
+    "Profiles intentionally suppress recursive ingestion for memory/session tools that mirror existing sources."
+  ],
+  "profiles": [
+    {
+      "tool_name": "read",
+      "source": "core_baseline",
+      "description": "Read file contents",
+      "input_hints": {
+        "artifact_keys": ["path", "file_path", "file", "filePath"],
+        "metadata_keys": ["offset", "limit", "start", "end"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "excerpt", "text", "output", "result", "body"],
+        "metadata_keys": ["status", "durationMs", "mimeType", "truncated"]
+      },
+      "cleaning_mode": "read_artifact",
+      "promotion": "llm_ir",
+      "max_chars": 2600,
+      "max_lines": 90,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "write",
+      "source": "core_baseline",
+      "description": "Create or overwrite files",
+      "input_hints": {
+        "artifact_keys": ["path", "file_path", "file", "filePath"],
+        "payload_keys": ["content", "text", "body", "data", "payload"],
+        "metadata_keys": ["encoding"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "bytesWritten", "path"]
+      },
+      "cleaning_mode": "artifact_write",
+      "promotion": "llm_ir",
+      "max_chars": 2600,
+      "max_lines": 100,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "edit",
+      "source": "core_baseline",
+      "description": "Make precise edits",
+      "input_hints": {
+        "artifact_keys": ["path", "file_path", "file", "filePath"],
+        "payload_keys": ["old_string", "new_string", "content", "text", "body"],
+        "metadata_keys": ["replace_all"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "occurrences", "path"]
+      },
+      "cleaning_mode": "artifact_write",
+      "promotion": "llm_ir",
+      "max_chars": 2400,
+      "max_lines": 90,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "apply_patch",
+      "source": "core_baseline",
+      "description": "Patch files (OpenAI)",
+      "input_hints": {
+        "artifact_keys": ["path", "file_path", "file", "filePath"],
+        "payload_keys": ["patch", "content"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "path"]
+      },
+      "cleaning_mode": "artifact_write",
+      "promotion": "llm_ir",
+      "max_chars": 2600,
+      "max_lines": 100,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "exec",
+      "source": "core_baseline",
+      "description": "Run shell commands",
+      "input_hints": {
+        "artifact_keys": ["path", "file_path", "file", "target", "pdf_path", "document_path"],
+        "query_keys": ["query"],
+        "url_keys": ["url"],
+        "payload_keys": ["input", "stdin", "script", "code"],
+        "command_keys": ["command", "cmd"],
+        "metadata_keys": ["cwd", "yield_time_ms", "timeout_ms"]
+      },
+      "result_hints": {
+        "text_keys": ["aggregated", "output", "stdout", "stderr", "text", "result", "body", "content"],
+        "metadata_keys": ["status", "exitCode", "durationMs", "sessionId", "pid"]
+      },
+      "max_chars": 900,
+      "max_lines": 24,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "process",
+      "source": "core_baseline",
+      "description": "Manage background processes",
+      "input_hints": {
+        "metadata_keys": ["action", "sessionId", "pid", "signal"]
+      },
+      "result_hints": {
+        "text_keys": ["output", "stdout", "stderr", "text", "result"],
+        "metadata_keys": ["status", "sessionId", "pid", "exitCode"]
+      },
+      "cleaning_mode": "process_control",
+      "promotion": "metadata_only",
+      "max_chars": 240,
+      "max_lines": 6,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "web_search",
+      "source": "core_baseline",
+      "description": "Search the web",
+      "input_hints": {
+        "query_keys": ["query", "q"],
+        "url_keys": ["url"],
+        "metadata_keys": ["max_results", "search_lang", "ui_lang", "domains", "recency_days"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result", "summary", "body"],
+        "metadata_keys": ["status", "provider", "count", "cached"]
+      },
+      "cleaning_mode": "web_lookup",
+      "promotion": "llm_ir",
+      "max_chars": 2200,
+      "max_lines": 50,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "web_fetch",
+      "source": "core_baseline",
+      "description": "Fetch web content",
+      "input_hints": {
+        "url_keys": ["url"],
+        "metadata_keys": ["mode", "maxChars", "waitForMs"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result", "body", "markdown", "excerpt"],
+        "metadata_keys": ["status", "url", "title", "truncated", "cached"]
+      },
+      "cleaning_mode": "read_artifact",
+      "promotion": "llm_ir",
+      "max_chars": 2200,
+      "max_lines": 60,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "memory_search",
+      "source": "core_baseline",
+      "description": "Semantic search",
+      "input_hints": {
+        "query_keys": ["query", "q"],
+        "metadata_keys": ["limit", "scope"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result", "summary"],
+        "metadata_keys": ["status", "count"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "metadata_only",
+      "max_chars": 260,
+      "max_lines": 8,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "memory_get",
+      "source": "core_baseline",
+      "description": "Read memory files",
+      "input_hints": {
+        "artifact_keys": ["path", "key", "memoryKey"],
+        "metadata_keys": ["limit"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result", "body"],
+        "metadata_keys": ["status", "path", "found"]
+      },
+      "cleaning_mode": "read_artifact",
+      "promotion": "metadata_only",
+      "max_chars": 260,
+      "max_lines": 8,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "sessions_list",
+      "source": "core_baseline",
+      "description": "List sessions",
+      "input_hints": {
+        "metadata_keys": ["kinds", "limit", "activeMinutes", "messageLimit"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "count", "path"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "metadata_only",
+      "max_chars": 280,
+      "max_lines": 10,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "sessions_history",
+      "source": "core_baseline",
+      "description": "Session history",
+      "input_hints": {
+        "metadata_keys": ["sessionKey", "limit", "includeTools"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result", "history"],
+        "metadata_keys": ["status", "sessionKey", "returned", "truncated", "redacted"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "evidence_only",
+      "max_chars": 900,
+      "max_lines": 24,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "sessions_send",
+      "source": "core_baseline",
+      "description": "Send to session",
+      "input_hints": {
+        "payload_keys": ["message"],
+        "metadata_keys": ["sessionKey", "label", "agentId", "timeoutSeconds"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "sessionKey", "runId"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "evidence_only",
+      "max_chars": 420,
+      "max_lines": 12,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "sessions_spawn",
+      "source": "core_baseline",
+      "description": "Spawn sub-agent",
+      "input_hints": {
+        "payload_keys": ["message", "prompt"],
+        "metadata_keys": ["agentId", "label", "sessionKey", "timeoutSeconds"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "sessionKey", "runId"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "evidence_only",
+      "max_chars": 420,
+      "max_lines": 12,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "subagents",
+      "source": "core_baseline",
+      "description": "Manage sub-agents",
+      "input_hints": {
+        "metadata_keys": ["action", "sessionKey", "agentId"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "count"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "metadata_only",
+      "max_chars": 280,
+      "max_lines": 10,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "session_status",
+      "source": "core_baseline",
+      "description": "Session status",
+      "input_hints": {
+        "metadata_keys": ["sessionKey"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "sessionKey", "runState", "model"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "metadata_only",
+      "max_chars": 260,
+      "max_lines": 8,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "browser",
+      "source": "core_baseline",
+      "description": "Control web browser",
+      "input_hints": {
+        "url_keys": ["url"],
+        "query_keys": ["text"],
+        "metadata_keys": ["action", "tabId", "nodeId", "selector"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result", "snapshot", "wrappedText", "markdown"],
+        "metadata_keys": ["status", "url", "title", "tabCount"]
+      },
+      "cleaning_mode": "web_lookup",
+      "promotion": "llm_ir",
+      "max_chars": 2200,
+      "max_lines": 60,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "canvas",
+      "source": "core_baseline",
+      "description": "Control canvases",
+      "input_hints": {
+        "payload_keys": ["content", "text", "markdown"],
+        "metadata_keys": ["action", "canvasId", "path"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "canvasId"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "metadata_only",
+      "max_chars": 320,
+      "max_lines": 10,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "message",
+      "source": "core_baseline",
+      "description": "Send messages",
+      "input_hints": {
+        "payload_keys": ["message", "caption", "quoteText"],
+        "artifact_keys": ["path", "filePath"],
+        "metadata_keys": ["action", "channel", "target", "threadId", "replyTo"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "channel", "target", "messageId"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "metadata_only",
+      "max_chars": 280,
+      "max_lines": 8,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "cron",
+      "source": "core_baseline",
+      "description": "Schedule tasks",
+      "input_hints": {
+        "payload_keys": ["message", "prompt", "note"],
+        "metadata_keys": ["action", "jobId", "schedule", "runMode", "sessionKey"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "jobId", "count"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "metadata_only",
+      "max_chars": 300,
+      "max_lines": 10,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "gateway",
+      "source": "core_baseline",
+      "description": "Gateway control",
+      "input_hints": {
+        "payload_keys": ["raw", "note", "reason"],
+        "metadata_keys": ["action", "sessionKey", "delayMs", "timeoutMs"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "ok", "hash"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "metadata_only",
+      "max_chars": 320,
+      "max_lines": 10,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "nodes",
+      "source": "core_baseline",
+      "description": "Nodes + devices",
+      "input_hints": {
+        "query_keys": ["query"],
+        "metadata_keys": ["action", "nodeId", "limit"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "count", "nodeId"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "evidence_only",
+      "max_chars": 420,
+      "max_lines": 12,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "agents_list",
+      "source": "core_baseline",
+      "description": "List agents",
+      "input_hints": {
+        "metadata_keys": ["limit"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["status", "count"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "metadata_only",
+      "max_chars": 260,
+      "max_lines": 8,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "image",
+      "source": "core_baseline",
+      "description": "Image understanding",
+      "input_hints": {
+        "artifact_keys": ["image", "path", "file", "filePath"],
+        "payload_keys": ["prompt", "question"],
+        "metadata_keys": ["detail", "maxImages"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result", "description"],
+        "metadata_keys": ["status", "provider", "model", "count"]
+      },
+      "cleaning_mode": "content_extraction",
+      "promotion": "llm_ir",
+      "max_chars": 2200,
+      "max_lines": 60,
+      "status": "baseline"
+    },
+    {
+      "tool_name": "tts",
+      "source": "core_baseline",
+      "description": "Text-to-speech conversion",
+      "input_hints": {
+        "payload_keys": ["text"],
+        "metadata_keys": ["channel"]
+      },
+      "result_hints": {
+        "text_keys": ["content", "text", "output", "result"],
+        "metadata_keys": ["audioPath", "provider", "error"]
+      },
+      "cleaning_mode": "tool_operation",
+      "promotion": "metadata_only",
+      "max_chars": 220,
+      "max_lines": 6,
+      "status": "baseline"
+    }
+  ]
+}
