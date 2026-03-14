@@ -402,6 +402,12 @@ Promotion rules:
 - raw `agent_end` text should not become memory evidence directly
 - `agent_end` may emit derived lifecycle facts such as success, failure, abort, timeout, unresolved error, or completion of a branch
 - if session transcripts lack complete tool execution details, runtime hook observations are canonical for those fields
+- promotion must not depend only on built-in tool names; it should also inspect payload shape:
+  - artifact/path-bearing inputs
+  - query/url-bearing lookups
+  - written payloads in tool args
+  - rich result text or structured details such as `excerpt`, `summary`, `output`, `result`
+- this is required so custom tools can still become operation evidence even when they are not part of a predefined tool catalog
 
 ### 5.5 Assembled operation text view
 
@@ -514,6 +520,7 @@ Rules:
 - ordinary user and assistant text go through normal `micro/meso/macro` unitization
 - tool observations first remain structured observation records
 - only promoted observations with meaningful cleaned text become units
+- promotion to LLM IR should follow information density and evidence completeness, not a fixed allowlist of tool names
 - when a tool operation has both transcript fragments and runtime observation fields, unitize the assembled operation text view rather than the raw fragments independently
 - promoted code-family observations usually become `micro` evidence units or structured state updates, not large `meso` text blocks
 - promoted high-density non-code observations may become `micro` or `meso` units when the cleaned text carries stable facts or state transitions

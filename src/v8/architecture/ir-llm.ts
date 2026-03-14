@@ -144,7 +144,12 @@ export function buildLlmIrJobs(
         const spans = (spansByUnit.get(unit.id) || []).slice().sort((a, b) => b.score - a.score);
         const spanIds = spans.slice(0, 6).map((span) => span.id);
         const source = sourceById.get(unit.sourceRecordId);
-        if (source?.metadata?.sourceCategory === "operation") {
+        const sourceCategory = source?.metadata?.sourceCategory;
+        const operationPromotion = source?.metadata?.operationPromotion;
+        if (
+            sourceCategory === "operation" &&
+            operationPromotion !== "llm_ir"
+        ) {
             continue;
         }
         const prompt = buildPrompt({
@@ -361,6 +366,8 @@ function buildPrompt(input: {
     const itemTypeLine = ITEM_TYPES_BY_LAYER[unit.layer]?.length
         ? `Allowed item_type (${unit.layer}): ${ITEM_TYPES_BY_LAYER[unit.layer].join(", ")}`
         : "";
+    const sourceCategory = input.source?.metadata?.sourceCategory ?? "conversation";
+    const operationKind = input.source?.metadata?.operationKind;
     return [
         "任务：从下方文本中抽取关系，输出 Markdown；若无可抽取关系，输出 `[]`。",
         "",
@@ -399,6 +406,7 @@ function buildPrompt(input: {
         `Unit ID: ${unit.id}`,
         `Layer: ${unit.layer}`,
         `Speaker: ${input.source?.speaker ?? "unknown"}`,
+        `Source category: ${sourceCategory}${operationKind ? ` (${operationKind})` : ""}`,
         "",
         unit.text.trim(),
         "",
