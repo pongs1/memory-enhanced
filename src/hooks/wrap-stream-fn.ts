@@ -1112,6 +1112,10 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                                     activeTask: anchors.activeTask,
                                     latestUserRequest: anchors.latestUserRequest,
                                     mode: v8Scanner.getMode(),
+                                    packCacheTtlDays:
+                                        typeof pluginConfig?.v8PackCacheTtlDays === "number"
+                                            ? pluginConfig.v8PackCacheTtlDays
+                                            : undefined,
                                 },
                                 loadRecallAssemblyContext(workspace)
                             );

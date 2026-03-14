@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readJson } from "../utils.js";
 import { loadEdgeRuntimePolicy } from "./edge-runtime-policy.js";
 import { getNodeFeedbackBias, refreshFeedbackStore } from "./feedback-store.js";
+import { loadHypothesisEdges } from "./hypothesis-store.js";
 import { v8StorePaths } from "./paths_v8.js";
 import type {
     V8ActivatedBundle,
@@ -13,6 +14,7 @@ import type {
     V8EvidenceSpan,
     V8GraphEdge,
     V8GraphNode,
+    V8HypothesisEdge,
     V8IgnitionEdgeProjection,
     V8IgnitionNodeProjection,
     V8RecallMode,
@@ -40,6 +42,7 @@ interface LoadedGraphData {
     nodeDayKeys: Map<string, Set<string>>;
     edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>;
     policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
+    hypothesisEdges: V8HypothesisEdge[];
 }
 
 interface RuntimeEdge {
@@ -228,6 +231,7 @@ export class V8GraphScanner {
         const ignitionEdges = fs.existsSync(store.ignitionEdges)
             ? loadJsonl<V8IgnitionEdgeProjection>(store.ignitionEdges)
             : [];
+        const hypothesisEdges = loadHypothesisEdges(this.workspace);
 
         const nodesById = new Map<string, V8GraphNode>();
         const nodeTokens = new Map<string, Set<string>>();
@@ -372,6 +376,7 @@ export class V8GraphScanner {
             nodeDayKeys,
             edgeKinds,
             policyByKindMode,
+            hypothesisEdges,
         };
     }
 
@@ -415,6 +420,49 @@ export class V8GraphScanner {
                 bucket.set(nodeId, edges.slice(0, this.config.topKEdges));
             }
         };
+
+        if (mode === "oblique" || mode === "trajectory") {
+            const gain = mode === "trajectory" ? 0.32 : 0.36;
+            for (const hypothesis of this.graph.hypothesisEdges) {
+                if (hypothesis.modeHint !== mode) continue;
+                const edgeType = this.graph.edgeKinds.has(
+                    hypothesis.suggestedType as V8GraphEdge["type"]
+                )
+                    ? (hypothesis.suggestedType as V8GraphEdge["type"])
+                    : "similar_to";
+                const edge: V8GraphEdge = {
+                    id: `hyp_${hypothesis.id}`,
+                    type: edgeType,
+                    src: hypothesis.src,
+                    dst: hypothesis.dst,
+                    layer: "cross",
+                    originType: "inferred",
+                    sourceItemIds: [],
+                    evidenceSpanIds: hypothesis.supportEvidenceSpanIds,
+                    qualifiers: { hypothesis: true },
+                    confidence: clamp01(hypothesis.confidence),
+                    state: {
+                        scope: "session",
+                        validity: "tentative",
+                    },
+                };
+                const weight = clamp01(hypothesis.confidence) * gain;
+                if (weight <= 0) continue;
+                const entry: RuntimeEdge = {
+                    edge,
+                    weight,
+                    direction: "bidirectional",
+                };
+                if (!outgoing.has(edge.src)) outgoing.set(edge.src, []);
+                outgoing.get(edge.src)!.push(entry);
+                if (!incoming.has(edge.dst)) incoming.set(edge.dst, []);
+                incoming.get(edge.dst)!.push(entry);
+                if (!outgoing.has(edge.dst)) outgoing.set(edge.dst, []);
+                outgoing.get(edge.dst)!.push(entry);
+                if (!incoming.has(edge.src)) incoming.set(edge.src, []);
+                incoming.get(edge.src)!.push(entry);
+            }
+        }
 
         limitEdges(outgoing);
         limitEdges(incoming);

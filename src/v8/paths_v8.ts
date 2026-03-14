@@ -15,6 +15,7 @@ export interface V8StorePaths {
     ignitionNodes: string;
     ignitionEdges: string;
     recallBundles: string;
+    hypothesisEdges: string;
     summaryPacks: string;
     statePacks: string;
     packCache: string;
@@ -42,6 +43,7 @@ export function v8StorePaths(workspace: string): V8StorePaths {
         ignitionNodes: path.join(runtimeDir, "ignition_nodes.jsonl"),
         ignitionEdges: path.join(runtimeDir, "ignition_edges.jsonl"),
         recallBundles: path.join(runtimeDir, "recall_bundles.jsonl"),
+        hypothesisEdges: path.join(runtimeDir, "hypothesis_edges.jsonl"),
         summaryPacks: path.join(rootDir, "summary_packs.jsonl"),
         statePacks: path.join(rootDir, "state_packs.jsonl"),
         packCache: path.join(rootDir, "pack_cache.jsonl"),

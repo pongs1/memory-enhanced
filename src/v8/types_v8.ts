@@ -583,6 +583,7 @@ export interface AssembleRecallInput {
     activeTask: string;
     latestUserRequest: string;
     mode?: V8RecallMode;
+    packCacheTtlDays?: number;
 }
 
 export interface AssembleRecallOutput {

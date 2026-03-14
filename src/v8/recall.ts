@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJson } from "../utils.js";
 import { loadEdgeRuntimePolicy } from "./edge-runtime-policy.js";
+import { loadHypothesisEdges } from "./hypothesis-store.js";
+import { appendPackCacheRecord, isPackCacheExpired, loadPackCache } from "./pack-cache.js";
 import { v8StorePaths } from "./paths_v8.js";
 import type {
     AssembleRecallInput,
@@ -13,6 +15,8 @@ import type {
     V8EdgeRuntimePolicyEntry,
     V8GraphEdge,
     V8GraphNode,
+    V8HypothesisEdge,
+    V8PackCacheRecord,
     V8RecallBundleProjection,
     V8RecallMode,
     V8SourceRecord,
@@ -27,6 +31,8 @@ interface RecallAssemblyContext {
     edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>;
     policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
     recallBundlesById: Map<string, V8RecallBundleProjection>;
+    hypothesisByNode: Map<string, V8HypothesisEdge[]>;
+    packCacheById: Map<string, V8PackCacheRecord>;
 }
 
 interface EdgeCatalogFile {
@@ -131,7 +137,9 @@ export function loadRecallAssemblyContext(workspace: string): RecallAssemblyCont
         readMtime(store.graphEdges),
         readMtime(store.evidenceSpans),
         readMtime(store.sourceRecords),
-        readMtime(store.recallBundles)
+        readMtime(store.recallBundles),
+        readMtime(store.hypothesisEdges),
+        readMtime(store.packCache)
     );
     const cacheKey = store.rootDir;
     const cached = recallContextCache.get(cacheKey);
@@ -144,6 +152,8 @@ export function loadRecallAssemblyContext(workspace: string): RecallAssemblyCont
     const sources = loadJsonl<V8SourceRecord>(store.sourceRecords);
     const edges = loadJsonl<V8GraphEdge>(store.graphEdges);
     const recallBundles = loadJsonl<V8RecallBundleProjection>(store.recallBundles);
+    const hypotheses = loadHypothesisEdges(workspace);
+    const packCacheById = loadPackCache(workspace);
 
     const edgesByNode = new Map<string, V8GraphEdge[]>();
     for (const edge of edges) {
@@ -155,6 +165,15 @@ export function loadRecallAssemblyContext(workspace: string): RecallAssemblyCont
 
     const edgeKinds = loadEdgeCatalog();
     const policyByKindMode = buildPolicyMap(loadEdgeRuntimePolicy());
+    const hypothesisByNode = new Map<string, V8HypothesisEdge[]>();
+    for (const edge of hypotheses) {
+        const srcList = hypothesisByNode.get(edge.src) || [];
+        srcList.push(edge);
+        hypothesisByNode.set(edge.src, srcList);
+        const dstList = hypothesisByNode.get(edge.dst) || [];
+        dstList.push(edge);
+        hypothesisByNode.set(edge.dst, dstList);
+    }
 
     const context: RecallAssemblyContext = {
         nodesById: new Map(nodes.map((node) => [node.id, node])),
@@ -165,6 +184,8 @@ export function loadRecallAssemblyContext(workspace: string): RecallAssemblyCont
         edgeKinds,
         policyByKindMode,
         recallBundlesById: new Map(recallBundles.map((bundle) => [bundle.bundleId, bundle])),
+        hypothesisByNode,
+        packCacheById,
     };
     recallContextCache.set(cacheKey, { mtime, context });
     return context;
@@ -178,6 +199,7 @@ export function assembleRecallPrompts(
     const mode: V8RecallMode = input.mode || "profile";
     const isStructuralMode = mode === "trajectory" || mode === "audit";
     const maxEvidence = mode === "audit" ? 8 : mode === "trajectory" ? 6 : 4;
+    const packTtlDays = input.packCacheTtlDays ?? 7;
 
     for (const bundle of input.bundles) {
         const recallBundle = context.recallBundlesById.get(bundle.bundleId);
@@ -217,12 +239,35 @@ export function assembleRecallPrompts(
         const header = `<!-- Memory Recall (${bundle.tier}) -->`;
         const title = recallBundle?.title || node.canonicalLabel;
         const summaryText = recallBundle?.summaryText || "";
+        const packType = recallBundle?.packType || null;
+        const packText =
+            packType && (packType === "summary" || packType === "state")
+                ? resolvePackText(
+                      {
+                          workspace: input.workspace,
+                          bundleId: bundle.bundleId,
+                          packType,
+                          title: title || node.canonicalLabel,
+                          node,
+                          evidenceSpanIds,
+                          packTtlDays,
+                      },
+                      context
+                  )
+                : null;
+        const packLines = packText
+            ? packText
+                  .split(/\\r?\\n/)
+                  .map((line) => line.trim())
+                  .filter(Boolean)
+            : [];
         const body = [
             `Topic: ${sanitizeText(title || node.canonicalLabel, 120)}`,
             summaryText && summaryText !== title
                 ? `Summary: ${sanitizeText(summaryText, 200)}`
                 : null,
-            recallBundle?.packType ? `Pack: ${recallBundle.packType}` : null,
+            packType ? `Pack: ${packType}` : null,
+            ...packLines,
             `Evidence:`,
             ...evidenceLines.map((line) => `- ${line}`),
         ]
@@ -309,6 +354,20 @@ function collectBacktraceEvidence(
             if (current.depth >= maxDepth) continue;
             queue.push({ id: nextId, depth: current.depth + 1 });
         }
+
+        if (mode === "oblique" || mode === "trajectory") {
+            const hypotheses = context.hypothesisByNode.get(current.id) || [];
+            for (const hypothesis of hypotheses) {
+                if (hypothesis.modeHint !== mode) continue;
+                for (const spanId of hypothesis.supportEvidenceSpanIds || []) {
+                    evidence.add(spanId);
+                }
+                const nextId = hypothesis.src === current.id ? hypothesis.dst : hypothesis.src;
+                if (nextId === current.id) continue;
+                if (current.depth >= maxDepth) continue;
+                queue.push({ id: nextId, depth: current.depth + 1 });
+            }
+        }
     }
 
     return Array.from(evidence);
@@ -324,4 +383,91 @@ function mergeUnique(base: string[], extra: string[]): string[] {
         }
     }
     return base;
+}
+
+function resolvePackText(
+    options: {
+        workspace: string;
+        bundleId: string;
+        packType: "summary" | "state";
+        title: string;
+        node: V8GraphNode;
+        evidenceSpanIds: string[];
+        packTtlDays: number;
+    },
+    context: RecallAssemblyContext
+): string | null {
+    const cached = context.packCacheById.get(options.bundleId);
+    if (cached && !isPackCacheExpired(cached)) {
+        return cached.text;
+    }
+
+    const packText = buildPackText(
+        options.packType,
+        options.title,
+        options.evidenceSpanIds,
+        context.evidenceById
+    );
+    if (!packText) return null;
+
+    const now = new Date();
+    const ttlMs =
+        typeof options.packTtlDays === "number" && options.packTtlDays > 0
+            ? options.packTtlDays * 24 * 60 * 60 * 1000
+            : null;
+    const expiresAt = ttlMs ? new Date(now.getTime() + ttlMs).toISOString() : null;
+
+    const record: V8PackCacheRecord = {
+        id: options.bundleId,
+        packType: options.packType,
+        fingerprint: options.bundleId,
+        text: packText,
+        sourceItemIds:
+            options.node.sourceItemIds && options.node.sourceItemIds.length > 0
+                ? options.node.sourceItemIds
+                : [options.bundleId],
+        evidenceSpanIds: options.evidenceSpanIds.slice(0, 6),
+        strengthScore: options.node.state?.confidence ?? 0.4,
+        createdAt: now.toISOString(),
+        lastUsedAt: now.toISOString(),
+        expiresAt,
+        retentionPolicy: "default_7d",
+    };
+
+    appendPackCacheRecord(options.workspace, record);
+    context.packCacheById.set(options.bundleId, record);
+    return packText;
+}
+
+function buildPackText(
+    packType: "summary" | "state",
+    title: string,
+    evidenceSpanIds: string[],
+    evidenceById: Map<string, V8EvidenceSpan>
+): string | null {
+    const maxLines = packType === "state" ? 4 : 3;
+    const lines: string[] = [];
+    const seen = new Set<string>();
+    for (const spanId of evidenceSpanIds) {
+        const span = evidenceById.get(spanId);
+        if (!span) continue;
+        const text = sanitizePackLine(span.text, 180);
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+        lines.push(text);
+        if (lines.length >= maxLines) break;
+    }
+
+    const header = packType === "state" ? "State" : "Summary";
+    const headLine = title ? `${header}: ${sanitizeText(title, 120)}` : `${header}:`;
+
+    if (lines.length === 0) {
+        return headLine.trim() ? headLine : null;
+    }
+
+    return [headLine, ...lines.map((line) => `- ${line}`)].join("\n");
+}
+
+function sanitizePackLine(text: string, maxChars = 160): string {
+    return sanitizeText(text, maxChars);
 }

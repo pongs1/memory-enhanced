@@ -126,8 +126,33 @@ function resolveSourceRef(
     return null;
 }
 
+const CONTROL_MEMORY_TYPES = new Set([
+    "preference",
+    "goal",
+    "constraint",
+    "decision",
+    "open_question",
+    "conversation_act",
+]);
+
 function isStateMemoryType(memoryType: string): boolean {
-    return memoryType.endsWith("_state") || memoryType === "session_state" || memoryType === "topic_state";
+    return (
+        memoryType.endsWith("_state") ||
+        memoryType === "session_state" ||
+        memoryType === "topic_state"
+    );
+}
+
+function isControlMemoryType(memoryType: string): boolean {
+    return CONTROL_MEMORY_TYPES.has(memoryType);
+}
+
+function resolvePackType(
+    memoryType: string
+): V8RecallBundleProjection["packType"] {
+    if (isStateMemoryType(memoryType)) return "state";
+    if (isControlMemoryType(memoryType)) return "summary";
+    return "raw_evidence";
 }
 
 export function buildRuntimeProjections(input: {
@@ -151,7 +176,11 @@ export function buildRuntimeProjections(input: {
         if (node.memoryType === "evidence") continue;
         if (node.memoryType === "discourse_unit") continue;
         if (node.primaryLayer !== "micro") continue;
-        if (node.id.startsWith("node_edge_")) continue;
+        if (node.id.startsWith("node_edge_")) {
+            if (!isControlMemoryType(node.memoryType) && !isStateMemoryType(node.memoryType)) {
+                continue;
+            }
+        }
 
         const spanIds = node.evidenceSpanIds || [];
         const bestSpanIds = node.bestEvidenceSpanIds || [];
@@ -190,7 +219,7 @@ export function buildRuntimeProjections(input: {
             evidenceSpanIds: spanIds,
             bestEvidenceSpanIds: bestSpanIds.length > 0 ? bestSpanIds : spanIds.slice(0, 1),
             summaryText: label,
-            packType: isStateMemoryType(node.memoryType) ? "state" : "raw_evidence",
+            packType: resolvePackType(node.memoryType),
         });
     }
 
