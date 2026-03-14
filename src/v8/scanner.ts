@@ -13,6 +13,7 @@ import type {
     V8EvidenceSpan,
     V8GraphEdge,
     V8GraphNode,
+    V8IgnitionNodeProjection,
     V8RecallMode,
     V8ScanResult,
     V8ScannerConfig,
@@ -26,6 +27,7 @@ interface EdgeCatalogFile {
 
 interface LoadedGraphData {
     nodesById: Map<string, V8GraphNode>;
+    ignitionNodesById: Map<string, V8IgnitionNodeProjection> | null;
     edges: V8GraphEdge[];
     adjacency: Map<string, V8GraphEdge[]>;
     reverseAdjacency: Map<string, V8GraphEdge[]>;
@@ -219,6 +221,9 @@ export class V8GraphScanner {
         const edges = loadJsonl<V8GraphEdge>(store.graphEdges);
         const evidenceSpans = loadJsonl<V8EvidenceSpan>(store.evidenceSpans);
         const sources = loadJsonl<V8SourceRecord>(store.sourceRecords);
+        const ignitionNodes = fs.existsSync(store.ignitionNodes)
+            ? loadJsonl<V8IgnitionNodeProjection>(store.ignitionNodes)
+            : [];
 
         const nodesById = new Map<string, V8GraphNode>();
         const nodeTokens = new Map<string, Set<string>>();
@@ -226,8 +231,34 @@ export class V8GraphScanner {
         const sourceById = new Map(sources.map((source) => [source.id, source]));
         const nodeKinds = new Map<string, "episodic" | "semantic" | "procedural">();
         const nodeDayKeys = new Map<string, Set<string>>();
+        const ignitionNodesById =
+            ignitionNodes.length > 0 ? new Map<string, V8IgnitionNodeProjection>() : null;
+
+        if (ignitionNodesById) {
+            for (const projection of ignitionNodes) {
+                ignitionNodesById.set(projection.nodeId, projection);
+                const triggerText = [
+                    projection.searchText,
+                    projection.names?.zh,
+                    projection.names?.en,
+                    ...(projection.aliases || []),
+                    ...(projection.triggerTerms || []),
+                ]
+                    .filter(Boolean)
+                    .join(" ");
+                const tokens = tokenize(triggerText);
+                nodeTokens.set(projection.nodeId, new Set(tokens));
+                nodeKinds.set(projection.nodeId, projection.kind);
+                if (projection.dayKey) {
+                    nodeDayKeys.set(projection.nodeId, new Set([projection.dayKey]));
+                }
+            }
+        }
         for (const node of nodes) {
             nodesById.set(node.id, node);
+            if (ignitionNodesById) {
+                continue;
+            }
             if (node.memoryType === "evidence") {
                 continue;
             }
@@ -305,6 +336,7 @@ export class V8GraphScanner {
 
         return {
             nodesById,
+            ignitionNodesById,
             edges,
             adjacency,
             reverseAdjacency,
@@ -492,13 +524,19 @@ export class V8GraphScanner {
 
             const node = this.graph.nodesById.get(nodeId);
             if (!node) continue;
+            const projection = this.graph.ignitionNodesById?.get(nodeId) || null;
             const evidenceSpanIds =
-                node.bestEvidenceSpanIds.length > 0
-                    ? node.bestEvidenceSpanIds
-                    : node.evidenceSpanIds;
+                projection?.bestEvidenceSpanIds && projection.bestEvidenceSpanIds.length > 0
+                    ? projection.bestEvidenceSpanIds
+                    : projection?.evidenceSpanIds && projection.evidenceSpanIds.length > 0
+                      ? projection.evidenceSpanIds
+                      : node.bestEvidenceSpanIds.length > 0
+                        ? node.bestEvidenceSpanIds
+                        : node.evidenceSpanIds;
+            const bundleId = projection?.bundleId || nodeId;
 
             candidates.push({
-                bundleId: nodeId,
+                bundleId,
                 nodeIds: [nodeId],
                 tier,
                 energy,
@@ -522,12 +560,18 @@ export class V8GraphScanner {
                 if (cooldownUntil > now) continue;
                 const node = this.graph.nodesById.get(nodeId);
                 if (!node) continue;
+                const projection = this.graph.ignitionNodesById?.get(nodeId) || null;
                 const evidenceSpanIds =
-                    node.bestEvidenceSpanIds.length > 0
-                        ? node.bestEvidenceSpanIds
-                        : node.evidenceSpanIds;
+                    projection?.bestEvidenceSpanIds && projection.bestEvidenceSpanIds.length > 0
+                        ? projection.bestEvidenceSpanIds
+                        : projection?.evidenceSpanIds && projection.evidenceSpanIds.length > 0
+                          ? projection.evidenceSpanIds
+                          : node.bestEvidenceSpanIds.length > 0
+                            ? node.bestEvidenceSpanIds
+                            : node.evidenceSpanIds;
+                const bundleId = projection?.bundleId || nodeId;
                 obliqueCandidates.push({
-                    bundleId: nodeId,
+                    bundleId,
                     nodeIds: [nodeId],
                     tier: "background",
                     energy,

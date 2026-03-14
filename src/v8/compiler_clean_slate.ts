@@ -6,6 +6,7 @@ import { unitizeSourceRecords } from "./architecture/unitizer.js";
 import { extractEvidenceSpans } from "./architecture/evidence.js";
 import { extractMemoryItems } from "./architecture/ir-extractor.js";
 import { materializeGraph } from "./architecture/graph-materializer.js";
+import { buildRuntimeProjections } from "./architecture/runtime-projection.js";
 import { writeJsonl } from "./architecture/io.js";
 
 export interface CleanSlateBuildOptions {
@@ -33,6 +34,12 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const evidenceSpans = extractEvidenceSpans(units, sourceRecords);
     const memoryItems = extractMemoryItems(sourceRecords, units, evidenceSpans);
     const { nodes, edges } = materializeGraph(memoryItems, units, evidenceSpans);
+    const projections = buildRuntimeProjections({
+        nodes,
+        edges,
+        evidenceSpans,
+        sources: sourceRecords,
+    });
 
     writeJsonl(store.sourceRecords, sourceRecords);
     writeJsonl(store.units, units);
@@ -40,6 +47,9 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     writeJsonl(store.memoryItems, memoryItems);
     writeJsonl(store.graphNodes, nodes);
     writeJsonl(store.graphEdges, edges);
+    writeJsonl(store.ignitionNodes, projections.ignitionNodes);
+    writeJsonl(store.ignitionEdges, projections.ignitionEdges);
+    writeJsonl(store.recallBundles, projections.recallBundles);
 
     return {
         sourceRecords,
