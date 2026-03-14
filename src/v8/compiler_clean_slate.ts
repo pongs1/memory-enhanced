@@ -30,7 +30,7 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     );
 
     const units = unitizeSourceRecords(sourceRecords);
-    const evidenceSpans = extractEvidenceSpans(units);
+    const evidenceSpans = extractEvidenceSpans(units, sourceRecords);
     const memoryItems = extractMemoryItems(sourceRecords, units, evidenceSpans);
     const { nodes, edges } = materializeGraph(memoryItems, units, evidenceSpans);
 
