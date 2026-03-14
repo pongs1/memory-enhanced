@@ -205,7 +205,12 @@ export function assembleRecallPrompts(
 
         outputs.push({
             bundleId: bundle.bundleId,
-            nodeIds: [node.id],
+            nodeIds:
+                recallBundle?.nodeIds && recallBundle.nodeIds.length > 0
+                    ? recallBundle.nodeIds
+                    : bundle.nodeIds.length > 0
+                      ? bundle.nodeIds
+                      : [node.id],
             tier: bundle.tier,
             prompt,
             sourceRefs: [...sourceRefs],
