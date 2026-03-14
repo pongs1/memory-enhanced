@@ -58,5 +58,8 @@ export function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         memoryItems,
         nodes,
         edges,
+        ignitionNodes: projections.ignitionNodes,
+        ignitionEdges: projections.ignitionEdges,
+        recallBundles: projections.recallBundles,
     };
 }

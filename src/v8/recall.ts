@@ -170,7 +170,7 @@ export function assembleRecallPrompts(
             evidenceSpanIds = mergeUnique(evidenceSpanIds, structural);
         }
         const evidenceLines: string[] = [];
-        const sourceRefs = new Set<string>();
+        const sourceRefs = new Set<string>(recallBundle?.sourceRefs || []);
 
         for (const spanId of evidenceSpanIds.slice(0, maxEvidence)) {
             const span = context.evidenceById.get(spanId);

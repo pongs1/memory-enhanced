@@ -48,6 +48,9 @@ export async function executeMemoryConsolidate(
         `memoryItems=${output.memoryItems.length}`,
         `graphNodes=${output.nodes.length}`,
         `graphEdges=${output.edges.length}`,
+        `ignitionNodes=${output.ignitionNodes.length}`,
+        `ignitionEdges=${output.ignitionEdges.length}`,
+        `recallBundles=${output.recallBundles.length}`,
     ]
         .filter(Boolean)
         .join("\n");
