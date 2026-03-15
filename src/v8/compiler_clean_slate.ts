@@ -20,6 +20,7 @@ import { extractMemoryItems } from "./architecture/ir-extractor.js";
 import { buildLlmIrJobs, loadLlmIrItems, writeIrLlmJobs } from "./architecture/ir-llm.js";
 import { materializeGraph } from "./architecture/graph-materializer.js";
 import { buildRuntimeProjections } from "./architecture/runtime-projection.js";
+import { buildRelationPlanningArtifacts } from "./architecture/relation-planning.js";
 import { readJsonl, writeJsonl } from "./architecture/io.js";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -236,6 +237,11 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         irLlmItems: 0,
         irFallbackItems: 0,
         irFallbackApplied: false,
+        relationEntityPostings: 0,
+        relationScopeCards: 0,
+        relationGroupSummaries: 0,
+        relationSearchPlans: 0,
+        relationShardSelections: 0,
     };
     const persistRunReport = (payload: {
         llmStatus: string;
@@ -372,6 +378,16 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             store.ignitionNodes,
             store.ignitionEdges,
             store.recallBundles,
+            store.entityPostings,
+            store.entityScopeCards,
+            store.groupSummaries,
+            store.relationSearchPlans,
+            store.narrativeShardSelections,
+            store.relationCandidateHits,
+            store.relationReviewJobs,
+            store.reviewedRelations,
+            store.learningEvents,
+            store.searchFeedbackSignals,
         ]);
         logStage("evidence persisted");
         if (!isPartialBuild) {
@@ -490,6 +506,16 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             store.ignitionNodes,
             store.ignitionEdges,
             store.recallBundles,
+            store.entityPostings,
+            store.entityScopeCards,
+            store.groupSummaries,
+            store.relationSearchPlans,
+            store.narrativeShardSelections,
+            store.relationCandidateHits,
+            store.relationReviewJobs,
+            store.reviewedRelations,
+            store.learningEvents,
+            store.searchFeedbackSignals,
         ]);
         logStage("memory_ir persisted");
         if (!isPartialBuild) {
@@ -540,6 +566,20 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         evidenceSpans,
     });
     logStage("runtime projections built");
+    const relationPlanning = buildRelationPlanningArtifacts({
+        nodes,
+        edges,
+        evidenceSpans,
+        recallBundles: projections.recallBundles,
+        compilePhase,
+    });
+    buildStats.relationEntityPostings = relationPlanning.entityPostings.length;
+    buildStats.relationScopeCards = relationPlanning.entityScopeCards.length;
+    buildStats.relationGroupSummaries = relationPlanning.groupSummaries.length;
+    buildStats.relationSearchPlans = relationPlanning.relationSearchPlans.length;
+    buildStats.relationShardSelections =
+        relationPlanning.narrativeShardSelections.length;
+    logStage("relation planning artifacts built");
     writeJsonl(store.units, units);
     writeJsonl(store.evidenceSpans, evidenceSpans);
     writeJsonl(store.memoryItems, memoryItems);
@@ -548,6 +588,14 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     writeJsonl(store.ignitionNodes, projections.ignitionNodes);
     writeJsonl(store.ignitionEdges, projections.ignitionEdges);
     writeJsonl(store.recallBundles, projections.recallBundles);
+    writeJsonl(store.entityPostings, relationPlanning.entityPostings);
+    writeJsonl(store.entityScopeCards, relationPlanning.entityScopeCards);
+    writeJsonl(store.groupSummaries, relationPlanning.groupSummaries);
+    writeJsonl(store.relationSearchPlans, relationPlanning.relationSearchPlans);
+    writeJsonl(
+        store.narrativeShardSelections,
+        relationPlanning.narrativeShardSelections
+    );
     if (!isPartialBuild) {
         persistBuildManifest(store.buildManifest, loadedNarrativeDocs);
         persistNarrativeCompileState(
@@ -668,6 +716,11 @@ interface BuildReport {
         irLlmItems: number;
         irFallbackItems: number;
         irFallbackApplied: boolean;
+        relationEntityPostings: number;
+        relationScopeCards: number;
+        relationGroupSummaries: number;
+        relationSearchPlans: number;
+        relationShardSelections: number;
     };
     llmStatus: string;
     scopePreview: {
@@ -1016,6 +1069,9 @@ function renderBuildReportMarkdown(report: BuildReport): string {
     );
     lines.push(
         `- irExtraction: rule=${report.buildStats.irRuleItems}, llm=${report.buildStats.irLlmItems}, fallback=${report.buildStats.irFallbackItems}, fallbackApplied=${String(report.buildStats.irFallbackApplied)}`
+    );
+    lines.push(
+        `- relationPlanning: entityPostings=${report.buildStats.relationEntityPostings}, scopeCards=${report.buildStats.relationScopeCards}, groupSummaries=${report.buildStats.relationGroupSummaries}, searchPlans=${report.buildStats.relationSearchPlans}, shardSelections=${report.buildStats.relationShardSelections}`
     );
     lines.push(
         `- partialBuild: ${String(report.buildStats.partialBuild)}${report.buildStats.maxNarrativeDocs ? ` (maxNarrativeDocs=${report.buildStats.maxNarrativeDocs})` : ""}`
