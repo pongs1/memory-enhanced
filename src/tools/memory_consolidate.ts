@@ -64,7 +64,7 @@ export const MemoryConsolidateParams = Type.Object({
             [Type.Literal("full"), Type.Literal("incremental"), Type.Literal("hybrid")],
             {
                 description:
-                    "Build scope mode. full=rebuild all docs; incremental=only changed docs; hybrid=changed docs plus recent hot-window docs and cache-reuse for cold docs.",
+                    "Build scope mode. full=force rebuild from all narratives; incremental=only narratives whose content changed or whose requested compile phase is missing; hybrid is kept as a compatibility alias of incremental.",
             }
         )
     ),
@@ -72,7 +72,7 @@ export const MemoryConsolidateParams = Type.Object({
         Type.Number({
             minimum: 1,
             description:
-                "Hot window (hours) used by rebuild_mode=hybrid to force recent docs through full recompilation.",
+                "Legacy option kept for compatibility. Current V8 compile scope does not use hot-window recompilation.",
         })
     ),
     compile_phase: Type.Optional(
@@ -159,7 +159,7 @@ export async function executeMemoryConsolidate(
             | "incremental"
             | "hybrid"
             | undefined) ||
-        "hybrid";
+        "incremental";
     const hotWindowHours =
         typeof params.hot_window_hours === "number"
             ? params.hot_window_hours

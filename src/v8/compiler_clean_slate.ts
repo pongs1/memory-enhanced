@@ -169,7 +169,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             .slice(-options.maxNarrativeDocs);
     }
 
-    const rebuildMode = options?.rebuildMode ?? "hybrid";
+    const rebuildMode = normalizeRebuildMode(options?.rebuildMode);
     const hotWindowHours = Math.max(1, options?.hotWindowHours ?? DEFAULT_HOT_WINDOW_HOURS);
     const compilePhase =
         options?.compilePhase ?? (rebuildMode === "full" ? "final" : "stream");
@@ -180,11 +180,13 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const llmLayers: V8GraphLayer[] =
         compilePhase === "final" ? ["macro", "meso", "micro"] : ["meso", "micro"];
     const manifest = loadBuildManifest(store.buildManifest);
+    const compileState = loadNarrativeCompileState(store.narrativeCompileState);
     const scope = computeBuildScope({
         narratives: allNarrativeDocs,
         manifest,
+        compileState,
         mode: rebuildMode,
-        hotWindowHours,
+        requestedPhase: compilePhase,
     });
     const scopePreview = buildScopePreview(scope, allNarrativeDocs);
     logStage(
@@ -492,6 +494,14 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         logStage("memory_ir persisted");
         if (!isPartialBuild) {
             persistBuildManifest(store.buildManifest, loadedNarrativeDocs);
+            persistNarrativeCompileState(
+                store.narrativeCompileState,
+                mergeNarrativeCompileState({
+                    existing: compileState,
+                    narratives: hotNarratives,
+                    phase: compilePhase,
+                })
+            );
         }
         persistRunReport({
             llmStatus: resolvedLlmStatus,
@@ -540,6 +550,14 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     writeJsonl(store.recallBundles, projections.recallBundles);
     if (!isPartialBuild) {
         persistBuildManifest(store.buildManifest, loadedNarrativeDocs);
+        persistNarrativeCompileState(
+            store.narrativeCompileState,
+            mergeNarrativeCompileState({
+                existing: compileState,
+                narratives: hotNarratives,
+                phase: compilePhase,
+            })
+        );
     }
     persistRunReport({
         llmStatus: resolvedLlmStatus,
@@ -584,6 +602,19 @@ interface BuildManifest {
     version: number;
     generatedAt: string;
     docs: Record<string, BuildManifestDocState>;
+}
+
+interface NarrativeCompileStateDoc {
+    id: string;
+    hash: string;
+    phase: "stream" | "final";
+    updatedAt: string;
+}
+
+interface NarrativeCompileState {
+    version: number;
+    generatedAt: string;
+    docs: Record<string, NarrativeCompileStateDoc>;
 }
 
 interface BuildScope {
@@ -855,6 +886,57 @@ function loadBuildManifest(filePath: string): BuildManifest | null {
     }
 }
 
+function loadNarrativeCompileState(filePath: string): NarrativeCompileState | null {
+    try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(raw) as NarrativeCompileState;
+        if (!parsed || typeof parsed !== "object") return null;
+        if (typeof parsed.version !== "number") return null;
+        if (!parsed.docs || typeof parsed.docs !== "object") return null;
+        return parsed;
+    } catch {
+        return null;
+    }
+}
+
+function persistNarrativeCompileState(
+    filePath: string,
+    state: NarrativeCompileState
+): void {
+    try {
+        fs.writeFileSync(filePath, JSON.stringify(state, null, 2), "utf-8");
+    } catch {
+        // ignore compile-state persistence errors
+    }
+}
+
+function mergeNarrativeCompileState(input: {
+    existing: NarrativeCompileState | null;
+    narratives: V8NarrativeRecord[];
+    phase: "stream" | "final";
+}): NarrativeCompileState {
+    const docs: Record<string, NarrativeCompileStateDoc> = {
+        ...(input.existing?.docs || {}),
+    };
+    const now = new Date().toISOString();
+    for (const narrative of input.narratives) {
+        docs[narrative.id] = {
+            id: narrative.id,
+            hash: hashNarrative(narrative),
+            phase: maxCompilePhase(
+                docs[narrative.id]?.phase || "stream",
+                input.phase
+            ),
+            updatedAt: now,
+        };
+    }
+    return {
+        version: 1,
+        generatedAt: now,
+        docs,
+    };
+}
+
 function persistBuildReport(input: {
     jsonPath: string;
     markdownPath?: string;
@@ -995,8 +1077,9 @@ function persistBuildManifest(filePath: string, narratives: V8NarrativeRecord[])
 function computeBuildScope(input: {
     narratives: V8NarrativeRecord[];
     manifest: BuildManifest | null;
+    compileState: NarrativeCompileState | null;
     mode: "full" | "incremental" | "hybrid";
-    hotWindowHours: number;
+    requestedPhase: "stream" | "final";
 }): BuildScope {
     const activeDocIds = new Set(input.narratives.map((narrative) => narrative.id));
     const hotDocIds = new Set<string>();
@@ -1010,23 +1093,19 @@ function computeBuildScope(input: {
         return { activeDocIds, hotDocIds, coldDocIds, removedDocIds };
     }
 
-    const hotCutoff =
-        input.mode === "hybrid"
-            ? Date.now() - input.hotWindowHours * 60 * 60 * 1000
-            : Number.NEGATIVE_INFINITY;
-
     for (const narrative of input.narratives) {
         const previous = input.manifest.docs[narrative.id];
+        const compileDoc = input.compileState?.docs?.[narrative.id];
         const hash = hashNarrative(narrative);
         const changed =
             !previous ||
             previous.hash !== hash ||
             previous.sourceRef !== narrative.sourceRef;
-        const recent =
-            input.mode === "hybrid"
-                ? resolveNarrativeSortTimestamp(narrative) >= hotCutoff
-                : false;
-        if (changed || recent) {
+        const phaseMissing =
+            !compileDoc ||
+            compileDoc.hash !== hash ||
+            !phaseAtLeast(compileDoc.phase, input.requestedPhase);
+        if (changed || phaseMissing) {
             hotDocIds.add(narrative.id);
         } else {
             coldDocIds.add(narrative.id);
@@ -1042,6 +1121,14 @@ function computeBuildScope(input: {
     return { activeDocIds, hotDocIds, coldDocIds, removedDocIds };
 }
 
+function normalizeRebuildMode(
+    mode?: "full" | "incremental" | "hybrid"
+): "full" | "incremental" | "hybrid" {
+    if (mode === "full") return "full";
+    if (mode === "hybrid") return "incremental";
+    return "incremental";
+}
+
 function resolveNarrativeSortTimestamp(narrative: V8NarrativeRecord): number {
     const timelineStart = narrative.metadata?.timelineStart;
     if (timelineStart) {
@@ -1050,6 +1137,24 @@ function resolveNarrativeSortTimestamp(narrative: V8NarrativeRecord): number {
     }
     const byMtime = safeStatMtime(narrative.sourceRef);
     return typeof byMtime === "number" ? byMtime : 0;
+}
+
+function compilePhaseRank(phase: "stream" | "final"): number {
+    return phase === "final" ? 2 : 1;
+}
+
+function phaseAtLeast(
+    current: "stream" | "final",
+    requested: "stream" | "final"
+): boolean {
+    return compilePhaseRank(current) >= compilePhaseRank(requested);
+}
+
+function maxCompilePhase(
+    a: "stream" | "final",
+    b: "stream" | "final"
+): "stream" | "final" {
+    return compilePhaseRank(a) >= compilePhaseRank(b) ? a : b;
 }
 
 function safeStatMtime(filePath: string): number | undefined {
