@@ -1105,7 +1105,9 @@ Practical compile switches:
 - build diagnostics snapshot is persisted to `.memory/runtime/build_report.json` and `.memory/runtime/build_report.md`
 - tool summary includes compact `hotDocPreview/coldDocPreview/removedDocPreview` for quick inspection
 - build summary/report includes `sourceNarrativeWrittenFiles/sourceNarrativeSkippedFiles` to show write-avoidance efficiency
-- build summary/report includes source-cleaning volume stats: `sourceNormalizationRecordCount/rawChars/cleanChars/removedChars`
+- build summary/report includes source-cleaning stats:
+  - volume: `sourceNormalizationRecordCount/rawChars/cleanChars/removedChars`
+  - impact: `sourceNormalizationTouchedRecords/removedRatioPct`
 - source-stage assembly is append-only for `session_*_narrative.md` and never prunes existing narrative files
 - when `max_narrative_docs` is set, the run is marked as partial and does not update `build_manifest.json`
 - when `stop_after` is used, downstream artifact files are cleared to avoid stale graph/runtime reads

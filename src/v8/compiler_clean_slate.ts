@@ -87,6 +87,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         rawChars: number;
         cleanChars: number;
         removedChars: number;
+        touchedRecords: number;
+        removedRatioPct: number;
     } | null = null;
     if (startAt === "source") {
         const traceGroups = loadSessionTraces(workspace, {
@@ -199,6 +201,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         sourceNormalizationRawChars: sourceNormalizationStats?.rawChars ?? 0,
         sourceNormalizationCleanChars: sourceNormalizationStats?.cleanChars ?? 0,
         sourceNormalizationRemovedChars: sourceNormalizationStats?.removedChars ?? 0,
+        sourceNormalizationTouchedRecords: sourceNormalizationStats?.touchedRecords ?? 0,
+        sourceNormalizationRemovedRatioPct: sourceNormalizationStats?.removedRatioPct ?? 0,
     };
     const persistRunReport = (payload: {
         llmStatus: string;
@@ -539,6 +543,8 @@ interface BuildReport {
         sourceNormalizationRawChars: number;
         sourceNormalizationCleanChars: number;
         sourceNormalizationRemovedChars: number;
+        sourceNormalizationTouchedRecords: number;
+        sourceNormalizationRemovedRatioPct: number;
     };
     llmStatus: string;
     scopePreview: {
@@ -652,7 +658,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
         `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedUnchanged=${report.buildStats.sourceNarrativeSkippedFiles}`
     );
     lines.push(
-        `- sourceNormalization: records=${report.buildStats.sourceNormalizationRecordCount}, rawChars=${report.buildStats.sourceNormalizationRawChars}, cleanChars=${report.buildStats.sourceNormalizationCleanChars}, removedChars=${report.buildStats.sourceNormalizationRemovedChars}`
+        `- sourceNormalization: records=${report.buildStats.sourceNormalizationRecordCount}, touchedRecords=${report.buildStats.sourceNormalizationTouchedRecords}, rawChars=${report.buildStats.sourceNormalizationRawChars}, cleanChars=${report.buildStats.sourceNormalizationCleanChars}, removedChars=${report.buildStats.sourceNormalizationRemovedChars}, removedRatioPct=${report.buildStats.sourceNormalizationRemovedRatioPct.toFixed(2)}`
     );
     lines.push(
         `- partialBuild: ${String(report.buildStats.partialBuild)}${report.buildStats.maxNarrativeDocs ? ` (maxNarrativeDocs=${report.buildStats.maxNarrativeDocs})` : ""}`
@@ -849,20 +855,27 @@ function summarizeSourceNormalization(records: V8NarrativeRecord[]): {
     rawChars: number;
     cleanChars: number;
     removedChars: number;
+    touchedRecords: number;
+    removedRatioPct: number;
 } {
     let rawChars = 0;
     let cleanChars = 0;
+    let touchedRecords = 0;
     for (const record of records) {
         const raw = record.rawText || "";
         const clean = record.cleanText ?? raw;
         rawChars += raw.length;
         cleanChars += clean.length;
+        if (clean.length < raw.length) touchedRecords += 1;
     }
+    const removedChars = Math.max(0, rawChars - cleanChars);
     return {
         recordCount: records.length,
         rawChars,
         cleanChars,
-        removedChars: Math.max(0, rawChars - cleanChars),
+        removedChars,
+        touchedRecords,
+        removedRatioPct: rawChars > 0 ? (removedChars * 100) / rawChars : 0,
     };
 }
 

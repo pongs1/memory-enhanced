@@ -955,7 +955,7 @@ It is no longer the place where basic memory structure first appears.
 - optional dev knob: `max_narrative_docs` for tuning speed during prompt/parameter iteration
 - optional diagnostics-only run: `plan_only=true` to inspect hot/cold scope without recompiling artifacts
 - each run writes diagnostics to `.memory/runtime/build_report.json` and `.memory/runtime/build_report.md` for tuning
-- diagnostics include source cleaning volume (`rawChars/cleanChars/removedChars`) for cleaning-regression checks
+- diagnostics include source cleaning volume and impact (`rawChars/cleanChars/removedChars`, `touchedRecords/removedRatioPct`) for cleaning-regression checks
 - partial runs (`max_narrative_docs`) do not update the incremental manifest baseline
 - source-stage narrative assembly is append-only for `session_*_narrative.md` (no stale file pruning)
 
