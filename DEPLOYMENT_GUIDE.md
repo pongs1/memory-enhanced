@@ -219,7 +219,9 @@ You possess a 4-layer memory system. **DO NOT manually edit text files in the me
 - **To manage tasks:** Use `memory_working`. It maintains a passive task ledger (`Goal / Active / Next / Deferred / Done Recently`) that is injected every turn.
 - **Idle capture:** If the ledger is waiting for work, the newest user request is automatically promoted into `Active`.
 - **Priority rule:** The latest user request is always authoritative. Stored tasks are resumable backlog, not hard commands.
-- **To build the memory graph:** Use `memory_consolidate`. It ingests raw session traces and materializes the clean-slate graph.
+- **To build the memory graph:** Use `memory_consolidate`.
+  - Ongoing session: `compile_phase="stream"` (meso+micro, skips unstable tail units).
+  - Full recompute: `compile_phase="final"` (macro+meso+micro).
 - **Do not hand-edit** `.memory/graph/`. Treat it as a generated store.
 
 ### 🧠 MEMORY_INDEX.md - Optional Reference
@@ -245,8 +247,25 @@ Add this to `$WORKSPACE/HEARTBEAT.md` to ensure the agent cleans up while idle:
 ```markdown
 # HEARTBEAT.md
 - **Memory Check**:
-  1. Run `memory_consolidate` to rebuild the clean-slate graph from session traces.
+  1. Run `memory_consolidate` with:
+     - `start_at="source"`
+     - `rebuild_mode="hybrid"`
+     - `compile_phase="stream"`
+     - `hot_tail_skip_units=6`
+     - `rule_ir_mode="off"`
   2. If the workspace is heavy, prune or archive optional `memory/knowledge/` notes manually (they are not sources).
+```
+
+### 1.1 New-Session Trigger (`/new`)
+When `/new` loads fresh system markdown (BOOTSTRAP stage), run one full finalize pass for stable global linkage:
+
+```text
+Run memory_consolidate with:
+- start_at="narrative"
+- rebuild_mode="full"
+- compile_phase="final"
+- rule_ir_mode="off"
+Reply NO_REPLY.
 ```
 
 ### 2. Deep Sleep Cleanup (Cron)
@@ -257,7 +276,7 @@ Add a daily cron job to `openclaw.json` for a clean-slate rebuild:
   "cron": [
     {
       "schedule": "0 3 * * *",
-      "prompt": "Run memory_consolidate to rebuild the clean-slate graph. Reply NO_REPLY.",
+      "prompt": "Run memory_consolidate with start_at=narrative rebuild_mode=full compile_phase=final rule_ir_mode=off. Reply NO_REPLY.",
       "agentId": "default"
     }
   ]
@@ -281,7 +300,7 @@ pnpm openclaw:overlay:check -- --openclaw-dir /home/pongs/openclaw
 Then start a session and run this sequence:
 
 1.  **Status**: `"Run memory_working action='status'"` → Should show the passive task ledger from Step 4.
-2.  **Graph Build Check**: `"Run memory_consolidate"` → Verify `.memory/graph/graph_nodes.jsonl` and `.memory/graph/graph_edges.jsonl` are populated.
+2.  **Graph Build Check**: `"Run memory_consolidate compile_phase='stream' rebuild_mode='hybrid'"` → Verify `.memory/graph/graph_nodes.jsonl` and `.memory/graph/graph_edges.jsonl` are populated.
 3.  **Reprioritization Check**: `"Run memory_working action='reprioritize' focus='Handle a new urgent request'"` → The new active task should move to the top and the previous task should fall back into `Next`.
 4.  **Recall Check (optional)**: Enable `enableV8GraphRecall` and ensure live recall injects a memory block during a long answer.
 
