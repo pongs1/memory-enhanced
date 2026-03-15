@@ -47,13 +47,19 @@ export function loadSessionTraces(
             if (file === "sessions.json") return false;
             return true;
         })
-        .map((file) => path.join(dir, file))
-        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+        .map((file) => path.join(dir, file));
+
+    const decorated = files.map((filePath) => ({
+        filePath,
+        mtimeMs: safeReadMtimeMs(filePath),
+    }));
+    decorated.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const sortedFiles = decorated.map((entry) => entry.filePath);
 
     const limited =
         typeof options?.maxFiles === "number"
-            ? files.slice(0, options.maxFiles)
-            : files;
+            ? sortedFiles.slice(0, options.maxFiles)
+            : sortedFiles;
 
     return limited
         .map((filePath) => {
@@ -64,6 +70,14 @@ export function loadSessionTraces(
             };
         })
         .filter((entry) => entry.messages.length > 0);
+}
+
+function safeReadMtimeMs(filePath: string): number {
+    try {
+        return fs.statSync(filePath).mtimeMs;
+    } catch {
+        return 0;
+    }
 }
 
 function readSessionFile(filePath: string): RawSessionMessage[] {
