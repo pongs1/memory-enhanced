@@ -44,7 +44,6 @@ interface LoadedGraphData {
     policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
     groupBundles: V8RecallBundleProjection[];
     groupBundleById: Map<string, V8RecallBundleProjection>;
-    groupBundleTokens: Map<string, Set<string>>;
     hypothesisEdges: V8HypothesisEdge[];
 }
 
@@ -241,11 +240,6 @@ export class V8GraphScanner {
             (bundle) => bundle.bundleId.startsWith("group_") && bundle.nodeIds.length >= 2
         );
         const groupBundleById = new Map(groupBundles.map((bundle) => [bundle.bundleId, bundle]));
-        const groupBundleTokens = new Map<string, Set<string>>();
-        for (const bundle of groupBundles) {
-            const text = `${bundle.title || ""} ${bundle.summaryText || ""}`.trim();
-            groupBundleTokens.set(bundle.bundleId, new Set(tokenize(text)));
-        }
 
         const nodesById = new Map<string, V8GraphNode>();
         const nodeTokens = new Map<string, Set<string>>();
@@ -389,7 +383,6 @@ export class V8GraphScanner {
             policyByKindMode,
             groupBundles,
             groupBundleById,
-            groupBundleTokens,
             hypothesisEdges,
         };
     }
@@ -600,41 +593,6 @@ export class V8GraphScanner {
         this.spreadActivation();
 
         const now = nowMs();
-        const resolveBundleBindings = (
-            nodeId: string,
-            projection: V8IgnitionNodeProjection | null
-        ): Array<{ bundleId: string; weight: number }> => {
-            const primary = projection?.bundleId || nodeId;
-            const all = projection?.bundleIds && projection.bundleIds.length > 0
-                ? projection.bundleIds
-                : [primary];
-            const seen = new Set<string>();
-            const out: Array<{ bundleId: string; weight: number }> = [];
-            // Always keep primary bundle.
-            out.push({ bundleId: primary, weight: 1 });
-            seen.add(primary);
-
-            const secondary = all.filter((id) => !seen.has(id)).slice(0, 6);
-            const scored = secondary.map((bundleId) => {
-                const bundle = this.graph.groupBundleById.get(bundleId);
-                const bundleTokens = this.graph.groupBundleTokens.get(bundleId) || new Set<string>();
-                const semantic = overlapScore(tokens, bundleTokens);
-                const sizePenalty = bundle ? Math.min(0.45, bundle.nodeIds.length * 0.035) : 0.3;
-                const score = semantic - sizePenalty;
-                return { bundleId, score };
-            });
-            scored
-                .sort((a, b) => b.score - a.score)
-                .slice(0, 2)
-                .forEach((item) => {
-                    if (item.score < -0.1) return;
-                    const weight = clamp01(0.45 + item.score);
-                    if (weight < 0.2) return;
-                    out.push({ bundleId: item.bundleId, weight });
-                });
-            return out;
-        };
-
         const collectEvidence = (
             entries: Array<{ nodeId: string; energy: number; evidenceSpanIds: string[] }>,
             limit: number
@@ -679,17 +637,13 @@ export class V8GraphScanner {
                           : node.bestEvidenceSpanIds.length > 0
                             ? node.bestEvidenceSpanIds
                             : node.evidenceSpanIds;
-                const bindings = resolveBundleBindings(nodeId, projection);
-                for (const binding of bindings) {
-                    const bundleCooldownUntil = this.bundleCooldowns.get(binding.bundleId) || 0;
-                    if (bundleCooldownUntil > now) continue;
-                    const weightedEnergy = energy * binding.weight;
-                    if (weightedEnergy < 0.03) continue;
-                    const entry = bundleMap.get(binding.bundleId) || { energy: 0, nodes: [] };
-                    entry.energy += weightedEnergy;
-                    entry.nodes.push({ nodeId, energy: weightedEnergy, evidenceSpanIds });
-                    bundleMap.set(binding.bundleId, entry);
-                }
+                const bundleId = projection?.bundleId || nodeId;
+                const bundleCooldownUntil = this.bundleCooldowns.get(bundleId) || 0;
+                if (bundleCooldownUntil > now) continue;
+                const entry = bundleMap.get(bundleId) || { energy: 0, nodes: [] };
+                entry.energy += energy;
+                entry.nodes.push({ nodeId, energy, evidenceSpanIds });
+                bundleMap.set(bundleId, entry);
             }
 
             const bundles: V8ActivatedBundle[] = [];
@@ -752,10 +706,13 @@ export class V8GraphScanner {
                 activeNodeIds.add(nodeId);
             }
         }
-        const currentTokens = new Set(tokenize(this.recentWindow));
-        const baseEnergyAvg =
-            baseBundles.reduce((sum, bundle) => sum + bundle.energy, 0) /
-            Math.max(1, baseBundles.length);
+        const baseNodeSet = new Set<string>();
+        for (const bundle of baseBundles) {
+            for (const nodeId of bundle.nodeIds) {
+                baseNodeSet.add(nodeId);
+            }
+        }
+        const baseNodeCount = Math.max(1, baseNodeSet.size);
 
         const extraBundles: V8ActivatedBundle[] = [];
         for (const group of this.graph.groupBundles) {
@@ -763,34 +720,31 @@ export class V8GraphScanner {
             if (cooldownUntil > now) continue;
 
             const overlapNodeIds = group.nodeIds.filter((nodeId) => activeNodeIds.has(nodeId));
-            const overlapRatio = overlapNodeIds.length / Math.max(1, group.nodeIds.length);
-            let energy = 0;
-            let selectedNodeIds = overlapNodeIds.slice();
+            const overlapCount = overlapNodeIds.length;
+            if (overlapCount === 0) continue;
+            const coverage = overlapCount / Math.max(1, group.nodeIds.length);
+            const jaccard =
+                overlapCount /
+                Math.max(1, baseNodeCount + group.nodeIds.length - overlapCount);
+            if (overlapCount < 2 && coverage < 0.2) continue;
 
-            if (overlapNodeIds.length >= 2) {
-                let activationSum = 0;
-                for (const nodeId of overlapNodeIds) {
-                    activationSum += this.activations.get(nodeId) || 0;
-                }
-                const meanActivation = activationSum / overlapNodeIds.length;
-                energy = clamp01(meanActivation * (0.65 + 0.35 * overlapRatio));
-            } else {
-                // Similar bundle-group backfill: allow triggering by semantic match
-                // even when current active nodes are not the exact historical nodes.
-                if (baseBundles.length < 2) continue;
-                const groupTokens = this.graph.groupBundleTokens.get(group.bundleId) || new Set<string>();
-                const semanticOverlap = overlapScore(currentTokens, groupTokens);
-                if (semanticOverlap < 0.22) continue;
-                selectedNodeIds = group.nodeIds.slice(0, Math.min(4, group.nodeIds.length));
-                energy = clamp01(baseEnergyAvg * 0.45 + semanticOverlap * 0.55);
+            let activationSum = 0;
+            for (const nodeId of overlapNodeIds) {
+                activationSum += this.activations.get(nodeId) || 0;
             }
+            const meanActivation = activationSum / Math.max(1, overlapCount);
+            const energy = clamp01(
+                meanActivation * 0.6 +
+                    coverage * 0.28 +
+                    jaccard * 0.12
+            );
 
             const tier = scoreTier(energy, this.config);
             if (!tier) continue;
 
             extraBundles.push({
                 bundleId: group.bundleId,
-                nodeIds: selectedNodeIds,
+                nodeIds: overlapNodeIds,
                 tier,
                 energy,
                 evidenceSpanIds:

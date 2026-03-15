@@ -598,8 +598,6 @@ function buildPrompt(input: {
     return [
         "Please extract only evidence-backed relations from the batched units below.",
         "If nothing can be extracted, output `[]` only.",
-        "Active background: this is an ongoing long-horizon agent task memory graph.",
-        "Prioritize durable state shifts, decisions, constraints, and evidence-backed relations.",
         "",
         "Rules:",
         "- Use only the relations listed under Allowed relations (by group).",
