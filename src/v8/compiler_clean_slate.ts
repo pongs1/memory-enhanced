@@ -1385,7 +1385,16 @@ function hasReusableArtifacts(store: ReturnType<typeof ensureV8StoreDirs>): bool
         fs.existsSync(store.graphEdges) &&
         fs.existsSync(store.ignitionNodes) &&
         fs.existsSync(store.ignitionEdges) &&
-        fs.existsSync(store.recallBundles)
+        fs.existsSync(store.recallBundles) &&
+        fs.existsSync(store.entityPostings) &&
+        fs.existsSync(store.entityScopeCards) &&
+        fs.existsSync(store.groupSummaries) &&
+        fs.existsSync(store.relationSearchPlans) &&
+        fs.existsSync(store.narrativeShardSelections) &&
+        fs.existsSync(store.relationCandidateHits) &&
+        fs.existsSync(store.relationReviewJobs) &&
+        fs.existsSync(store.learningEvents) &&
+        fs.existsSync(store.searchFeedbackSignals)
     );
 }
 
