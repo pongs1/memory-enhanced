@@ -957,6 +957,7 @@ It is no longer the place where basic memory structure first appears.
 - each run writes diagnostics to `.memory/runtime/build_report.json` and `.memory/runtime/build_report.md` for tuning
 - partial runs (`max_narrative_docs`) do not update the incremental manifest baseline
 - source-stage narrative assembly removes stale `session_*_narrative.md` files that are no longer part of current output
+  - stale pruning is disabled when source ingestion is capped (`max_session_files`) to avoid partial-run data loss
 
 Temporary marker is kept in code to avoid forgetting cleanup:
 

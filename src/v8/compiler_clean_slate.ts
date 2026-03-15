@@ -122,7 +122,12 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             }
         }
         const traceRecords = [...traceNarrativeRecords, ...linkedNarrativeRecords];
-        const persistResult = persistAssembledObservationMarkdown(store.rawDir, traceRecords);
+        const allowPruneStaleNarratives = typeof options?.maxSessionFiles !== "number";
+        const persistResult = persistAssembledObservationMarkdown(
+            store.rawDir,
+            traceRecords,
+            allowPruneStaleNarratives
+        );
         sourceNarrativeDocs = persistResult.docs;
         sourcePersistStats = {
             writtenFiles: persistResult.writtenFiles,
@@ -835,7 +840,8 @@ function loadAllArtifacts(
 
 function persistAssembledObservationMarkdown(
     rawDir: string,
-    records: V8NarrativeRecord[]
+    records: V8NarrativeRecord[],
+    pruneStale = true
 ): {
     docs: V8NarrativeRecord[];
     writtenFiles: number;
@@ -847,7 +853,7 @@ function persistAssembledObservationMarkdown(
     }
     const outDir = path.join(rawDir, "observations", "assembled");
     fs.mkdirSync(outDir, { recursive: true });
-    return persistSessionNarratives(outDir, records);
+    return persistSessionNarratives(outDir, records, pruneStale);
 }
 
 interface SessionLinkRef {
@@ -1174,7 +1180,8 @@ interface NarrativeEntry {
 
 function persistSessionNarratives(
     outDir: string,
-    records: V8NarrativeRecord[]
+    records: V8NarrativeRecord[],
+    pruneStale: boolean
 ): {
     docs: V8NarrativeRecord[];
     writtenFiles: number;
@@ -1235,11 +1242,13 @@ function persistSessionNarratives(
         if (wrote) writtenFiles += 1;
         else skippedFiles += 1;
     }
-    const removedStale = removeStaleSessionNarrativeFiles(
-        outDir,
-        new Set(docs.map((doc) => path.basename(doc.sourceRef)))
-    );
-    removedFiles = removedStale;
+    if (pruneStale) {
+        const removedStale = removeStaleSessionNarrativeFiles(
+            outDir,
+            new Set(docs.map((doc) => path.basename(doc.sourceRef)))
+        );
+        removedFiles = removedStale;
+    }
 
     return {
         docs: sortNarrativeRecords(docs),
