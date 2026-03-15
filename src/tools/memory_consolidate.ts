@@ -59,6 +59,14 @@ export const MemoryConsolidateParams = Type.Object({
                 "or rely on V8_IR_JOBS/V8_IR_ITEMS_MD/V8_IR_ITEMS_JSONL env vars.",
         })
     ),
+    relation_review_llm_command: Type.Optional(
+        Type.String({
+            description:
+                "Optional command to run relation review over compact review jobs. " +
+                "Use {review_jobs}, {output_md}, {output_jsonl} placeholders " +
+                "or rely on V8_REL_REVIEW_JOBS/V8_REL_REVIEW_OUTPUT_MD/V8_REL_REVIEW_OUTPUT_JSONL env vars.",
+        })
+    ),
     rebuild_mode: Type.Optional(
         Type.Union(
             [Type.Literal("full"), Type.Literal("incremental"), Type.Literal("hybrid")],
@@ -148,9 +156,17 @@ export async function executeMemoryConsolidate(
         (params.ir_llm_command as string | undefined) ||
         (pluginConfig as any)?.v8IrLlmCommand ||
         process.env.V8_IR_LLM_COMMAND;
+    const relationReviewLlmCommand =
+        (params.relation_review_llm_command as string | undefined) ||
+        (pluginConfig as any)?.v8RelationReviewLlmCommand ||
+        process.env.V8_REL_REVIEW_LLM_COMMAND;
     const llmTimeoutMs =
         typeof (pluginConfig as any)?.v8IrLlmTimeoutMs === "number"
             ? (pluginConfig as any).v8IrLlmTimeoutMs
+            : undefined;
+    const relationReviewLlmTimeoutMs =
+        typeof (pluginConfig as any)?.v8RelationReviewLlmTimeoutMs === "number"
+            ? (pluginConfig as any).v8RelationReviewLlmTimeoutMs
             : undefined;
     const rebuildMode =
         (params.rebuild_mode as "full" | "incremental" | "hybrid" | undefined) ||
@@ -192,6 +208,8 @@ export async function executeMemoryConsolidate(
         planOnly,
         llmCommand,
         llmCommandTimeoutMs: llmTimeoutMs,
+        relationReviewLlmCommand,
+        relationReviewLlmTimeoutMs,
         rebuildMode,
         hotWindowHours,
         compilePhase,
@@ -220,6 +238,9 @@ export async function executeMemoryConsolidate(
             : null,
         maxNarrativeDocs ? `devFastBuildMarker=${DEV_FAST_BUILD_MARKER}` : null,
         llmCommand ? `llmStatus=${output.llmStatus}` : null,
+        relationReviewLlmCommand
+            ? `relationReviewLlmStatus=${output.buildStats.relationReviewLlmStatus}`
+            : null,
         "units=narrative",
         output.toolCatalogCheck
             ? `toolCatalogCheck=${output.toolCatalogCheck.status} tools=${output.toolCatalogCheck.toolCount} rules=${output.toolCatalogCheck.ruleCount}`

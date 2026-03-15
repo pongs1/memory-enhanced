@@ -26,7 +26,9 @@ export interface V8StorePaths {
     narrativeShardSelections: string;
     relationCandidateHits: string;
     relationReviewJobs: string;
+    relationReviewJobsMd: string;
     reviewedRelations: string;
+    reviewedRelationsMd: string;
     summaryPacks: string;
     statePacks: string;
     packCache: string;
@@ -71,7 +73,9 @@ export function v8StorePaths(workspace: string): V8StorePaths {
         narrativeShardSelections: path.join(runtimeDir, "narrative_shard_selections.jsonl"),
         relationCandidateHits: path.join(runtimeDir, "relation_candidate_hits.jsonl"),
         relationReviewJobs: path.join(runtimeDir, "relation_review_jobs.jsonl"),
+        relationReviewJobsMd: path.join(runtimeDir, "relation_review_jobs.md"),
         reviewedRelations: path.join(rootDir, "reviewed_relations.jsonl"),
+        reviewedRelationsMd: path.join(rootDir, "reviewed_relations.md"),
         summaryPacks: path.join(rootDir, "summary_packs.jsonl"),
         statePacks: path.join(rootDir, "state_packs.jsonl"),
         packCache: path.join(rootDir, "pack_cache.jsonl"),

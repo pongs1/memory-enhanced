@@ -25,6 +25,10 @@ import {
     applyReviewedRelationsToGraph,
     finalizeRelationReviewArtifacts,
 } from "./architecture/relation-review.js";
+import {
+    loadReviewedRelations,
+    writeRelationReviewJobsMarkdown,
+} from "./architecture/relation-review-llm.js";
 import { readJsonl, writeJsonl } from "./architecture/io.js";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -53,6 +57,8 @@ export interface CleanSlateBuildOptions {
     maxSessionFiles?: number;
     llmCommand?: string;
     llmCommandTimeoutMs?: number;
+    relationReviewLlmCommand?: string;
+    relationReviewLlmTimeoutMs?: number;
     startAt?: "source" | "narrative";
     stopAfter?: "evidence" | "memory_ir";
     maxNarrativeDocs?: number;
@@ -260,6 +266,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         relationReviewJobsCompleted: 0,
         learningEvents: 0,
         searchFeedbackSignals: 0,
+        relationReviewLlmStatus: "skipped",
     };
     const persistRunReport = (payload: {
         llmStatus: string;
@@ -403,6 +410,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             store.narrativeShardSelections,
             store.relationCandidateHits,
             store.relationReviewJobs,
+            store.relationReviewJobsMd,
             store.learningEvents,
             store.searchFeedbackSignals,
         ]);
@@ -530,6 +538,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             store.narrativeShardSelections,
             store.relationCandidateHits,
             store.relationReviewJobs,
+            store.relationReviewJobsMd,
             store.learningEvents,
             store.searchFeedbackSignals,
         ]);
@@ -582,30 +591,30 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const existingSearchFeedbackSignals = readJsonl<V8SearchFeedbackSignal>(
         store.searchFeedbackSignals
     );
-    const reviewedOverlay = applyReviewedRelationsToGraph({
+    const reviewedOverlayInitial = applyReviewedRelationsToGraph({
         nodes,
         edges: baseEdges,
         reviewedRelations: reviewedRelationsInput,
         existingHypothesisEdges,
     });
-    buildStats.relationReviewedAccepted = reviewedOverlay.stats.accepted;
-    buildStats.relationReviewedHypothesis = reviewedOverlay.stats.hypothesis;
-    buildStats.relationReviewedRejected = reviewedOverlay.stats.rejected;
+    buildStats.relationReviewedAccepted = reviewedOverlayInitial.stats.accepted;
+    buildStats.relationReviewedHypothesis = reviewedOverlayInitial.stats.hypothesis;
+    buildStats.relationReviewedRejected = reviewedOverlayInitial.stats.rejected;
     logStage(
-        `reviewed relations applied (accepted=${reviewedOverlay.stats.accepted} hypothesis=${reviewedOverlay.stats.hypothesis} rejected=${reviewedOverlay.stats.rejected})`
+        `reviewed relations applied (accepted=${reviewedOverlayInitial.stats.accepted} hypothesis=${reviewedOverlayInitial.stats.hypothesis} rejected=${reviewedOverlayInitial.stats.rejected})`
     );
-    const edges = reviewedOverlay.edges;
-    const projections = buildRuntimeProjections({
+    const initialEdges = reviewedOverlayInitial.edges;
+    const initialProjections = buildRuntimeProjections({
         nodes,
-        edges,
+        edges: initialEdges,
         evidenceSpans,
     });
     logStage("runtime projections built");
     const relationPlanning = buildRelationPlanningArtifacts({
         nodes,
-        edges,
+        edges: initialEdges,
         evidenceSpans,
-        recallBundles: projections.recallBundles,
+        recallBundles: initialProjections.recallBundles,
         searchFeedbackSignals: existingSearchFeedbackSignals,
         learningEvents: existingLearningEvents,
         compilePhase,
@@ -618,8 +627,55 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         relationPlanning.narrativeShardSelections.length;
     buildStats.relationCandidateHits = relationPlanning.relationCandidateHits.length;
     buildStats.relationReviewJobs = relationPlanning.relationReviewJobs.length;
+    writeRelationReviewJobsMarkdown({
+        filePath: store.relationReviewJobsMd,
+        jobs: relationPlanning.relationReviewJobs,
+        plans: relationPlanning.relationSearchPlans,
+        candidateHits: relationPlanning.relationCandidateHits,
+        nodes,
+        evidenceSpans,
+    });
+    const relationReviewLlmStatus =
+        relationPlanning.relationReviewJobs.length > 0
+            ? maybeRunRelationReviewLlm({
+                  command: options?.relationReviewLlmCommand,
+                  jobsPath: store.relationReviewJobsMd,
+                  outputMdPath: store.reviewedRelationsMd,
+                  outputJsonlPath: store.reviewedRelations,
+                  timeoutMs: options?.relationReviewLlmTimeoutMs,
+              })
+            : "skipped(no_review_jobs)";
+    buildStats.relationReviewLlmStatus = relationReviewLlmStatus;
+    const reviewedFromOutputs =
+        relationPlanning.relationReviewJobs.length > 0
+            ? loadReviewedRelations({
+                  mdPath: store.reviewedRelationsMd,
+                  jsonlPath: store.reviewedRelations,
+                  jobs: relationPlanning.relationReviewJobs,
+                  nodes,
+              })
+            : [];
+    const mergedReviewedRelations = mergeRecordsById<V8ReviewedRelation>([
+        ...reviewedRelationsInput,
+        ...reviewedFromOutputs,
+    ]);
+    const reviewedOverlayFinal = applyReviewedRelationsToGraph({
+        nodes,
+        edges: baseEdges,
+        reviewedRelations: mergedReviewedRelations,
+        existingHypothesisEdges,
+    });
+    const edges = reviewedOverlayFinal.edges;
+    const projections = buildRuntimeProjections({
+        nodes,
+        edges,
+        evidenceSpans,
+    });
+    buildStats.relationReviewedAccepted = reviewedOverlayFinal.stats.accepted;
+    buildStats.relationReviewedHypothesis = reviewedOverlayFinal.stats.hypothesis;
+    buildStats.relationReviewedRejected = reviewedOverlayFinal.stats.rejected;
     const reviewedArtifacts = finalizeRelationReviewArtifacts({
-        reviewedRelations: reviewedOverlay.reviewedRelations,
+        reviewedRelations: reviewedOverlayFinal.reviewedRelations,
         relationReviewJobs: relationPlanning.relationReviewJobs,
         relationSearchPlans: relationPlanning.relationSearchPlans,
     });
@@ -653,8 +709,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     );
     writeJsonl(store.relationCandidateHits, relationPlanning.relationCandidateHits);
     writeJsonl(store.relationReviewJobs, reviewedArtifacts.relationReviewJobs);
-    writeJsonl(store.reviewedRelations, reviewedOverlay.reviewedRelations);
-    writeJsonl(store.hypothesisEdges, reviewedOverlay.hypothesisEdges);
+    writeJsonl(store.reviewedRelations, reviewedOverlayFinal.reviewedRelations);
+    writeJsonl(store.hypothesisEdges, reviewedOverlayFinal.hypothesisEdges);
     writeJsonl(store.learningEvents, mergedLearningEvents);
     writeJsonl(store.searchFeedbackSignals, mergedSearchFeedbackSignals);
     if (!isPartialBuild) {
@@ -790,6 +846,7 @@ interface BuildReport {
         relationReviewJobsCompleted: number;
         learningEvents: number;
         searchFeedbackSignals: number;
+        relationReviewLlmStatus: string;
     };
     llmStatus: string;
     scopePreview: {
@@ -1154,6 +1211,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
     lines.push(
         `- relationReview: accepted=${report.buildStats.relationReviewedAccepted}, hypothesis=${report.buildStats.relationReviewedHypothesis}, rejected=${report.buildStats.relationReviewedRejected}, completedJobs=${report.buildStats.relationReviewJobsCompleted}, learningEvents=${report.buildStats.learningEvents}, searchFeedbackSignals=${report.buildStats.searchFeedbackSignals}`
     );
+    lines.push(`- relationReviewLlmStatus: ${report.buildStats.relationReviewLlmStatus}`);
     lines.push(
         `- partialBuild: ${String(report.buildStats.partialBuild)}${report.buildStats.maxNarrativeDocs ? ` (maxNarrativeDocs=${report.buildStats.maxNarrativeDocs})` : ""}`
     );
@@ -2093,6 +2151,44 @@ function maybeRunIrLlm(input: {
                 V8_IR_ITEMS: input.itemsMdPath,
                 V8_IR_ITEMS_MD: input.itemsMdPath,
                 V8_IR_ITEMS_JSONL: input.itemsJsonlPath,
+            },
+        });
+        if (result.error) {
+            return `failed: ${result.error.message}`;
+        }
+        if (typeof result.status === "number" && result.status !== 0) {
+            return `exit ${result.status}`;
+        }
+        return "completed";
+    } catch (err) {
+        return `failed: ${err instanceof Error ? err.message : "unknown error"}`;
+    }
+}
+
+function maybeRunRelationReviewLlm(input: {
+    command?: string;
+    jobsPath: string;
+    outputMdPath: string;
+    outputJsonlPath: string;
+    timeoutMs?: number;
+}): string {
+    const command = (input.command || "").trim();
+    if (!command) return "skipped";
+    const interpolated = command
+        .replace(/\{jobs\}/g, input.jobsPath)
+        .replace(/\{review_jobs\}/g, input.jobsPath)
+        .replace(/\{output_md\}/g, input.outputMdPath)
+        .replace(/\{output_jsonl\}/g, input.outputJsonlPath);
+    try {
+        const result = spawnSync(interpolated, {
+            shell: true,
+            encoding: "utf-8",
+            timeout: input.timeoutMs ?? 30 * 60 * 1000,
+            env: {
+                ...process.env,
+                V8_REL_REVIEW_JOBS: input.jobsPath,
+                V8_REL_REVIEW_OUTPUT_MD: input.outputMdPath,
+                V8_REL_REVIEW_OUTPUT_JSONL: input.outputJsonlPath,
             },
         });
         if (result.error) {
