@@ -956,7 +956,7 @@ It is no longer the place where basic memory structure first appears.
 - optional diagnostics-only run: `plan_only=true` to inspect hot/cold scope without recompiling artifacts
 - each run writes diagnostics to `.memory/runtime/build_report.json` and `.memory/runtime/build_report.md` for tuning
 - diagnostics include source cleaning volume and impact (`rawChars/cleanChars/removedChars`, `touchedRecords/removedRatioPct`) for cleaning-regression checks
-- diagnostics include append-only persistence behavior (`written/skippedUnchanged/skippedByAppendOnly`)
+- diagnostics include append-only persistence behavior (`written/skippedExisting`)
 - partial runs (`max_narrative_docs`) do not update the incremental manifest baseline
 - source-stage narrative assembly is append-only for `session_*_narrative.md` (no stale file pruning)
 
