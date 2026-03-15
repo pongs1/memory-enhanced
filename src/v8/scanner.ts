@@ -44,6 +44,7 @@ interface LoadedGraphData {
     policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
     groupBundles: V8RecallBundleProjection[];
     groupBundleById: Map<string, V8RecallBundleProjection>;
+    groupBundleIrTokens: Map<string, Set<string>>;
     hypothesisEdges: V8HypothesisEdge[];
 }
 
@@ -105,6 +106,13 @@ function overlapScore(tokens: Set<string>, referenceTokens: Set<string>): number
         }
     }
     return matches / referenceTokens.size;
+}
+
+function symmetricOverlapScore(left: Set<string>, right: Set<string>): number {
+    if (left.size === 0 || right.size === 0) return 0;
+    const lr = overlapScore(left, right);
+    const rl = overlapScore(right, left);
+    return (lr + rl) / 2;
 }
 
 function nowMs(): number {
@@ -185,6 +193,15 @@ export const DEFAULT_V8_SCANNER_CONFIG: V8ScannerConfig = {
     sceneDecayLambda: 0.985,
     sceneTopKNodes: 10,
     sceneOverlapThreshold: 0.12,
+    groupTriggerMinOverlapCount: 2,
+    groupTriggerMinCoverage: 0.2,
+    groupTriggerMinJaccard: 0.12,
+    groupTriggerMinIrSimilarity: 0.26,
+    groupAllowSemanticFallback: true,
+    groupEnergyWeightActivation: 0.56,
+    groupEnergyWeightCoverage: 0.2,
+    groupEnergyWeightJaccard: 0.1,
+    groupEnergyWeightIrSimilarity: 0.14,
 };
 
 export class V8GraphScanner {
@@ -240,6 +257,23 @@ export class V8GraphScanner {
             (bundle) => bundle.bundleId.startsWith("group_") && bundle.nodeIds.length >= 2
         );
         const groupBundleById = new Map(groupBundles.map((bundle) => [bundle.bundleId, bundle]));
+        const groupBundleIrTokens = new Map<string, Set<string>>();
+        for (const bundle of groupBundles) {
+            const merged = new Set<string>();
+            for (const nodeId of bundle.nodeIds) {
+                const tokens = nodeTokens.get(nodeId);
+                if (tokens) {
+                    for (const token of tokens) merged.add(token);
+                    continue;
+                }
+                const node = nodesById.get(nodeId);
+                if (!node) continue;
+                for (const token of tokenize(`${node.memoryType} ${node.canonicalLabel}`)) {
+                    merged.add(token);
+                }
+            }
+            groupBundleIrTokens.set(bundle.bundleId, merged);
+        }
 
         const nodesById = new Map<string, V8GraphNode>();
         const nodeTokens = new Map<string, Set<string>>();
@@ -383,6 +417,7 @@ export class V8GraphScanner {
             policyByKindMode,
             groupBundles,
             groupBundleById,
+            groupBundleIrTokens,
             hypothesisEdges,
         };
     }
@@ -713,6 +748,17 @@ export class V8GraphScanner {
             }
         }
         const baseNodeCount = Math.max(1, baseNodeSet.size);
+        const activeIrTokens = new Set<string>();
+        for (const nodeId of baseNodeSet) {
+            const tokens = this.graph.nodeTokens.get(nodeId);
+            if (!tokens) continue;
+            for (const token of tokens) {
+                activeIrTokens.add(token);
+            }
+        }
+        const baseEnergyAvg =
+            baseBundles.reduce((sum, bundle) => sum + bundle.energy, 0) /
+            Math.max(1, baseBundles.length);
 
         const extraBundles: V8ActivatedBundle[] = [];
         for (const group of this.graph.groupBundles) {
@@ -721,22 +767,33 @@ export class V8GraphScanner {
 
             const overlapNodeIds = group.nodeIds.filter((nodeId) => activeNodeIds.has(nodeId));
             const overlapCount = overlapNodeIds.length;
-            if (overlapCount === 0) continue;
             const coverage = overlapCount / Math.max(1, group.nodeIds.length);
             const jaccard =
                 overlapCount /
                 Math.max(1, baseNodeCount + group.nodeIds.length - overlapCount);
-            if (overlapCount < 2 && coverage < 0.2) continue;
+            const groupIrTokens = this.graph.groupBundleIrTokens.get(group.bundleId) || new Set<string>();
+            const irSimilarity = symmetricOverlapScore(activeIrTokens, groupIrTokens);
+
+            const hasOverlapSignal =
+                overlapCount >= this.config.groupTriggerMinOverlapCount ||
+                coverage >= this.config.groupTriggerMinCoverage ||
+                jaccard >= this.config.groupTriggerMinJaccard;
+            const hasSemanticSignal =
+                irSimilarity >= this.config.groupTriggerMinIrSimilarity &&
+                (this.config.groupAllowSemanticFallback ? baseBundles.length >= 2 : overlapCount > 0);
+            if (!hasOverlapSignal && !hasSemanticSignal) continue;
 
             let activationSum = 0;
             for (const nodeId of overlapNodeIds) {
                 activationSum += this.activations.get(nodeId) || 0;
             }
-            const meanActivation = activationSum / Math.max(1, overlapCount);
+            const meanActivation =
+                overlapCount > 0 ? activationSum / overlapCount : baseEnergyAvg * 0.8;
             const energy = clamp01(
-                meanActivation * 0.6 +
-                    coverage * 0.28 +
-                    jaccard * 0.12
+                meanActivation * this.config.groupEnergyWeightActivation +
+                    coverage * this.config.groupEnergyWeightCoverage +
+                    jaccard * this.config.groupEnergyWeightJaccard +
+                    irSimilarity * this.config.groupEnergyWeightIrSimilarity
             );
 
             const tier = scoreTier(energy, this.config);
@@ -744,7 +801,10 @@ export class V8GraphScanner {
 
             extraBundles.push({
                 bundleId: group.bundleId,
-                nodeIds: overlapNodeIds,
+                nodeIds:
+                    overlapNodeIds.length > 0
+                        ? overlapNodeIds
+                        : group.nodeIds.slice(0, Math.min(4, group.nodeIds.length)),
                 tier,
                 energy,
                 evidenceSpanIds:
