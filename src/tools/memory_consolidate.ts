@@ -15,6 +15,13 @@ export const MemoryConsolidateParams = Type.Object({
             description: "Optional cap on number of session transcript files to ingest.",
         })
     ),
+    max_narrative_docs: Type.Optional(
+        Type.Number({
+            minimum: 1,
+            description:
+                "Optional dev-only cap for narrative docs compiled in one run (temporary fast-build knob).",
+        })
+    ),
     ir_llm_command: Type.Optional(
         Type.String({
             description:
@@ -43,6 +50,9 @@ export const MemoryConsolidateParams = Type.Object({
 
 export type MemoryConsolidateInput = Static<typeof MemoryConsolidateParams>;
 
+// DEV marker: remove temporary fast-build knobs before release hardening.
+const DEV_FAST_BUILD_MARKER = "TODO_REMOVE_BEFORE_RELEASE__V8_FAST_BUILD_DEFAULTS";
+
 export async function executeMemoryConsolidate(
     _toolCallId: string,
     params: MemoryConsolidateInput,
@@ -55,6 +65,12 @@ export async function executeMemoryConsolidate(
         (pluginConfig as any)?.v8SessionTraceDir ||
         process.env.OPENCLAW_SESSION_TRACE_DIR;
     const maxSessionFiles = params.max_session_files;
+    const maxNarrativeDocs =
+        typeof params.max_narrative_docs === "number"
+            ? params.max_narrative_docs
+            : typeof (pluginConfig as any)?.v8MaxNarrativeDocs === "number"
+              ? (pluginConfig as any).v8MaxNarrativeDocs
+              : undefined;
     const llmCommand =
         (params.ir_llm_command as string | undefined) ||
         (pluginConfig as any)?.v8IrLlmCommand ||
@@ -82,6 +98,7 @@ export async function executeMemoryConsolidate(
         workspace,
         sessionTraceDir,
         maxSessionFiles,
+        maxNarrativeDocs,
         llmCommand,
         llmCommandTimeoutMs: llmTimeoutMs,
         rebuildMode,
@@ -92,8 +109,10 @@ export async function executeMemoryConsolidate(
         "Clean-slate V8 build completed.",
         `sessionTraceDir=${sessionTraceDir || "default"}`,
         maxSessionFiles ? `maxSessionFiles=${maxSessionFiles}` : null,
+        maxNarrativeDocs ? `maxNarrativeDocs=${maxNarrativeDocs}` : null,
         `rebuildMode=${rebuildMode}`,
         hotWindowHours ? `hotWindowHours=${hotWindowHours}` : null,
+        maxNarrativeDocs ? `devFastBuildMarker=${DEV_FAST_BUILD_MARKER}` : null,
         llmCommand ? `llmStatus=${output.llmStatus}` : null,
         "units=narrative",
         output.toolCatalogCheck

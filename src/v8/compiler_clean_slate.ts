@@ -50,6 +50,10 @@ export interface CleanSlateBuildOptions {
     hotWindowHours?: number;
 }
 
+// DEV marker: remove this temporary fast-build default before release hardening.
+const DEV_FAST_BUILD_MARKER = "TODO_REMOVE_BEFORE_RELEASE__V8_FAST_BUILD_DEFAULTS";
+const DEFAULT_HOT_WINDOW_HOURS = 48;
+
 export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const workspace = resolveWorkspace(options?.workspace);
     const store = ensureV8StoreDirs(workspace);
@@ -122,7 +126,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     }
 
     const rebuildMode = options?.rebuildMode ?? "hybrid";
-    const hotWindowHours = Math.max(1, options?.hotWindowHours ?? 36);
+    const hotWindowHours = Math.max(1, options?.hotWindowHours ?? DEFAULT_HOT_WINDOW_HOURS);
     const manifest = loadBuildManifest(store.buildManifest);
     const scope = computeBuildScope({
         narratives: allNarrativeDocs,
@@ -133,6 +137,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     logStage(
         `build scope mode=${rebuildMode} hot=${scope.hotDocIds.size} cold=${scope.coldDocIds.size} removed=${scope.removedDocIds.size}`
     );
+    logStage(`${DEV_FAST_BUILD_MARKER} hotWindowHours=${hotWindowHours}`);
 
     const canReuseCache =
         rebuildMode !== "full" &&
