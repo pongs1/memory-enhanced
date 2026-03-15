@@ -111,8 +111,6 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             sessionTraceDir: options?.sessionTraceDir,
             maxFiles: options?.maxSessionFiles,
         });
-        const assembledDir = path.join(store.rawDir, "observations", "assembled");
-        const existingSessionIds = listExistingSessionNarrativeIds(assembledDir);
         const sessionTraceDir =
             resolveSessionTraceDir(workspace, options?.sessionTraceDir) ||
             (traceGroups.length > 0
@@ -121,13 +119,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
         const traceNarrativeRecords: V8NarrativeRecord[] = [];
         const linkedNarrativeRecords: V8NarrativeRecord[] = [];
-        let skippedExistingSessions = 0;
         for (const group of traceGroups) {
             const parentSessionId = deriveSessionIdFromSourceRef(group.sourceRefPrefix);
-            if (existingSessionIds.has(parentSessionId)) {
-                skippedExistingSessions += 1;
-                continue;
-            }
             const baseRecords = normalizeSessionMessages(group.messages, {
                 sourceRefPrefix: group.sourceRefPrefix,
                 workspace,
@@ -156,7 +149,6 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             skippedFiles: persistResult.skippedFiles,
         };
         logStage("source normalization persisted");
-        logStage(`source groups skipped(existing narrative)=${skippedExistingSessions}`);
     }
 
     const loadedNarrativeDocs = loadNarrativeRecords(store.rawDir);
@@ -235,6 +227,9 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         hotTailSkipUnits,
         llmLayers: llmLayers.join(","),
         hotTailDroppedUnits: 0,
+        llmCacheHitUnits: 0,
+        llmCacheMissUnits: 0,
+        llmCacheEntries: 0,
         irRuleItems: 0,
         irLlmItems: 0,
         irFallbackItems: 0,
@@ -410,10 +405,32 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         };
     }
 
-    const llmJobs = buildLlmIrJobs(hotUnits, hotEvidenceSpans, {
+    const llmUnitCacheEntries = loadLlmUnitCacheEntries(store.irLlmUnitCache);
+    const llmUnitCacheByKey = new Map(
+        llmUnitCacheEntries.map((entry) => [entry.cacheKey, entry])
+    );
+    const llmUnitsForExtraction: V8Unit[] = [];
+    const cachedLlmItems: V8MemoryItem[] = [];
+    for (const unit of hotUnits) {
+        if (!llmLayers.includes(unit.layer)) continue;
+        const cacheKey = buildLlmUnitCacheKey(unit);
+        const cachedEntry = llmUnitCacheByKey.get(cacheKey);
+        if (cachedEntry) {
+            buildStats.llmCacheHitUnits += 1;
+            if (cachedEntry.items.length > 0) {
+                cachedLlmItems.push(...cloneMemoryItems(cachedEntry.items));
+            }
+            continue;
+        }
+        llmUnitsForExtraction.push(unit);
+    }
+    buildStats.llmCacheMissUnits = llmUnitsForExtraction.length;
+    const llmJobs = buildLlmIrJobs(llmUnitsForExtraction, hotEvidenceSpans, {
         layers: llmLayers,
     });
-    logStage(`llm jobs built hot=${llmJobs.length}`);
+    logStage(
+        `llm jobs built missUnits=${llmUnitsForExtraction.length} jobs=${llmJobs.length} cacheHits=${buildStats.llmCacheHitUnits}`
+    );
     writeIrLlmJobs(store.irLlmJobs, llmJobs);
     logStage("llm jobs persisted");
     const llmStatus =
@@ -425,13 +442,26 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
                   itemsJsonlPath: store.irLlmItems,
                   timeoutMs: options?.llmCommandTimeoutMs,
               })
-            : "skipped(no_hot_jobs)";
+            : buildStats.llmCacheHitUnits > 0
+              ? "skipped(cache_hit)"
+              : "skipped(no_hot_jobs)";
     logStage(`llm step finished (${llmStatus})`);
-    const llmItems = loadLlmIrItems(
-        { mdPath: store.irLlmItemsMd, jsonlPath: store.irLlmItems },
-        hotUnits,
-        hotEvidenceSpans
-    );
+    const freshLlmItems =
+        llmJobs.length > 0
+            ? loadLlmIrItems(
+                  { mdPath: store.irLlmItemsMd, jsonlPath: store.irLlmItems },
+                  llmUnitsForExtraction,
+                  hotEvidenceSpans
+              )
+            : [];
+    const llmItems = dedupeMemoryItems([...cachedLlmItems, ...freshLlmItems]);
+    const nextLlmUnitCacheEntries = mergeLlmUnitCacheEntries({
+        existing: llmUnitCacheEntries,
+        units: llmUnitsForExtraction,
+        llmItems: freshLlmItems,
+    });
+    buildStats.llmCacheEntries = nextLlmUnitCacheEntries.length;
+    writeJsonl(store.irLlmUnitCache, nextLlmUnitCacheEntries);
     const ruleIrMode = options?.ruleIrMode ?? "off";
     const ruleItems =
         ruleIrMode === "micro_light"
@@ -600,6 +630,9 @@ interface BuildReport {
         hotTailSkipUnits: number;
         llmLayers: string;
         hotTailDroppedUnits: number;
+        llmCacheHitUnits: number;
+        llmCacheMissUnits: number;
+        llmCacheEntries: number;
         irRuleItems: number;
         irLlmItems: number;
         irFallbackItems: number;
@@ -622,6 +655,19 @@ interface BuildReport {
         ignitionEdges: number;
         recallBundles: number;
     };
+}
+
+const LLM_UNIT_CACHE_VERSION = 1;
+
+interface LlmUnitCacheEntry {
+    cacheKey: string;
+    version: number;
+    layer: V8GraphLayer;
+    unitId: string;
+    narrativeRecordId: string;
+    unitHash: string;
+    updatedAt: string;
+    items: V8MemoryItem[];
 }
 
 function emptyCachedArtifacts(): Pick<
@@ -663,6 +709,137 @@ function trimTrailingUnitsByNarrativeForCompile(
         }
     }
     return units.filter((unit) => !dropIds.has(unit.id));
+}
+
+function buildLlmUnitCacheKey(unit: V8Unit): string {
+    return `${LLM_UNIT_CACHE_VERSION}|${unit.layer}|${unit.id}|${hashUnitForLlmCache(unit)}`;
+}
+
+function hashUnitForLlmCache(unit: V8Unit): string {
+    return createHash("sha1")
+        .update(unit.layer)
+        .update("\n")
+        .update(unit.narrativeRecordId)
+        .update("\n")
+        .update(unit.id)
+        .update("\n")
+        .update(String(unit.charStart))
+        .update(":")
+        .update(String(unit.charEnd))
+        .update("\n")
+        .update(unit.text || "")
+        .digest("hex");
+}
+
+function loadLlmUnitCacheEntries(filePath: string): LlmUnitCacheEntry[] {
+    const raw = readJsonl<Partial<LlmUnitCacheEntry>>(filePath);
+    if (raw.length === 0) return [];
+    const entries: LlmUnitCacheEntry[] = [];
+    for (const item of raw) {
+        if (!item || typeof item !== "object") continue;
+        if (item.version !== LLM_UNIT_CACHE_VERSION) continue;
+        if (!item.cacheKey || typeof item.cacheKey !== "string") continue;
+        if (!item.unitId || typeof item.unitId !== "string") continue;
+        if (!item.narrativeRecordId || typeof item.narrativeRecordId !== "string") continue;
+        if (!item.unitHash || typeof item.unitHash !== "string") continue;
+        if (
+            item.layer !== "micro" &&
+            item.layer !== "meso" &&
+            item.layer !== "macro"
+        ) {
+            continue;
+        }
+        entries.push({
+            cacheKey: item.cacheKey,
+            version: LLM_UNIT_CACHE_VERSION,
+            layer: item.layer,
+            unitId: item.unitId,
+            narrativeRecordId: item.narrativeRecordId,
+            unitHash: item.unitHash,
+            updatedAt:
+                typeof item.updatedAt === "string"
+                    ? item.updatedAt
+                    : new Date().toISOString(),
+            items: Array.isArray(item.items) ? dedupeMemoryItems(item.items as V8MemoryItem[]) : [],
+        });
+    }
+    return entries;
+}
+
+function mergeLlmUnitCacheEntries(input: {
+    existing: LlmUnitCacheEntry[];
+    units: V8Unit[];
+    llmItems: V8MemoryItem[];
+}): LlmUnitCacheEntry[] {
+    if (input.units.length === 0) {
+        return input.existing;
+    }
+    const now = new Date().toISOString();
+    const nextByKey = new Map(input.existing.map((entry) => [entry.cacheKey, entry]));
+    const itemsByUnitLayer = new Map<string, V8MemoryItem[]>();
+    for (const item of input.llmItems) {
+        const unitId = item.unitIds?.[0];
+        if (!unitId) continue;
+        const key = `${item.layer}|${unitId}`;
+        const list = itemsByUnitLayer.get(key) || [];
+        list.push(item);
+        itemsByUnitLayer.set(key, list);
+    }
+    for (const unit of input.units) {
+        const cacheKey = buildLlmUnitCacheKey(unit);
+        const unitItems = dedupeMemoryItems(
+            itemsByUnitLayer.get(`${unit.layer}|${unit.id}`) || []
+        );
+        nextByKey.set(cacheKey, {
+            cacheKey,
+            version: LLM_UNIT_CACHE_VERSION,
+            layer: unit.layer,
+            unitId: unit.id,
+            narrativeRecordId: unit.narrativeRecordId,
+            unitHash: hashUnitForLlmCache(unit),
+            updatedAt: now,
+            items: cloneMemoryItems(unitItems),
+        });
+    }
+    return Array.from(nextByKey.values()).sort((a, b) => a.cacheKey.localeCompare(b.cacheKey));
+}
+
+function cloneMemoryItems(items: V8MemoryItem[]): V8MemoryItem[] {
+    return items.map((item) => ({
+        ...item,
+        qualifiers: { ...(item.qualifiers || {}) },
+        evidenceSpanIds: [...(item.evidenceSpanIds || [])],
+        unitIds: [...(item.unitIds || [])],
+    }));
+}
+
+function dedupeMemoryItems(items: V8MemoryItem[]): V8MemoryItem[] {
+    if (items.length <= 1) return items;
+    const seen = new Set<string>();
+    const output: V8MemoryItem[] = [];
+    for (const item of items) {
+        const unitId = item.unitIds?.[0] || "";
+        const key = [
+            item.layer,
+            item.narrativeRecordId,
+            unitId,
+            item.itemType,
+            normalizeMemoryDedupe(item.subject),
+            normalizeMemoryDedupe(item.predicate),
+            normalizeMemoryDedupe(item.object),
+        ].join("|");
+        if (seen.has(key)) continue;
+        seen.add(key);
+        output.push(item);
+    }
+    return output;
+}
+
+function normalizeMemoryDedupe(text: string): string {
+    return (text || "")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
 }
 
 function loadBuildManifest(filePath: string): BuildManifest | null {
@@ -751,6 +928,9 @@ function renderBuildReportMarkdown(report: BuildReport): string {
     );
     lines.push(
         `- compilePhase: ${report.buildStats.compilePhase} (layers=${report.buildStats.llmLayers}, hotTailSkipUnits=${report.buildStats.hotTailSkipUnits}, hotTailDroppedUnits=${report.buildStats.hotTailDroppedUnits})`
+    );
+    lines.push(
+        `- llmCache: hitUnits=${report.buildStats.llmCacheHitUnits}, missUnits=${report.buildStats.llmCacheMissUnits}, entries=${report.buildStats.llmCacheEntries}`
     );
     lines.push(
         `- irExtraction: rule=${report.buildStats.irRuleItems}, llm=${report.buildStats.irLlmItems}, fallback=${report.buildStats.irFallbackItems}, fallbackApplied=${String(report.buildStats.irFallbackApplied)}`
@@ -972,25 +1152,6 @@ function summarizeSourceNormalization(records: V8NarrativeRecord[]): {
         touchedRecords,
         removedRatioPct: rawChars > 0 ? (removedChars * 100) / rawChars : 0,
     };
-}
-
-function listExistingSessionNarrativeIds(assembledDir: string): Set<string> {
-    const sessionIds = new Set<string>();
-    try {
-        if (!fs.existsSync(assembledDir)) return sessionIds;
-        const files = fs
-            .readdirSync(assembledDir)
-            .filter((name) => /^session_.+_narrative\.md$/i.test(name));
-        for (const file of files) {
-            const match = file.match(/^session_(.+)_narrative\.md$/i);
-            if (match?.[1]) {
-                sessionIds.add(match[1]);
-            }
-        }
-    } catch {
-        // ignore listing failures
-    }
-    return sessionIds;
 }
 
 function persistAssembledObservationMarkdown(
@@ -1372,7 +1533,7 @@ function persistSessionNarratives(
         const fileName =
             sanitizeFileName(`session_${sessionId}_narrative`) + ".md";
         const fullPath = path.join(outDir, fileName);
-        const wrote = writeNarrativeIfMissing(fullPath, markdown);
+        const wrote = appendNarrativeIfExtended(fullPath, markdown);
         if (wrote) writtenFiles += 1;
         else skippedFiles += 1;
     }
@@ -1382,14 +1543,39 @@ function persistSessionNarratives(
     };
 }
 
-function writeNarrativeIfMissing(filePath: string, content: string): boolean {
+function appendNarrativeIfExtended(filePath: string, content: string): boolean {
     try {
-        if (fs.existsSync(filePath)) return false;
-        fs.writeFileSync(filePath, content, "utf-8");
+        if (!fs.existsSync(filePath)) {
+            fs.writeFileSync(filePath, content, "utf-8");
+            return true;
+        }
+        const existingRaw = fs.readFileSync(filePath, "utf-8");
+        const existing = normalizeLf(existingRaw);
+        const incoming = normalizeLf(content);
+        if (incoming === existing) return false;
+
+        const existingPrefix = ensureTrailingLf(existing);
+        const incomingNormalized = ensureTrailingLf(incoming);
+        if (!incomingNormalized.startsWith(existingPrefix)) {
+            return false;
+        }
+
+        const suffix = incomingNormalized.slice(existingPrefix.length);
+        if (!suffix.trim()) return false;
+        fs.appendFileSync(filePath, suffix, "utf-8");
         return true;
     } catch {
         return false;
     }
+}
+
+function normalizeLf(text: string): string {
+    return (text || "").replace(/\r\n/g, "\n");
+}
+
+function ensureTrailingLf(text: string): string {
+    if (!text) return "\n";
+    return text.endsWith("\n") ? text : `${text}\n`;
 }
 
 function compareNarrativeEntries(a: NarrativeEntry, b: NarrativeEntry): number {

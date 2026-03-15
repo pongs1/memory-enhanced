@@ -18,6 +18,7 @@ export interface V8StorePaths {
     irLlmJobs: string;
     irLlmItems: string;
     irLlmItemsMd: string;
+    irLlmUnitCache: string;
     summaryPacks: string;
     statePacks: string;
     packCache: string;
@@ -51,6 +52,7 @@ export function v8StorePaths(workspace: string): V8StorePaths {
         irLlmJobs: path.join(rootDir, "ir_llm_jobs.jsonl"),
         irLlmItems: path.join(rootDir, "ir_llm_items.jsonl"),
         irLlmItemsMd: path.join(rootDir, "ir_llm_items.md"),
+        irLlmUnitCache: path.join(rootDir, "ir_llm_unit_cache.jsonl"),
         summaryPacks: path.join(rootDir, "summary_packs.jsonl"),
         statePacks: path.join(rootDir, "state_packs.jsonl"),
         packCache: path.join(rootDir, "pack_cache.jsonl"),

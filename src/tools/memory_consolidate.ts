@@ -250,6 +250,9 @@ export async function executeMemoryConsolidate(
         output.buildStats
             ? `irExtraction=rule:${output.buildStats.irRuleItems} llm:${output.buildStats.irLlmItems} fallback:${output.buildStats.irFallbackItems} fallbackApplied:${output.buildStats.irFallbackApplied}`
             : null,
+        output.buildStats
+            ? `llmCache=hitUnits:${output.buildStats.llmCacheHitUnits} missUnits:${output.buildStats.llmCacheMissUnits} entries:${output.buildStats.llmCacheEntries}`
+            : null,
         output.scopePreview?.hotDocIds?.length
             ? `hotDocPreview=${output.scopePreview.hotDocIds.slice(0, 8).join(",")}`
             : null,
