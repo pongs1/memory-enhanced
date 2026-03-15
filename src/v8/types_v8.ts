@@ -564,15 +564,9 @@ export interface V8ScannerConfig {
     sceneDecayLambda: number;
     sceneTopKNodes: number;
     sceneOverlapThreshold: number;
-    groupTriggerMinOverlapCount: number;
-    groupTriggerMinCoverage: number;
-    groupTriggerMinJaccard: number;
-    groupTriggerMinIrSimilarity: number;
+    groupTriggerScoreThreshold: number;
     groupAllowSemanticFallback: boolean;
-    groupEnergyWeightActivation: number;
-    groupEnergyWeightCoverage: number;
-    groupEnergyWeightJaccard: number;
-    groupEnergyWeightIrSimilarity: number;
+    groupEnergyGain: number;
 }
 
 export interface V8FeedbackConfig {

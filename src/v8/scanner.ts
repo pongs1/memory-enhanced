@@ -193,15 +193,9 @@ export const DEFAULT_V8_SCANNER_CONFIG: V8ScannerConfig = {
     sceneDecayLambda: 0.985,
     sceneTopKNodes: 10,
     sceneOverlapThreshold: 0.12,
-    groupTriggerMinOverlapCount: 2,
-    groupTriggerMinCoverage: 0.2,
-    groupTriggerMinJaccard: 0.12,
-    groupTriggerMinIrSimilarity: 0.26,
+    groupTriggerScoreThreshold: 0.24,
     groupAllowSemanticFallback: true,
-    groupEnergyWeightActivation: 0.56,
-    groupEnergyWeightCoverage: 0.2,
-    groupEnergyWeightJaccard: 0.1,
-    groupEnergyWeightIrSimilarity: 0.14,
+    groupEnergyGain: 0.92,
 };
 
 export class V8GraphScanner {
@@ -773,15 +767,15 @@ export class V8GraphScanner {
                 Math.max(1, baseNodeCount + group.nodeIds.length - overlapCount);
             const groupIrTokens = this.graph.groupBundleIrTokens.get(group.bundleId) || new Set<string>();
             const irSimilarity = symmetricOverlapScore(activeIrTokens, groupIrTokens);
-
-            const hasOverlapSignal =
-                overlapCount >= this.config.groupTriggerMinOverlapCount ||
-                coverage >= this.config.groupTriggerMinCoverage ||
-                jaccard >= this.config.groupTriggerMinJaccard;
-            const hasSemanticSignal =
-                irSimilarity >= this.config.groupTriggerMinIrSimilarity &&
-                (this.config.groupAllowSemanticFallback ? baseBundles.length >= 2 : overlapCount > 0);
-            if (!hasOverlapSignal && !hasSemanticSignal) continue;
+            // Transparent score: overlap coverage + jaccard + IR-group similarity.
+            const triggerScore = 0.5 * coverage + 0.3 * jaccard + 0.2 * irSimilarity;
+            const hasSemanticFallback =
+                this.config.groupAllowSemanticFallback &&
+                baseBundles.length >= 2 &&
+                irSimilarity >= this.config.groupTriggerScoreThreshold;
+            if (triggerScore < this.config.groupTriggerScoreThreshold && !hasSemanticFallback) {
+                continue;
+            }
 
             let activationSum = 0;
             for (const nodeId of overlapNodeIds) {
@@ -790,10 +784,9 @@ export class V8GraphScanner {
             const meanActivation =
                 overlapCount > 0 ? activationSum / overlapCount : baseEnergyAvg * 0.8;
             const energy = clamp01(
-                meanActivation * this.config.groupEnergyWeightActivation +
-                    coverage * this.config.groupEnergyWeightCoverage +
-                    jaccard * this.config.groupEnergyWeightJaccard +
-                    irSimilarity * this.config.groupEnergyWeightIrSimilarity
+                meanActivation *
+                    this.config.groupEnergyGain *
+                    (0.7 + 0.3 * Math.max(triggerScore, irSimilarity))
             );
 
             const tier = scoreTier(energy, this.config);
