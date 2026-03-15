@@ -45,6 +45,12 @@ export const MemoryConsolidateParams = Type.Object({
             description: "Optional early stop stage for faster debugging.",
         })
     ),
+    plan_only: Type.Optional(
+        Type.Boolean({
+            description:
+                "Only compute and persist build scope diagnostics without generating units/graph artifacts.",
+        })
+    ),
     ir_llm_command: Type.Optional(
         Type.String({
             description:
@@ -113,6 +119,12 @@ export async function executeMemoryConsolidate(
     const stopAfter =
         (params.stop_after as "evidence" | "memory_ir" | undefined) ||
         ((pluginConfig as any)?.v8StopAfter as "evidence" | "memory_ir" | undefined);
+    const planOnly =
+        typeof params.plan_only === "boolean"
+            ? params.plan_only
+            : typeof (pluginConfig as any)?.v8PlanOnly === "boolean"
+              ? (pluginConfig as any).v8PlanOnly
+              : false;
     const llmCommand =
         (params.ir_llm_command as string | undefined) ||
         (pluginConfig as any)?.v8IrLlmCommand ||
@@ -145,6 +157,7 @@ export async function executeMemoryConsolidate(
         emitUnitPreview,
         startAt,
         stopAfter,
+        planOnly,
         llmCommand,
         llmCommandTimeoutMs: llmTimeoutMs,
         rebuildMode,
@@ -162,6 +175,7 @@ export async function executeMemoryConsolidate(
             : null,
         startAt ? `startAt=${startAt}` : null,
         stopAfter ? `stopAfter=${stopAfter}` : null,
+        planOnly ? "planOnly=true" : null,
         `rebuildMode=${rebuildMode}`,
         hotWindowHours ? `hotWindowHours=${hotWindowHours}` : null,
         maxNarrativeDocs ? `devFastBuildMarker=${DEV_FAST_BUILD_MARKER}` : null,

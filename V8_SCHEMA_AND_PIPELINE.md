@@ -1086,6 +1086,7 @@ Practical compile switches:
 - optional dev acceleration: `max_narrative_docs` (temporary knob, marked for removal before release)
 - optional runtime tuning: `worker_count`, `emit_unit_preview`
 - optional debug stages: `start_at=narrative`, `stop_after=evidence|memory_ir`
+- optional scope-only diagnostics: `plan_only=true` (no artifacts rebuilt)
 - build diagnostics snapshot is persisted to `.memory/runtime/build_report.json` and `.memory/runtime/build_report.md`
 - when `max_narrative_docs` is set, the run is marked as partial and does not update `build_manifest.json`
 - when `stop_after` is used, downstream artifact files are cleared to avoid stale graph/runtime reads

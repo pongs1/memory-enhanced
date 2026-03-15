@@ -48,6 +48,7 @@ export interface CleanSlateBuildOptions {
     ruleIrMode?: "off" | "micro_light";
     rebuildMode?: "full" | "incremental" | "hybrid";
     hotWindowHours?: number;
+    planOnly?: boolean;
 }
 
 // DEV marker: remove this temporary fast-build default before release hardening.
@@ -142,6 +143,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         mode: rebuildMode,
         hotWindowHours,
     });
+    const scopePreview = buildScopePreview(scope, allNarrativeDocs);
     logStage(
         `build scope mode=${rebuildMode} hot=${scope.hotDocIds.size} cold=${scope.coldDocIds.size} removed=${scope.removedDocIds.size}`
     );
@@ -188,6 +190,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             stageTimingsMs,
             buildStats,
             llmStatus: payload.llmStatus,
+            scopePreview,
             counts: {
                 narrativeDocs: allNarrativeDocs.length,
                 units: payload.units,
@@ -206,6 +209,37 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             report,
         });
     };
+
+    if (options?.planOnly) {
+        logStage("plan_only: stop before unit/evidence build");
+        persistRunReport({
+            llmStatus: "skipped(plan_only)",
+            units: 0,
+            evidenceSpans: 0,
+            memoryItems: 0,
+            nodes: 0,
+            edges: 0,
+            ignitionNodes: 0,
+            ignitionEdges: 0,
+            recallBundles: 0,
+        });
+        return {
+            narrativeDocs: allNarrativeDocs,
+            units: [],
+            evidenceSpans: [],
+            memoryItems: [],
+            llmJobs: [],
+            llmItems: [],
+            llmStatus: "skipped(plan_only)",
+            toolCatalogCheck,
+            nodes: [],
+            edges: [],
+            ignitionNodes: [],
+            ignitionEdges: [],
+            recallBundles: [],
+            buildStats,
+        };
+    }
 
     if (hotBuildIsNoop && options?.stopAfter !== "evidence" && options?.stopAfter !== "memory_ir") {
         const reused = loadAllArtifacts(store);
@@ -469,6 +503,11 @@ interface BuildReport {
         noopReuse: boolean;
     };
     llmStatus: string;
+    scopePreview: {
+        hotDocIds: string[];
+        coldDocIds: string[];
+        removedDocIds: string[];
+    };
     counts: {
         narrativeDocs: number;
         units: number;
@@ -534,6 +573,27 @@ function clearJsonlFiles(filePaths: string[]): void {
     }
 }
 
+function buildScopePreview(
+    scope: BuildScope,
+    narratives: V8NarrativeRecord[]
+): BuildReport["scopePreview"] {
+    const byId = new Map(narratives.map((narrative) => [narrative.id, narrative]));
+    const toRecent = (ids: Set<string>) =>
+        Array.from(ids)
+            .map((id) => ({
+                id,
+                ts: byId.has(id) ? resolveNarrativeSortTimestamp(byId.get(id)!) : 0,
+            }))
+            .sort((a, b) => b.ts - a.ts || a.id.localeCompare(b.id))
+            .slice(0, 40)
+            .map((entry) => entry.id);
+    return {
+        hotDocIds: toRecent(scope.hotDocIds),
+        coldDocIds: toRecent(scope.coldDocIds),
+        removedDocIds: Array.from(scope.removedDocIds).slice(0, 40),
+    };
+}
+
 function renderBuildReportMarkdown(report: BuildReport): string {
     const lines: string[] = [];
     lines.push("# V8 Build Report");
@@ -553,6 +613,9 @@ function renderBuildReportMarkdown(report: BuildReport): string {
     lines.push(
         `- partialBuild: ${String(report.buildStats.partialBuild)}${report.buildStats.maxNarrativeDocs ? ` (maxNarrativeDocs=${report.buildStats.maxNarrativeDocs})` : ""}`
     );
+    lines.push(
+        `- scopePreview: hot=${report.scopePreview.hotDocIds.length}, cold=${report.scopePreview.coldDocIds.length}, removed=${report.scopePreview.removedDocIds.length}`
+    );
     lines.push("");
     lines.push("## Counts");
     lines.push("");
@@ -571,6 +634,12 @@ function renderBuildReportMarkdown(report: BuildReport): string {
     for (const [stage, elapsed] of Object.entries(report.stageTimingsMs).sort((a, b) => a[1] - b[1])) {
         lines.push(`- ${stage}: ${elapsed}`);
     }
+    lines.push("");
+    lines.push("## Scope Preview");
+    lines.push("");
+    lines.push(`- hotDocIds: ${report.scopePreview.hotDocIds.join(", ") || "(none)"}`);
+    lines.push(`- coldDocIds: ${report.scopePreview.coldDocIds.join(", ") || "(none)"}`);
+    lines.push(`- removedDocIds: ${report.scopePreview.removedDocIds.join(", ") || "(none)"}`);
     lines.push("");
     return lines.join("\n");
 }
