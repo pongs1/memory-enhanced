@@ -1110,6 +1110,7 @@ Practical compile switches:
   - impact: `sourceNormalizationTouchedRecords/removedRatioPct`
 - append-only narrative persistence stats:
   - `sourceNarrativeWrittenFiles/sourceNarrativeSkippedFiles/sourceNarrativeAppendOnlySkippedFiles`
+- append-only skip previews are surfaced (`sourceNarrativeAppendOnlySkippedPreview`) for manual reconciliation
 - source-stage compilation uses the **persisted** narrative text when append-only guard blocks overwrite
 - source-stage assembly is append-only for `session_*_narrative.md` and never prunes existing narrative files
 - when `max_narrative_docs` is set, the run is marked as partial and does not update `build_manifest.json`

@@ -207,6 +207,9 @@ export async function executeMemoryConsolidate(
         output.buildStats
             ? `sourceNormalization=records:${output.buildStats.sourceNormalizationRecordCount} touchedRecords:${output.buildStats.sourceNormalizationTouchedRecords} rawChars:${output.buildStats.sourceNormalizationRawChars} cleanChars:${output.buildStats.sourceNormalizationCleanChars} removedChars:${output.buildStats.sourceNormalizationRemovedChars} removedRatioPct:${output.buildStats.sourceNormalizationRemovedRatioPct.toFixed(2)}`
             : null,
+        output.buildStats?.sourceNarrativeAppendOnlySkippedPreview?.length
+            ? `sourceAppendOnlySkipPreview=${output.buildStats.sourceNarrativeAppendOnlySkippedPreview.slice(0, 8).join(",")}`
+            : null,
         output.scopePreview?.hotDocIds?.length
             ? `hotDocPreview=${output.scopePreview.hotDocIds.slice(0, 8).join(",")}`
             : null,

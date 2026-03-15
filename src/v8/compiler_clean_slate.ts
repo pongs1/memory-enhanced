@@ -85,6 +85,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         writtenFiles: number;
         skippedFiles: number;
         appendOnlySkippedFiles: number;
+        appendOnlySkippedFileNames: string[];
     } | null = null;
     let sourceNormalizationStats: {
         recordCount: number;
@@ -137,6 +138,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             writtenFiles: persistResult.writtenFiles,
             skippedFiles: persistResult.skippedFiles,
             appendOnlySkippedFiles: persistResult.appendOnlySkippedFiles,
+            appendOnlySkippedFileNames: persistResult.appendOnlySkippedFileNames,
         };
         logStage("source normalization persisted");
     }
@@ -204,6 +206,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         sourceNarrativeSkippedFiles: sourcePersistStats?.skippedFiles ?? 0,
         sourceNarrativeAppendOnlySkippedFiles:
             sourcePersistStats?.appendOnlySkippedFiles ?? 0,
+        sourceNarrativeAppendOnlySkippedPreview:
+            sourcePersistStats?.appendOnlySkippedFileNames.slice(0, 12) ?? [],
         sourceNormalizationRecordCount: sourceNormalizationStats?.recordCount ?? 0,
         sourceNormalizationRawChars: sourceNormalizationStats?.rawChars ?? 0,
         sourceNormalizationCleanChars: sourceNormalizationStats?.cleanChars ?? 0,
@@ -547,6 +551,7 @@ interface BuildReport {
         sourceNarrativeWrittenFiles: number;
         sourceNarrativeSkippedFiles: number;
         sourceNarrativeAppendOnlySkippedFiles: number;
+        sourceNarrativeAppendOnlySkippedPreview: string[];
         sourceNormalizationRecordCount: number;
         sourceNormalizationRawChars: number;
         sourceNormalizationCleanChars: number;
@@ -665,6 +670,11 @@ function renderBuildReportMarkdown(report: BuildReport): string {
     lines.push(
         `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedUnchanged=${report.buildStats.sourceNarrativeSkippedFiles}, skippedByAppendOnly=${report.buildStats.sourceNarrativeAppendOnlySkippedFiles}`
     );
+    if (report.buildStats.sourceNarrativeAppendOnlySkippedPreview.length > 0) {
+        lines.push(
+            `- appendOnlySkipPreview: ${report.buildStats.sourceNarrativeAppendOnlySkippedPreview.join(", ")}`
+        );
+    }
     lines.push(
         `- sourceNormalization: records=${report.buildStats.sourceNormalizationRecordCount}, touchedRecords=${report.buildStats.sourceNormalizationTouchedRecords}, rawChars=${report.buildStats.sourceNormalizationRawChars}, cleanChars=${report.buildStats.sourceNormalizationCleanChars}, removedChars=${report.buildStats.sourceNormalizationRemovedChars}, removedRatioPct=${report.buildStats.sourceNormalizationRemovedRatioPct.toFixed(2)}`
     );
@@ -895,9 +905,16 @@ function persistAssembledObservationMarkdown(
     writtenFiles: number;
     skippedFiles: number;
     appendOnlySkippedFiles: number;
+    appendOnlySkippedFileNames: string[];
 } {
     if (!records.length) {
-        return { docs: [], writtenFiles: 0, skippedFiles: 0, appendOnlySkippedFiles: 0 };
+        return {
+            docs: [],
+            writtenFiles: 0,
+            skippedFiles: 0,
+            appendOnlySkippedFiles: 0,
+            appendOnlySkippedFileNames: [],
+        };
     }
     const outDir = path.join(rawDir, "observations", "assembled");
     fs.mkdirSync(outDir, { recursive: true });
@@ -1234,12 +1251,14 @@ function persistSessionNarratives(
     writtenFiles: number;
     skippedFiles: number;
     appendOnlySkippedFiles: number;
+    appendOnlySkippedFileNames: string[];
 } {
     const sessions = new Map<string, NarrativeEntry[]>();
     const docs: V8NarrativeRecord[] = [];
     let writtenFiles = 0;
     let skippedFiles = 0;
     let appendOnlySkippedFiles = 0;
+    const appendOnlySkippedFileNames: string[] = [];
     for (const record of records) {
         if (record.sourceType !== "session_trace") continue;
         const rawText = record.cleanText || record.rawText || "";
@@ -1281,7 +1300,10 @@ function persistSessionNarratives(
         const outcome = writeFileIfChangedAppendOnly(fullPath, markdown);
         if (outcome.result === "written") writtenFiles += 1;
         if (outcome.result === "skipped_unchanged") skippedFiles += 1;
-        if (outcome.result === "skipped_append_only") appendOnlySkippedFiles += 1;
+        if (outcome.result === "skipped_append_only") {
+            appendOnlySkippedFiles += 1;
+            appendOnlySkippedFileNames.push(fileName);
+        }
 
         // Keep in-memory compile input consistent with persisted narrative text.
         docs.push(
@@ -1298,6 +1320,7 @@ function persistSessionNarratives(
         writtenFiles,
         skippedFiles,
         appendOnlySkippedFiles,
+        appendOnlySkippedFileNames,
     };
 }
 
