@@ -9,7 +9,10 @@ import {
     type RawSessionMessage,
 } from "./architecture/narrative-normalizer.js";
 import { loadResolvedToolCleaningProfiles } from "./architecture/tool-cleaning-profiles.js";
-import { checkToolCatalogAgainstRules } from "./architecture/tool-catalog-check.js";
+import {
+    checkToolCatalogAgainstRules,
+    type ToolCatalogCheckResult,
+} from "./architecture/tool-catalog-check.js";
 import { loadNarrativeRecords } from "./architecture/narrative-source.js";
 import { unitizeNarrativeRecordsParallel } from "./architecture/unitizer.js";
 import { extractEvidenceSpans } from "./architecture/evidence.js";
@@ -68,14 +71,29 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         console.error(`[v8-build] ${label} +${elapsedMs}ms`);
     };
 
-    const toolCleaningProfiles = loadResolvedToolCleaningProfiles(workspace);
-    const toolCatalogCheck = checkToolCatalogAgainstRules({
-        workspace,
-        profiles: toolCleaningProfiles,
-    });
-    logStage("tool catalog loaded");
-
     const startAt = options?.startAt ?? (options?.planOnly ? "narrative" : "source");
+    const toolCleaningProfiles =
+        startAt === "source"
+            ? loadResolvedToolCleaningProfiles(workspace)
+            : new Map();
+    const toolCatalogCheck: ToolCatalogCheckResult =
+        startAt === "source"
+            ? checkToolCatalogAgainstRules({
+                  workspace,
+                  profiles: toolCleaningProfiles,
+              })
+            : {
+                  status: "skipped",
+                  toolCount: 0,
+                  ruleCount: 0,
+                  missingRules: [],
+                  extraRules: [],
+              };
+    logStage(
+        startAt === "source"
+            ? "tool catalog loaded"
+            : "tool catalog check skipped(start_at=narrative)"
+    );
     let sourcePersistStats: { writtenFiles: number; skippedFiles: number } | null = null;
     let sourceNormalizationStats: {
         recordCount: number;

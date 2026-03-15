@@ -30,7 +30,7 @@ interface ToolCatalogSnapshot {
 }
 
 export interface ToolCatalogCheckResult {
-    status: "ok" | "missing_catalog" | "mismatch";
+    status: "ok" | "missing_catalog" | "mismatch" | "skipped";
     toolCount: number;
     ruleCount: number;
     missingRules: ToolCatalogTool[];

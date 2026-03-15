@@ -1102,6 +1102,7 @@ Practical compile switches:
 - optional debug stages: `start_at=narrative`, `stop_after=evidence|memory_ir`
 - optional scope-only diagnostics: `plan_only=true` (no artifacts rebuilt)
   - default start stage becomes `narrative` unless `start_at` is explicitly set
+- when `start_at=narrative`, tool-catalog rule mismatch check is skipped by design
 - build diagnostics snapshot is persisted to `.memory/runtime/build_report.json` and `.memory/runtime/build_report.md`
 - tool summary includes compact `hotDocPreview/coldDocPreview/removedDocPreview` for quick inspection
 - build summary/report includes `sourceNarrativeWrittenFiles/sourceNarrativeSkippedFiles` to show write-avoidance efficiency
