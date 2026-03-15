@@ -82,6 +82,12 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const startAt = options?.startAt ?? (options?.planOnly ? "narrative" : "source");
     let sourceNarrativeDocs: V8NarrativeRecord[] | null = null;
     let sourcePersistStats: { writtenFiles: number; skippedFiles: number } | null = null;
+    let sourceNormalizationStats: {
+        recordCount: number;
+        rawChars: number;
+        cleanChars: number;
+        removedChars: number;
+    } | null = null;
     if (startAt === "source") {
         const traceGroups = loadSessionTraces(workspace, {
             sessionTraceDir: options?.sessionTraceDir,
@@ -118,6 +124,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             }
         }
         const traceRecords = [...traceNarrativeRecords, ...linkedNarrativeRecords];
+        sourceNormalizationStats = summarizeSourceNormalization(traceRecords);
         const persistResult = persistAssembledObservationMarkdown(store.rawDir, traceRecords);
         sourceNarrativeDocs = persistResult.docs;
         sourcePersistStats = {
@@ -188,6 +195,10 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         noopReuse: hotBuildIsNoop,
         sourceNarrativeWrittenFiles: sourcePersistStats?.writtenFiles ?? 0,
         sourceNarrativeSkippedFiles: sourcePersistStats?.skippedFiles ?? 0,
+        sourceNormalizationRecordCount: sourceNormalizationStats?.recordCount ?? 0,
+        sourceNormalizationRawChars: sourceNormalizationStats?.rawChars ?? 0,
+        sourceNormalizationCleanChars: sourceNormalizationStats?.cleanChars ?? 0,
+        sourceNormalizationRemovedChars: sourceNormalizationStats?.removedChars ?? 0,
     };
     const persistRunReport = (payload: {
         llmStatus: string;
@@ -524,6 +535,10 @@ interface BuildReport {
         noopReuse: boolean;
         sourceNarrativeWrittenFiles: number;
         sourceNarrativeSkippedFiles: number;
+        sourceNormalizationRecordCount: number;
+        sourceNormalizationRawChars: number;
+        sourceNormalizationCleanChars: number;
+        sourceNormalizationRemovedChars: number;
     };
     llmStatus: string;
     scopePreview: {
@@ -635,6 +650,9 @@ function renderBuildReportMarkdown(report: BuildReport): string {
     );
     lines.push(
         `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedUnchanged=${report.buildStats.sourceNarrativeSkippedFiles}`
+    );
+    lines.push(
+        `- sourceNormalization: records=${report.buildStats.sourceNormalizationRecordCount}, rawChars=${report.buildStats.sourceNormalizationRawChars}, cleanChars=${report.buildStats.sourceNormalizationCleanChars}, removedChars=${report.buildStats.sourceNormalizationRemovedChars}`
     );
     lines.push(
         `- partialBuild: ${String(report.buildStats.partialBuild)}${report.buildStats.maxNarrativeDocs ? ` (maxNarrativeDocs=${report.buildStats.maxNarrativeDocs})` : ""}`
@@ -823,6 +841,28 @@ function loadAllArtifacts(
         ignitionNodes: readJsonl<V8IgnitionNodeProjection>(store.ignitionNodes),
         ignitionEdges: readJsonl<V8IgnitionEdgeProjection>(store.ignitionEdges),
         recallBundles: readJsonl<V8RecallBundleProjection>(store.recallBundles),
+    };
+}
+
+function summarizeSourceNormalization(records: V8NarrativeRecord[]): {
+    recordCount: number;
+    rawChars: number;
+    cleanChars: number;
+    removedChars: number;
+} {
+    let rawChars = 0;
+    let cleanChars = 0;
+    for (const record of records) {
+        const raw = record.rawText || "";
+        const clean = record.cleanText ?? raw;
+        rawChars += raw.length;
+        cleanChars += clean.length;
+    }
+    return {
+        recordCount: records.length,
+        rawChars,
+        cleanChars,
+        removedChars: Math.max(0, rawChars - cleanChars),
     };
 }
 
