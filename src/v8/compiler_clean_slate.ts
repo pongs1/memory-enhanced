@@ -74,6 +74,8 @@ export interface CleanSlateBuildOptions {
 
 // DEV marker: remove this temporary fast-build default before release hardening.
 const DEV_FAST_BUILD_MARKER = "TODO_REMOVE_BEFORE_RELEASE__V8_FAST_BUILD_DEFAULTS";
+// FROZEN marker: relation-review LLM loop is deferred until core mainline is complete.
+const FROZEN_RELATION_REVIEW_LLM = "FROZEN_DEFERRED__RELATION_REVIEW_LLM";
 const DEFAULT_HOT_WINDOW_HOURS = 48;
 
 export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
@@ -635,19 +637,22 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         nodes,
         evidenceSpans,
     });
-    const relationReviewLlmStatus =
-        relationPlanning.relationReviewJobs.length > 0
+    const relationReviewLlmCommand = (options?.relationReviewLlmCommand || "").trim();
+    const relationReviewLlmEnabled = relationReviewLlmCommand.length > 0;
+    const relationReviewLlmStatus = relationReviewLlmEnabled
+        ? relationPlanning.relationReviewJobs.length > 0
             ? maybeRunRelationReviewLlm({
-                  command: options?.relationReviewLlmCommand,
+                  command: relationReviewLlmCommand,
                   jobsPath: store.relationReviewJobsMd,
                   outputMdPath: store.reviewedRelationsMd,
                   outputJsonlPath: store.reviewedRelations,
                   timeoutMs: options?.relationReviewLlmTimeoutMs,
               })
-            : "skipped(no_review_jobs)";
+            : "skipped(no_review_jobs)"
+        : `skipped(${FROZEN_RELATION_REVIEW_LLM})`;
     buildStats.relationReviewLlmStatus = relationReviewLlmStatus;
     const reviewedFromOutputs =
-        relationPlanning.relationReviewJobs.length > 0
+        relationReviewLlmEnabled && relationPlanning.relationReviewJobs.length > 0
             ? loadReviewedRelations({
                   mdPath: store.reviewedRelationsMd,
                   jsonlPath: store.reviewedRelations,

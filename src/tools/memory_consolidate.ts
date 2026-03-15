@@ -62,7 +62,7 @@ export const MemoryConsolidateParams = Type.Object({
     relation_review_llm_command: Type.Optional(
         Type.String({
             description:
-                "Optional command to run relation review over compact review jobs. " +
+                "Optional (deferred/frozen) command to run relation review over compact review jobs. " +
                 "Use {review_jobs}, {output_md}, {output_jsonl} placeholders " +
                 "or rely on V8_REL_REVIEW_JOBS/V8_REL_REVIEW_OUTPUT_MD/V8_REL_REVIEW_OUTPUT_JSONL env vars.",
         })
@@ -238,9 +238,7 @@ export async function executeMemoryConsolidate(
             : null,
         maxNarrativeDocs ? `devFastBuildMarker=${DEV_FAST_BUILD_MARKER}` : null,
         llmCommand ? `llmStatus=${output.llmStatus}` : null,
-        relationReviewLlmCommand
-            ? `relationReviewLlmStatus=${output.buildStats.relationReviewLlmStatus}`
-            : null,
+        `relationReviewLlmStatus=${output.buildStats.relationReviewLlmStatus}`,
         "units=narrative",
         output.toolCatalogCheck
             ? `toolCatalogCheck=${output.toolCatalogCheck.status} tools=${output.toolCatalogCheck.toolCount} rules=${output.toolCatalogCheck.ruleCount}`
