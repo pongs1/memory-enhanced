@@ -251,23 +251,6 @@ export class V8GraphScanner {
             (bundle) => bundle.bundleId.startsWith("group_") && bundle.nodeIds.length >= 2
         );
         const groupBundleById = new Map(groupBundles.map((bundle) => [bundle.bundleId, bundle]));
-        const groupBundleIrTokens = new Map<string, Set<string>>();
-        for (const bundle of groupBundles) {
-            const merged = new Set<string>();
-            for (const nodeId of bundle.nodeIds) {
-                const tokens = nodeTokens.get(nodeId);
-                if (tokens) {
-                    for (const token of tokens) merged.add(token);
-                    continue;
-                }
-                const node = nodesById.get(nodeId);
-                if (!node) continue;
-                for (const token of tokenize(`${node.memoryType} ${node.canonicalLabel}`)) {
-                    merged.add(token);
-                }
-            }
-            groupBundleIrTokens.set(bundle.bundleId, merged);
-        }
 
         const nodesById = new Map<string, V8GraphNode>();
         const nodeTokens = new Map<string, Set<string>>();
@@ -348,6 +331,23 @@ export class V8GraphScanner {
             } else {
                 nodeKinds.set(node.id, "episodic");
             }
+        }
+        const groupBundleIrTokens = new Map<string, Set<string>>();
+        for (const bundle of groupBundles) {
+            const merged = new Set<string>();
+            for (const nodeId of bundle.nodeIds) {
+                const tokens = nodeTokens.get(nodeId);
+                if (tokens) {
+                    for (const token of tokens) merged.add(token);
+                    continue;
+                }
+                const node = nodesById.get(nodeId);
+                if (!node) continue;
+                for (const token of tokenize(`${node.memoryType} ${node.canonicalLabel}`)) {
+                    merged.add(token);
+                }
+            }
+            groupBundleIrTokens.set(bundle.bundleId, merged);
         }
 
         const runtimeEdges: V8GraphEdge[] =

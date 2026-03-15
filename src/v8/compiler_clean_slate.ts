@@ -220,6 +220,10 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         sourceNormalizationRemovedChars: sourceNormalizationStats?.removedChars ?? 0,
         sourceNormalizationTouchedRecords: sourceNormalizationStats?.touchedRecords ?? 0,
         sourceNormalizationRemovedRatioPct: sourceNormalizationStats?.removedRatioPct ?? 0,
+        irRuleItems: 0,
+        irLlmItems: 0,
+        irFallbackItems: 0,
+        irFallbackApplied: false,
     };
     const persistRunReport = (payload: {
         llmStatus: string;
@@ -409,10 +413,26 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         ruleIrMode === "micro_light"
             ? extractMemoryItems(hotUnits, hotEvidenceSpans)
             : [];
-    const hotMemoryItems = [...ruleItems, ...llmItems];
+    const llmNeedsFallback =
+        ruleIrMode === "off" &&
+        hotUnits.length > 0 &&
+        llmJobs.length > 0 &&
+        llmItems.length === 0 &&
+        llmStatus !== "completed";
+    const fallbackRuleItems = llmNeedsFallback
+        ? extractMemoryItems(hotUnits, hotEvidenceSpans)
+        : [];
+    buildStats.irRuleItems = ruleItems.length;
+    buildStats.irLlmItems = llmItems.length;
+    buildStats.irFallbackItems = fallbackRuleItems.length;
+    buildStats.irFallbackApplied = llmNeedsFallback && fallbackRuleItems.length > 0;
+    const resolvedLlmStatus = buildStats.irFallbackApplied
+        ? `${llmStatus}+fallback(rule_micro_light)`
+        : llmStatus;
+    const hotMemoryItems = [...ruleItems, ...llmItems, ...fallbackRuleItems];
     const memoryItems = [...cached.memoryItems, ...hotMemoryItems];
     logStage(
-        `memory items extracted hot(rule=${ruleItems.length}, llm=${llmItems.length}) total=${memoryItems.length}`
+        `memory items extracted hot(rule=${ruleItems.length}, llm=${llmItems.length}, fallback=${fallbackRuleItems.length}) total=${memoryItems.length}`
     );
     if (options?.stopAfter === "memory_ir") {
         writeJsonl(store.units, units);
@@ -430,7 +450,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             persistBuildManifest(store.buildManifest, loadedNarrativeDocs);
         }
         persistRunReport({
-            llmStatus,
+            llmStatus: resolvedLlmStatus,
             units: units.length,
             evidenceSpans: evidenceSpans.length,
             memoryItems: memoryItems.length,
@@ -447,7 +467,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             memoryItems,
             llmJobs,
             llmItems,
-            llmStatus,
+            llmStatus: resolvedLlmStatus,
             toolCatalogCheck,
             nodes: [],
             edges: [],
@@ -478,7 +498,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         persistBuildManifest(store.buildManifest, loadedNarrativeDocs);
     }
     persistRunReport({
-        llmStatus,
+        llmStatus: resolvedLlmStatus,
         units: units.length,
         evidenceSpans: evidenceSpans.length,
         memoryItems: memoryItems.length,
@@ -496,7 +516,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         memoryItems,
         llmJobs,
         llmItems,
-        llmStatus,
+        llmStatus: resolvedLlmStatus,
         toolCatalogCheck,
         nodes,
         edges,
@@ -562,6 +582,10 @@ interface BuildReport {
         sourceNormalizationRemovedChars: number;
         sourceNormalizationTouchedRecords: number;
         sourceNormalizationRemovedRatioPct: number;
+        irRuleItems: number;
+        irLlmItems: number;
+        irFallbackItems: number;
+        irFallbackApplied: boolean;
     };
     llmStatus: string;
     scopePreview: {
@@ -676,6 +700,9 @@ function renderBuildReportMarkdown(report: BuildReport): string {
     );
     lines.push(
         `- sourceNormalization: records=${report.buildStats.sourceNormalizationRecordCount}, touchedRecords=${report.buildStats.sourceNormalizationTouchedRecords}, rawChars=${report.buildStats.sourceNormalizationRawChars}, cleanChars=${report.buildStats.sourceNormalizationCleanChars}, removedChars=${report.buildStats.sourceNormalizationRemovedChars}, removedRatioPct=${report.buildStats.sourceNormalizationRemovedRatioPct.toFixed(2)}`
+    );
+    lines.push(
+        `- irExtraction: rule=${report.buildStats.irRuleItems}, llm=${report.buildStats.irLlmItems}, fallback=${report.buildStats.irFallbackItems}, fallbackApplied=${String(report.buildStats.irFallbackApplied)}`
     );
     lines.push(
         `- partialBuild: ${String(report.buildStats.partialBuild)}${report.buildStats.maxNarrativeDocs ? ` (maxNarrativeDocs=${report.buildStats.maxNarrativeDocs})` : ""}`

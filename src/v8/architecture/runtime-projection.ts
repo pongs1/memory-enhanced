@@ -375,8 +375,8 @@ function buildBundlesFromCandidates(
     for (const edge of edges) {
         if (!candidateById.has(edge.src) || !candidateById.has(edge.dst)) continue;
         const kind = edgeKinds.get(edge.type) || "semantic";
-        // Ignore purely structural links for topic bundling.
-        if (kind === "structural") continue;
+        // Ignore strictly anchoring/containment links for topic bundling.
+        if (kind === "evidence_anchor" || kind === "containment") continue;
         adjacency.get(edge.src)?.add(edge.dst);
         adjacency.get(edge.dst)?.add(edge.src);
     }
