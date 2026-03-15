@@ -1086,7 +1086,7 @@ Practical compile switches:
 - optional dev acceleration: `max_narrative_docs` (temporary knob, marked for removal before release)
 - optional runtime tuning: `worker_count`, `emit_unit_preview`
 - optional debug stages: `start_at=narrative`, `stop_after=evidence|memory_ir`
-- build diagnostics snapshot is persisted to `.memory/runtime/build_report.json`
+- build diagnostics snapshot is persisted to `.memory/runtime/build_report.json` and `.memory/runtime/build_report.md`
 - when `max_narrative_docs` is set, the run is marked as partial and does not update `build_manifest.json`
 
 ### 9.8 Multi-path retrieval contract

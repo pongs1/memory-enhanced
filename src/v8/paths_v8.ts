@@ -25,6 +25,7 @@ export interface V8StorePaths {
     feedbackOverrides: string;
     buildManifest: string;
     buildReport: string;
+    buildReportMd: string;
 }
 
 export function v8StorePaths(workspace: string): V8StorePaths {
@@ -57,6 +58,7 @@ export function v8StorePaths(workspace: string): V8StorePaths {
         feedbackOverrides: path.join(runtimeDir, "feedback_overrides.jsonl"),
         buildManifest: path.join(runtimeDir, "build_manifest.json"),
         buildReport: path.join(runtimeDir, "build_report.json"),
+        buildReportMd: path.join(runtimeDir, "build_report.md"),
     };
 }
 

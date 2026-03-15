@@ -181,8 +181,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         ignitionNodes: number;
         ignitionEdges: number;
         recallBundles: number;
-    }) =>
-        persistBuildReport(store.buildReport, {
+    }) => {
+        const report: BuildReport = {
             generatedAt: new Date().toISOString(),
             workspace,
             stageTimingsMs,
@@ -199,7 +199,13 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
                 ignitionEdges: payload.ignitionEdges,
                 recallBundles: payload.recallBundles,
             },
+        };
+        persistBuildReport({
+            jsonPath: store.buildReport,
+            markdownPath: store.buildReportMd,
+            report,
         });
+    };
 
     if (hotBuildIsNoop && options?.stopAfter !== "evidence" && options?.stopAfter !== "memory_ir") {
         const reused = loadAllArtifacts(store);
@@ -485,12 +491,63 @@ function loadBuildManifest(filePath: string): BuildManifest | null {
     }
 }
 
-function persistBuildReport(filePath: string, report: BuildReport): void {
+function persistBuildReport(input: {
+    jsonPath: string;
+    markdownPath?: string;
+    report: BuildReport;
+}): void {
     try {
-        fs.writeFileSync(filePath, JSON.stringify(report, null, 2), "utf-8");
+        fs.writeFileSync(input.jsonPath, JSON.stringify(input.report, null, 2), "utf-8");
     } catch {
         // ignore report persistence errors
     }
+    if (!input.markdownPath) return;
+    try {
+        fs.writeFileSync(input.markdownPath, renderBuildReportMarkdown(input.report), "utf-8");
+    } catch {
+        // ignore markdown report persistence errors
+    }
+}
+
+function renderBuildReportMarkdown(report: BuildReport): string {
+    const lines: string[] = [];
+    lines.push("# V8 Build Report");
+    lines.push("");
+    lines.push(`- generatedAt: ${report.generatedAt}`);
+    lines.push(`- workspace: ${report.workspace}`);
+    lines.push(`- llmStatus: ${report.llmStatus}`);
+    lines.push(
+        `- mode: ${report.buildStats.rebuildMode} (hotWindowHours=${report.buildStats.hotWindowHours})`
+    );
+    lines.push(
+        `- scope: hot=${report.buildStats.hotDocs}, cold=${report.buildStats.coldDocs}, removed=${report.buildStats.removedDocs}`
+    );
+    lines.push(
+        `- cache: reused=${String(report.buildStats.reusedCache)}, noop=${String(report.buildStats.noopReuse)}`
+    );
+    lines.push(
+        `- partialBuild: ${String(report.buildStats.partialBuild)}${report.buildStats.maxNarrativeDocs ? ` (maxNarrativeDocs=${report.buildStats.maxNarrativeDocs})` : ""}`
+    );
+    lines.push("");
+    lines.push("## Counts");
+    lines.push("");
+    lines.push(`- narrativeDocs: ${report.counts.narrativeDocs}`);
+    lines.push(`- units: ${report.counts.units}`);
+    lines.push(`- evidenceSpans: ${report.counts.evidenceSpans}`);
+    lines.push(`- memoryItems: ${report.counts.memoryItems}`);
+    lines.push(`- nodes: ${report.counts.nodes}`);
+    lines.push(`- edges: ${report.counts.edges}`);
+    lines.push(`- ignitionNodes: ${report.counts.ignitionNodes}`);
+    lines.push(`- ignitionEdges: ${report.counts.ignitionEdges}`);
+    lines.push(`- recallBundles: ${report.counts.recallBundles}`);
+    lines.push("");
+    lines.push("## Stage Timings (ms since start)");
+    lines.push("");
+    for (const [stage, elapsed] of Object.entries(report.stageTimingsMs).sort((a, b) => a[1] - b[1])) {
+        lines.push(`- ${stage}: ${elapsed}`);
+    }
+    lines.push("");
+    return lines.join("\n");
 }
 
 function persistBuildManifest(filePath: string, narratives: V8NarrativeRecord[]): void {
