@@ -59,9 +59,11 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const store = ensureV8StoreDirs(workspace);
     const stageTraceEnabled = process.env.V8_BUILD_TRACE === "1";
     const stageStart = Date.now();
+    const stageTimingsMs: Record<string, number> = {};
     const logStage = (label: string) => {
-        if (!stageTraceEnabled) return;
         const elapsedMs = Date.now() - stageStart;
+        stageTimingsMs[label] = elapsedMs;
+        if (!stageTraceEnabled) return;
         console.error(`[v8-build] ${label} +${elapsedMs}ms`);
     };
 
@@ -165,10 +167,50 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         reusedCache: canReuseCache,
         noopReuse: hotBuildIsNoop,
     };
+    const persistRunReport = (payload: {
+        llmStatus: string;
+        units: number;
+        evidenceSpans: number;
+        memoryItems: number;
+        nodes: number;
+        edges: number;
+        ignitionNodes: number;
+        ignitionEdges: number;
+        recallBundles: number;
+    }) =>
+        persistBuildReport(store.buildReport, {
+            generatedAt: new Date().toISOString(),
+            workspace,
+            stageTimingsMs,
+            buildStats,
+            llmStatus: payload.llmStatus,
+            counts: {
+                narrativeDocs: allNarrativeDocs.length,
+                units: payload.units,
+                evidenceSpans: payload.evidenceSpans,
+                memoryItems: payload.memoryItems,
+                nodes: payload.nodes,
+                edges: payload.edges,
+                ignitionNodes: payload.ignitionNodes,
+                ignitionEdges: payload.ignitionEdges,
+                recallBundles: payload.recallBundles,
+            },
+        });
 
     if (hotBuildIsNoop && options?.stopAfter !== "evidence" && options?.stopAfter !== "memory_ir") {
         const reused = loadAllArtifacts(store);
         logStage("no-op incremental build: reused all persisted artifacts");
+        persistRunReport({
+            llmStatus: "skipped(no_changes)",
+            units: reused.units.length,
+            evidenceSpans: reused.evidenceSpans.length,
+            memoryItems: reused.memoryItems.length,
+            nodes: reused.nodes.length,
+            edges: reused.edges.length,
+            ignitionNodes: reused.ignitionNodes.length,
+            ignitionEdges: reused.ignitionEdges.length,
+            recallBundles: reused.recallBundles.length,
+        });
         return {
             narrativeDocs: allNarrativeDocs,
             units: reused.units,
@@ -208,6 +250,17 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         writeJsonl(store.evidenceSpans, evidenceSpans);
         logStage("evidence persisted");
         persistBuildManifest(store.buildManifest, allNarrativeDocs);
+        persistRunReport({
+            llmStatus: "skipped",
+            units: units.length,
+            evidenceSpans: evidenceSpans.length,
+            memoryItems: 0,
+            nodes: 0,
+            edges: 0,
+            ignitionNodes: 0,
+            ignitionEdges: 0,
+            recallBundles: 0,
+        });
         return {
             narrativeDocs: allNarrativeDocs,
             units,
@@ -262,6 +315,17 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         writeJsonl(store.memoryItems, memoryItems);
         logStage("memory_ir persisted");
         persistBuildManifest(store.buildManifest, allNarrativeDocs);
+        persistRunReport({
+            llmStatus,
+            units: units.length,
+            evidenceSpans: evidenceSpans.length,
+            memoryItems: memoryItems.length,
+            nodes: 0,
+            edges: 0,
+            ignitionNodes: 0,
+            ignitionEdges: 0,
+            recallBundles: 0,
+        });
         return {
             narrativeDocs: allNarrativeDocs,
             units,
@@ -296,6 +360,17 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     writeJsonl(store.ignitionEdges, projections.ignitionEdges);
     writeJsonl(store.recallBundles, projections.recallBundles);
     persistBuildManifest(store.buildManifest, allNarrativeDocs);
+    persistRunReport({
+        llmStatus,
+        units: units.length,
+        evidenceSpans: evidenceSpans.length,
+        memoryItems: memoryItems.length,
+        nodes: nodes.length,
+        edges: edges.length,
+        ignitionNodes: projections.ignitionNodes.length,
+        ignitionEdges: projections.ignitionEdges.length,
+        recallBundles: projections.recallBundles.length,
+    });
 
     return {
         narrativeDocs: allNarrativeDocs,
@@ -347,6 +422,33 @@ interface ArtifactSnapshot {
     recallBundles: V8RecallBundleProjection[];
 }
 
+interface BuildReport {
+    generatedAt: string;
+    workspace: string;
+    stageTimingsMs: Record<string, number>;
+    buildStats: {
+        rebuildMode: "full" | "incremental" | "hybrid";
+        hotWindowHours: number;
+        hotDocs: number;
+        coldDocs: number;
+        removedDocs: number;
+        reusedCache: boolean;
+        noopReuse: boolean;
+    };
+    llmStatus: string;
+    counts: {
+        narrativeDocs: number;
+        units: number;
+        evidenceSpans: number;
+        memoryItems: number;
+        nodes: number;
+        edges: number;
+        ignitionNodes: number;
+        ignitionEdges: number;
+        recallBundles: number;
+    };
+}
+
 function emptyCachedArtifacts(): Pick<
     ArtifactSnapshot,
     "units" | "evidenceSpans" | "memoryItems"
@@ -368,6 +470,14 @@ function loadBuildManifest(filePath: string): BuildManifest | null {
         return parsed;
     } catch {
         return null;
+    }
+}
+
+function persistBuildReport(filePath: string, report: BuildReport): void {
+    try {
+        fs.writeFileSync(filePath, JSON.stringify(report, null, 2), "utf-8");
+    } catch {
+        // ignore report persistence errors
     }
 }
 

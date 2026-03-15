@@ -1,6 +1,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 import { resolveWorkspace } from "../utils.js";
 import { buildCleanSlateGraph } from "../v8/compiler_clean_slate.js";
+import { v8StorePaths } from "../v8/paths_v8.js";
 
 /** Parameter schema for memory_consolidate tool. */
 export const MemoryConsolidateParams = Type.Object({
@@ -81,6 +82,7 @@ export async function executeMemoryConsolidate(
     ctx?: { workspaceDir?: string; config?: Record<string, unknown> }
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
     const workspace = resolveWorkspace(ctx?.workspaceDir);
+    const store = v8StorePaths(workspace);
     const pluginConfig = ctx?.config || {};
     const sessionTraceDir =
         (params.session_trace_dir as string | undefined) ||
@@ -171,6 +173,7 @@ export async function executeMemoryConsolidate(
         output.toolCatalogCheck?.promptPath
             ? `toolCatalogPrompt=${output.toolCatalogCheck.promptPath}`
             : null,
+        `buildReport=${store.buildReport}`,
         `narrativeDocs=${output.narrativeDocs.length}`,
         `units=${output.units.length}`,
         `evidenceSpans=${output.evidenceSpans.length}`,
