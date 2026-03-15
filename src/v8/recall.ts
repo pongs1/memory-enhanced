@@ -101,21 +101,35 @@ function sanitizeText(text: string, maxChars = 520): string {
         .slice(0, maxChars);
 }
 
-const narrativeCache = new Map<string, string>();
+interface NarrativeCacheEntry {
+    mtimeMs: number;
+    text: string;
+}
+
+const narrativeCache = new Map<string, NarrativeCacheEntry>();
+
+function readFileMtimeMs(filePath: string): number {
+    try {
+        return fs.statSync(filePath).mtimeMs;
+    } catch {
+        return 0;
+    }
+}
 
 function readNarrativeSlice(span: V8EvidenceSpan): string {
     const ref = span.narrativeRef;
     if (!ref) return span.text;
+    const currentMtime = readFileMtimeMs(ref);
     const cached = narrativeCache.get(ref);
-    if (cached !== undefined) {
-        return cached.slice(span.charStart, span.charEnd) || span.text;
+    if (cached && cached.mtimeMs === currentMtime) {
+        return cached.text.slice(span.charStart, span.charEnd) || span.text;
     }
     try {
         const raw = fs.readFileSync(ref, "utf-8");
-        narrativeCache.set(ref, raw);
+        narrativeCache.set(ref, { text: raw, mtimeMs: currentMtime });
         return raw.slice(span.charStart, span.charEnd) || span.text;
     } catch {
-        narrativeCache.set(ref, "");
+        narrativeCache.set(ref, { text: "", mtimeMs: 0 });
         return span.text;
     }
 }
