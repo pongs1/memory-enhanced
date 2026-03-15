@@ -109,6 +109,12 @@ const MAX_ITEMS_PER_UNIT: Record<V8GraphLayer, number> = {
     macro: 3,
 };
 
+const MAX_ITEMS_PER_NARRATIVE_LAYER: Record<V8GraphLayer, number> = {
+    micro: 220,
+    meso: 60,
+    macro: 12,
+};
+
 function edgeCatalogPath(): string {
     const here = path.dirname(fileURLToPath(import.meta.url));
     return path.resolve(here, "../../../schema/v8-edge-catalog.json");
@@ -752,17 +758,23 @@ function pruneLlmItems(items: V8MemoryItem[]): V8MemoryItem[] {
     const kept: V8MemoryItem[] = [];
     const seenGlobal = new Set<string>();
     const perUnitCount = new Map<string, number>();
+    const perNarrativeLayerCount = new Map<string, number>();
 
     for (const item of sorted) {
         if (!item.unitIds || item.unitIds.length === 0) continue;
         if (!item.evidenceSpanIds || item.evidenceSpanIds.length === 0) continue;
-        if (item.layer !== "micro" && item.confidence < 0.55) continue;
+        if (item.layer === "macro" && item.confidence < 0.6) continue;
+        if (item.layer === "meso" && item.confidence < 0.55) continue;
 
         const unitId = item.unitIds[0]!;
         const unitKey = `${item.layer}:${unitId}`;
         const currentCount = perUnitCount.get(unitKey) || 0;
         const cap = MAX_ITEMS_PER_UNIT[item.layer] || 6;
         if (currentCount >= cap) continue;
+        const narrativeKey = `${item.layer}:${item.narrativeRecordId}`;
+        const narrativeCount = perNarrativeLayerCount.get(narrativeKey) || 0;
+        const narrativeCap = MAX_ITEMS_PER_NARRATIVE_LAYER[item.layer] || 80;
+        if (narrativeCount >= narrativeCap) continue;
 
         const dedupeKey = [
             item.layer,
@@ -778,6 +790,7 @@ function pruneLlmItems(items: V8MemoryItem[]): V8MemoryItem[] {
 
         kept.push(item);
         perUnitCount.set(unitKey, currentCount + 1);
+        perNarrativeLayerCount.set(narrativeKey, narrativeCount + 1);
     }
 
     return kept;
