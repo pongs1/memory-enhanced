@@ -258,6 +258,14 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     if (options?.stopAfter === "evidence") {
         writeJsonl(store.units, units);
         writeJsonl(store.evidenceSpans, evidenceSpans);
+        clearJsonlFiles([
+            store.memoryItems,
+            store.graphNodes,
+            store.graphEdges,
+            store.ignitionNodes,
+            store.ignitionEdges,
+            store.recallBundles,
+        ]);
         logStage("evidence persisted");
         if (!isPartialBuild) {
             persistBuildManifest(store.buildManifest, loadedNarrativeDocs);
@@ -325,6 +333,13 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         writeJsonl(store.units, units);
         writeJsonl(store.evidenceSpans, evidenceSpans);
         writeJsonl(store.memoryItems, memoryItems);
+        clearJsonlFiles([
+            store.graphNodes,
+            store.graphEdges,
+            store.ignitionNodes,
+            store.ignitionEdges,
+            store.recallBundles,
+        ]);
         logStage("memory_ir persisted");
         if (!isPartialBuild) {
             persistBuildManifest(store.buildManifest, loadedNarrativeDocs);
@@ -506,6 +521,16 @@ function persistBuildReport(input: {
         fs.writeFileSync(input.markdownPath, renderBuildReportMarkdown(input.report), "utf-8");
     } catch {
         // ignore markdown report persistence errors
+    }
+}
+
+function clearJsonlFiles(filePaths: string[]): void {
+    for (const filePath of filePaths) {
+        try {
+            fs.writeFileSync(filePath, "", "utf-8");
+        } catch {
+            // ignore cleanup failures
+        }
     }
 }
 
