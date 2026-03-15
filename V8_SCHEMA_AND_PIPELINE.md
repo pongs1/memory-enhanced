@@ -1168,7 +1168,7 @@ To improve over plain Mem0/LanceDB-style top-k retrieval, V8 should add a light 
 
 - build `search_hints` from activated memory:
   - anchor entities / objects / methods / goals / decisions / constraints / state objects
-  - candidate edge families allowed for that anchor class
+  - scored edge-family hints for that anchor class
   - hot `micro` bundle ids
   - linked `group` summary ids
   - relation-direction hints (`horizontal`, `vertical`, `oblique`)
@@ -1185,6 +1185,19 @@ This contract should ensure:
 - vertical and oblique relationships can be searched deliberately instead of relying on random vector neighbors
 - the search space is reduced by anchor class and edge-family scope before LLM review, not by shrinking the archive to only recent days
 
+Scope-card rule:
+
+- `entity_scope_card` is a soft-routing artifact, not a hard whitelist
+- scored shard hints, coanchor hints, state hints, topic hints, and edge-family hints are used to rank plans
+- only layer-bounded edge vocabularies and final evidence checks behave as hard constraints
+- every relation-mining cycle should preserve a small broadened/open lane so prior scores do not lock out novel edges
+
+Search lanes:
+
+- `focused`: top-ranked shard and edge-family hints
+- `broadened`: second-ring shard/edge hints that keep the anchor but relax the strongest priors
+- `exploratory`: small novelty budget for cross-topic or low-prior candidates
+
 ### 9.8.3 Cross-day relation mining contract
 
 Archive search is not enough to discover durable cross-day structure.
@@ -1197,11 +1210,12 @@ The contract is:
    - `final` compile closes a session narrative with `macro/meso/micro`
 2. choose anchors, not raw semantic similarity, as the primary frontier
    - anchors should come from stable extracted objects: entity, concept, method, goal, decision, constraint, state object
-   - for each anchor, select only the candidate edge families allowed for that anchor class
-   - do not brute-force all edge types for every anchor
+   - for each anchor, score edge-family hints and shard hints instead of brute-force scanning all edge types
+   - `entity_posting` solves where the anchor appears
+   - `entity_scope_card` solves which shards, coanchors, state cues, and edge families deserve early review
 3. search evidence globally
    - `stream` should search only local/active spans for cheap maintenance
-   - `final` / cross-day mining should search the full archive span corpus
+   - `final` / cross-day mining should search the full archive span corpus, but only after shard preselection
    - search returns direct candidate spans, not final relation judgments
 4. review only compact candidate packs with LLM
    - each pack should contain the anchor, the allowed edge family, retrieved support spans, and small local windows
@@ -1219,13 +1233,16 @@ The contract is:
 Baseline operating choice:
 
 - `stream`: partial candidate edge families + local/active span search
-- `final` cross-day miner: partial candidate edge families + full archive span search
+- `final` cross-day miner: partial candidate edge families + shard-prefiltered full archive span search
 - do not use `all edge types + recent days only` as the baseline strategy
 
 Recommended persisted artifacts:
 
+- `entity_posting`: compressed anchor-to-shard occurrence index
+- `entity_scope_card`: scored soft-routing hints for shard, coanchor, state, topic, and edge-family ranking
 - `group_summary`: cached summary/projection for a dense IR neighborhood or bundle cluster
 - `relation_search_plan`: anchor + allowed edge-family + search hints
+- `narrative_shard_selection`: focused/broadened/exploratory shard shortlist for one search lane
 - `relation_candidate`: deterministic cross-day frontier hit before LLM review
 - `relation_candidate_hit`: span-level retrieval hit for a search plan
 - `relation_review_job`: compact summary + evidence pack to present to LLM
@@ -1243,6 +1260,19 @@ Responsibility split:
 - retrieval is responsible for finding direct evidence spans
 - LLM review is responsible for deciding whether a constrained edge claim is supported
 - graph composition is responsible for multi-hop lines, lifecycle assembly, and historical trajectory
+
+Learning split:
+
+- retrieval learning updates search priors such as shard hints, coanchor hints, edge-family hints, and search-lane effectiveness
+- fact learning updates promotion/rejection priors for inferred relations and review strategies
+- recall learning updates ignition / bundle / graph serving weights
+- these subsystems communicate through events and features, not by directly sharing one global weight scalar
+
+This means:
+
+- retrieval success does not directly rewrite graph recall weights
+- only reviewed/accepted relations flow into canonical graph edges
+- search priors remain soft and revisable as new evidence appears
 
 V8 should not expect BM25/vector search itself to solve multi-hop logic.
 Multi-hop structure should emerge after direct edges are accepted and stitched through graph/state lines.

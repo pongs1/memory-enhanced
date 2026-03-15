@@ -771,11 +771,13 @@ V8 therefore needs a separate cross-day discovery lane:
    - `final` closes a session with stable `macro/meso/micro` artifacts
 2. anchor candidate generation on stable extracted objects
    - repeated entities, methods, goals, decisions, constraints, and state objects are the primary frontier
-   - candidate edge families should be selected by anchor class
+   - candidate edge families should be ranked by anchor class, not hard-whitelisted
+   - `entity_posting` is the occurrence index that says where the anchor appears
+   - `entity_scope_card` is the soft-routing summary that says which shards, coanchors, state cues, topics, and edge families deserve early review
    - V8 should not brute-force all edge types for every anchor
 3. search evidence spans, not full narratives
    - `stream` only searches local/active span indexes for cheap maintenance
-   - `final` / cross-day mining searches the full archive span corpus
+   - `final` / cross-day mining searches the full archive span corpus after shard preselection
    - retrieval returns direct evidence candidates, not final judgments
 4. review compact candidate packs with LLM
    - each job should contain the anchor, the candidate edge family, retrieved spans, and a small local window
@@ -795,8 +797,20 @@ The core rule is:
 
 - do not repeatedly feed full old narratives back into LLM
 - use anchor class + edge-family scope to decide what deserves review
-- search the full archive as span/unit indexes when doing cross-day mining
+- use shard preselection before searching the full archive as span/unit indexes
 - reuse cached summaries and selected spans to form small review jobs
+
+Soft-routing rule:
+
+- priors are for ranking, not locking
+- `entity_scope_card` should produce scored hints, not hard filters
+- V8 should always preserve a broadened/open lane so new relations can still surface outside the strongest priors
+
+Search lanes:
+
+- `focused`: highest-confidence shard and edge-family hints
+- `broadened`: second-ring hints that keep the same anchor but loosen the strongest priors
+- `exploratory`: small novelty budget so cross-topic or low-prior relations can still be sampled
 
 Responsibility split:
 
@@ -804,12 +818,19 @@ Responsibility split:
 - constrained LLM review decides whether an allowed edge is supported
 - graph/state lines assemble multi-hop history after direct edges are accepted
 
+Learning split:
+
+- retrieval learning tunes search priors such as shard, coanchor, edge-family, and lane rankings
+- fact learning tunes inferred-relation review and promotion thresholds
+- recall learning tunes ignition and serving weights
+- these layers should exchange events/features, not collapse into one shared weight table
+
 V8 should not expect the search layer itself to solve multi-hop logic in one pass.
 
 Baseline operating choice:
 
 - `stream`: partial candidate edge families + local/active span search
-- `final` cross-day miner: partial candidate edge families + full archive span search
+- `final` cross-day miner: partial candidate edge families + shard-prefiltered full archive span search
 - avoid `all edge types + recent-days-only search` as the default policy
 
 ### 10.9 Evidence-safe exploration lane

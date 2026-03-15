@@ -19,8 +19,11 @@ export interface V8StorePaths {
     irLlmItems: string;
     irLlmItemsMd: string;
     irLlmUnitCache: string;
+    entityPostings: string;
+    entityScopeCards: string;
     groupSummaries: string;
     relationSearchPlans: string;
+    narrativeShardSelections: string;
     relationCandidateHits: string;
     relationReviewJobs: string;
     reviewedRelations: string;
@@ -31,6 +34,8 @@ export interface V8StorePaths {
     feedbackOverrides: string;
     buildManifest: string;
     narrativeCompileState: string;
+    learningEvents: string;
+    searchFeedbackSignals: string;
     buildReport: string;
     buildReportMd: string;
 }
@@ -59,8 +64,11 @@ export function v8StorePaths(workspace: string): V8StorePaths {
         irLlmItems: path.join(rootDir, "ir_llm_items.jsonl"),
         irLlmItemsMd: path.join(rootDir, "ir_llm_items.md"),
         irLlmUnitCache: path.join(rootDir, "ir_llm_unit_cache.jsonl"),
+        entityPostings: path.join(rootDir, "entity_postings.jsonl"),
+        entityScopeCards: path.join(rootDir, "entity_scope_cards.jsonl"),
         groupSummaries: path.join(rootDir, "group_summaries.jsonl"),
         relationSearchPlans: path.join(runtimeDir, "relation_search_plans.jsonl"),
+        narrativeShardSelections: path.join(runtimeDir, "narrative_shard_selections.jsonl"),
         relationCandidateHits: path.join(runtimeDir, "relation_candidate_hits.jsonl"),
         relationReviewJobs: path.join(runtimeDir, "relation_review_jobs.jsonl"),
         reviewedRelations: path.join(rootDir, "reviewed_relations.jsonl"),
@@ -71,6 +79,8 @@ export function v8StorePaths(workspace: string): V8StorePaths {
         feedbackOverrides: path.join(runtimeDir, "feedback_overrides.jsonl"),
         buildManifest: path.join(runtimeDir, "build_manifest.json"),
         narrativeCompileState: path.join(runtimeDir, "narrative_compile_state.json"),
+        learningEvents: path.join(runtimeDir, "learning_events.jsonl"),
+        searchFeedbackSignals: path.join(runtimeDir, "search_feedback_signals.jsonl"),
         buildReport: path.join(runtimeDir, "build_report.json"),
         buildReportMd: path.join(runtimeDir, "build_report.md"),
     };

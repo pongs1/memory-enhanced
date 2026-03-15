@@ -530,6 +530,50 @@ export type V8RelationSearchScope = "local_active" | "global_archive";
 
 export type V8RelationSearchMode = "bm25" | "vector" | "hybrid";
 
+export type V8HintSource =
+    | "type_prior"
+    | "history"
+    | "coanchor"
+    | "active_mode"
+    | "novelty"
+    | "feedback";
+
+export type V8SearchLane = "focused" | "broadened" | "exploratory";
+
+export interface V8ScoredHint {
+    id: string;
+    score: number;
+    source: V8HintSource;
+    label?: string;
+}
+
+export interface V8EntityPosting {
+    id: string;
+    entityNodeId: string;
+    canonicalLabel: string;
+    alias: string;
+    shardId: string;
+    bundleIds: string[];
+    dayKey: string | null;
+    firstSeenAt: string | null;
+    lastSeenAt: string | null;
+    hitCount: number;
+}
+
+export interface V8EntityScopeCard {
+    id: string;
+    entityNodeId: string;
+    canonicalLabel: string;
+    aliases: string[];
+    entityKind: string;
+    shardHints: V8ScoredHint[];
+    coanchorHints: V8ScoredHint[];
+    stateHints: V8ScoredHint[];
+    topicHints: V8ScoredHint[];
+    edgeFamilyHints: V8ScoredHint[];
+    updatedAt: string;
+}
+
 export interface V8GroupSummary {
     id: string;
     title: string;
@@ -545,13 +589,24 @@ export interface V8RelationSearchPlan {
     anchorNodeIds: string[];
     anchorLabels: string[];
     anchorKinds: string[];
-    candidateEdgeTypes: string[];
+    edgeFamilyHints: V8ScoredHint[];
     recallMode: V8RecallMode;
     searchScope: V8RelationSearchScope;
     searchMode: V8RelationSearchMode;
+    lane: V8SearchLane;
     queryTerms: string[];
     hintBundleIds: string[];
     hintSpanIds: string[];
+    scopeCardIds: string[];
+    createdAt: string;
+}
+
+export interface V8NarrativeShardSelection {
+    id: string;
+    planId: string;
+    lane: V8SearchLane;
+    selectedShardHints: V8ScoredHint[];
+    droppedShardIds: string[];
     createdAt: string;
 }
 
@@ -591,6 +646,38 @@ export interface V8ReviewedRelation {
     supportEvidenceSpanIds: string[];
     confidence: number;
     rationale: string;
+    createdAt: string;
+}
+
+export type V8LearningSubsystem = "retrieval" | "fact" | "recall";
+
+export type V8LearningEventType =
+    | "retrieval_hit_confirmed"
+    | "retrieval_hit_rejected"
+    | "review_relation_accepted"
+    | "review_relation_rejected"
+    | "recall_bundle_helpful"
+    | "recall_bundle_wrong"
+    | "user_corrected_memory"
+    | "llm_reported_missing_history";
+
+export interface V8LearningEvent {
+    id: string;
+    subsystem: V8LearningSubsystem;
+    eventType: V8LearningEventType;
+    subjectIds: string[];
+    polarity: "positive" | "negative" | "neutral";
+    features: Record<string, string | number | boolean | null>;
+    createdAt: string;
+}
+
+export interface V8SearchFeedbackSignal {
+    id: string;
+    anchorNodeIds: string[];
+    lane: V8SearchLane;
+    hintIds: string[];
+    outcome: "confirmed" | "rejected" | "ignored";
+    scoreDelta: number;
     createdAt: string;
 }
 
