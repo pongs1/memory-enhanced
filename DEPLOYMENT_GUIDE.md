@@ -208,6 +208,14 @@ Create the following files manually to initialize the mental state.
 
 OpenClaw's default instructions often conflict with modern plugins. **Replace** specific sections in your workspace files with the following text blocks.
 
+Canonical tracked copies of the workspace bootstrap templates live in:
+
+- `memory-enhanced/templates/default_md/AGENTS.md`
+- `memory-enhanced/templates/default_md/HEARTBEAT.md`
+- `memory-enhanced/templates/default_md/USER.md`
+
+Sync those into `$WORKSPACE/default_md/` or the active workspace root templates as needed.
+
 ### 1. Update `$WORKSPACE/AGENTS.md`
 Find the `## Memory` section and replace it entirely:
 

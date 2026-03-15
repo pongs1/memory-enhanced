@@ -1095,8 +1095,8 @@ This is what keeps long-lived graph ids, evidence refs, and recall bundles stabl
 Practical compile switches:
 
 - `rebuild_mode=full`: recompile everything
-- `rebuild_mode=incremental`: only changed narrative docs
-- `rebuild_mode=hybrid`: changed docs + recent hot window (`hot_window_hours`, current default `48h`)
+- `rebuild_mode=incremental`: recompile only narratives whose content changed or whose requested compile phase is still missing
+- `rebuild_mode=hybrid`: compatibility alias of `incremental`, kept only to avoid breaking older prompts
 - optional dev acceleration: `max_narrative_docs` (temporary knob, marked for removal before release)
 - optional runtime tuning: `worker_count`, `emit_unit_preview`
 - optional debug stages: `start_at=narrative`, `stop_after=evidence|memory_ir`
@@ -1112,10 +1112,10 @@ Practical compile switches:
 - append-only narrative persistence stats:
   - `sourceNarrativeWrittenFiles/sourceNarrativeSkippedFiles`
 - source-stage persistence is simple append-only:
-  - create `session_*_narrative.md` only when missing
-  - existing narrative files are never rewritten
-- in `start_at=source`, traces whose target `session_*_narrative.md` already exists are skipped
-- source-stage assembly is append-only for `session_*_narrative.md` and never prunes existing narrative files
+  - append new cleaned trace content onto `session_*_narrative.md`
+  - never prune prior narrative content
+- in `start_at=source`, source assembly only updates append-only narratives, then the rest of the pipeline works from those narratives
+- source-stage assembly never treats raw `source_records` as a parallel evidence store
 - when `max_narrative_docs` is set, the run is marked as partial and does not update `build_manifest.json`
 - when `stop_after` is used, downstream artifact files are cleared to avoid stale graph/runtime reads
 - when `start_at=source`, assembled narratives are passed through in-memory to unitization (no immediate write-read roundtrip)
@@ -1176,6 +1176,49 @@ This contract should ensure:
 - if current recalled memory is incomplete, the model can still climb from injected span/unit anchors to the exact evidence it needs
 - same-attribute/same-semantic but cross-topic evidence is retrievable with much lower noise
 - vertical and oblique relationships can be searched deliberately instead of relying on random vector neighbors
+
+### 9.8.3 Cross-day relation mining contract
+
+Archive search is not enough to discover durable cross-day structure.
+V8 needs a separate relation-mining lane that works over cached graph artifacts rather than repeatedly re-reading whole narratives.
+
+The contract is:
+
+1. local compile first
+   - `stream` compile keeps current-session `micro/meso` fresh
+   - `final` compile closes a session narrative with `macro/meso/micro`
+2. build cross-day candidate frontiers from cached artifacts, not raw text
+   - use shared entities, methods, goals, constraints, decisions, state objects, and bundle-summary signatures
+   - generate candidate pairs/sets across different day/session partitions
+   - candidate generation must be deterministic and budgeted; no all-vs-all LLM pass
+3. review only compact candidate packs with LLM
+   - each pack should contain a small number of related bundle summaries plus selected support spans from each side
+   - the model should answer a narrow review question such as:
+     - continuation / same line
+     - state change / supersession
+     - refinement / decomposition
+     - analogy / oblique relation
+4. persist reviewed results separately
+   - canonical inferred edges require `supportEvidenceSpanIds`
+   - weak results stay as `hypothesis` artifacts
+   - `profile` recall should ignore hypotheses by default
+   - `trajectory` and `oblique` may use them with explicit grounding
+
+Recommended persisted artifacts:
+
+- `group_summary`: cached summary/projection for a dense IR neighborhood or bundle cluster
+- `relation_candidate`: deterministic cross-day frontier hit before LLM review
+- `relation_review_job`: compact summary + evidence pack to present to LLM
+- `reviewed_relation`: accepted inferred edge or rejected/shelved hypothesis result
+
+This is the key reuse principle:
+
+- raw narrative is assembled once
+- units and IR are cached once
+- bundle summaries become the reusable compression layer
+- cross-day relation jobs consume cached summaries plus a small evidence pack, not full historical narratives
+
+Without this lane, V8 can answer local questions but cannot reliably form long-horizon lines, relationship evolution, or delayed causal links.
 
 ### 9.9 Edge participation profiles for runtime
 

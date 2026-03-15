@@ -759,6 +759,40 @@ This is how V8 answers both:
 - "What is the relationship now?" -> likely latest active state
 - "How did this relationship evolve?" -> preserved historical lineage
 
+### 10.8.1 Cross-day relation discovery lane
+
+Single-pass offline LLM extraction is not enough for cross-day structure.
+Even if the model sees a large context, it will miss some relations and will not scale to the whole archive.
+
+V8 therefore needs a separate cross-day discovery lane:
+
+1. compile local memory first
+   - `stream` keeps recent `micro/meso` structure fresh
+   - `final` closes a session with stable `macro/meso/micro` artifacts
+2. generate cross-day candidates from cached graph artifacts
+   - use repeated entities, methods, goals, decisions, constraints, state objects, and bundle-summary signatures
+   - compare across different day/session partitions
+   - candidate generation must stay deterministic and budgeted, not all-vs-all LLM
+3. review compact candidate packs with LLM
+   - each job should contain a few cached group summaries plus a small evidence pack from each side
+   - the review question should be narrow: same line, state change, refinement, contradiction, analogy, delayed payoff
+4. persist outcomes in two lanes
+   - strong evidence-backed results become canonical inferred graph edges
+   - weaker results remain `hypothesis` artifacts until later validated
+
+This is the only scalable way to preserve deep relations such as:
+
+- friendship -> hostility over many chapters
+- a design decision from earlier days resurfacing much later
+- a tool failure pattern recurring across separated sessions
+- a long-running project line that temporarily went dormant
+
+The core rule is:
+
+- do not repeatedly feed full old narratives back into LLM
+- reuse cached summaries and selected spans to form small review jobs
+- let graph/global indexes decide what deserves review
+
 ### 10.9 Evidence-safe exploration lane
 
 V8 can support long-distance association discovery without violating evidence-backed memory.
@@ -950,16 +984,16 @@ It is no longer the place where basic memory structure first appears.
 ### 14.1 Build Profiles (Development)
 
 - `full`: compile all narrative docs
-- `incremental`: compile only changed docs
-- `hybrid` (default): changed docs + recent hot window (current default `48h`)
+- `incremental`: compile only narratives whose content changed or whose requested compile phase is missing
+- `hybrid`: compatibility alias of `incremental`, preserved only so older prompts do not break
 - optional dev knob: `max_narrative_docs` for tuning speed during prompt/parameter iteration
 - optional diagnostics-only run: `plan_only=true` to inspect hot/cold scope without recompiling artifacts
 - each run writes diagnostics to `.memory/runtime/build_report.json` and `.memory/runtime/build_report.md` for tuning
 - diagnostics include source cleaning volume and impact (`rawChars/cleanChars/removedChars`, `touchedRecords/removedRatioPct`) for cleaning-regression checks
 - diagnostics include append-only persistence behavior (`written/skippedExisting`)
 - partial runs (`max_narrative_docs`) do not update the incremental manifest baseline
-- source-stage narrative assembly is append-only for `session_*_narrative.md` (no stale file pruning)
-- source-stage ingestion skips session traces that already have a persisted narrative file
+- source-stage narrative assembly appends new cleaned trace content into `session_*_narrative.md`
+- source-stage never treats raw `source_records` as a second evidence store
 
 Temporary marker is kept in code to avoid forgetting cleanup:
 
