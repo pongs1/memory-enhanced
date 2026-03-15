@@ -33,6 +33,17 @@ export const MemoryConsolidateParams = Type.Object({
             description: "Whether to write unit preview markdown files.",
         })
     ),
+    start_at: Type.Optional(
+        Type.Union([Type.Literal("source"), Type.Literal("narrative")], {
+            description:
+                "Pipeline start stage. narrative skips session re-normalization and starts from existing *_narrative.md files.",
+        })
+    ),
+    stop_after: Type.Optional(
+        Type.Union([Type.Literal("evidence"), Type.Literal("memory_ir")], {
+            description: "Optional early stop stage for faster debugging.",
+        })
+    ),
     ir_llm_command: Type.Optional(
         Type.String({
             description:
@@ -94,6 +105,12 @@ export async function executeMemoryConsolidate(
             : typeof (pluginConfig as any)?.v8EmitUnitPreview === "boolean"
               ? (pluginConfig as any).v8EmitUnitPreview
               : undefined;
+    const startAt =
+        (params.start_at as "source" | "narrative" | undefined) ||
+        ((pluginConfig as any)?.v8StartAt as "source" | "narrative" | undefined);
+    const stopAfter =
+        (params.stop_after as "evidence" | "memory_ir" | undefined) ||
+        ((pluginConfig as any)?.v8StopAfter as "evidence" | "memory_ir" | undefined);
     const llmCommand =
         (params.ir_llm_command as string | undefined) ||
         (pluginConfig as any)?.v8IrLlmCommand ||
@@ -124,6 +141,8 @@ export async function executeMemoryConsolidate(
         maxNarrativeDocs,
         workerCount,
         emitUnitPreview,
+        startAt,
+        stopAfter,
         llmCommand,
         llmCommandTimeoutMs: llmTimeoutMs,
         rebuildMode,
@@ -139,6 +158,8 @@ export async function executeMemoryConsolidate(
         typeof emitUnitPreview === "boolean"
             ? `emitUnitPreview=${String(emitUnitPreview)}`
             : null,
+        startAt ? `startAt=${startAt}` : null,
+        stopAfter ? `stopAfter=${stopAfter}` : null,
         `rebuildMode=${rebuildMode}`,
         hotWindowHours ? `hotWindowHours=${hotWindowHours}` : null,
         maxNarrativeDocs ? `devFastBuildMarker=${DEV_FAST_BUILD_MARKER}` : null,

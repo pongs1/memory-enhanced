@@ -1085,6 +1085,7 @@ Practical compile switches:
 - `rebuild_mode=hybrid`: changed docs + recent hot window (`hot_window_hours`, current default `48h`)
 - optional dev acceleration: `max_narrative_docs` (temporary knob, marked for removal before release)
 - optional runtime tuning: `worker_count`, `emit_unit_preview`
+- optional debug stages: `start_at=narrative`, `stop_after=evidence|memory_ir`
 
 ### 9.8 Multi-path retrieval contract
 
