@@ -1087,6 +1087,7 @@ Practical compile switches:
 - optional runtime tuning: `worker_count`, `emit_unit_preview`
 - optional debug stages: `start_at=narrative`, `stop_after=evidence|memory_ir`
 - optional scope-only diagnostics: `plan_only=true` (no artifacts rebuilt)
+  - default start stage becomes `narrative` unless `start_at` is explicitly set
 - build diagnostics snapshot is persisted to `.memory/runtime/build_report.json` and `.memory/runtime/build_report.md`
 - tool summary includes compact `hotDocPreview/coldDocPreview/removedDocPreview` for quick inspection
 - when `max_narrative_docs` is set, the run is marked as partial and does not update `build_manifest.json`

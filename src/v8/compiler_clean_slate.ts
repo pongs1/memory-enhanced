@@ -75,7 +75,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     });
     logStage("tool catalog loaded");
 
-    const startAt = options?.startAt ?? "source";
+    const startAt = options?.startAt ?? (options?.planOnly ? "narrative" : "source");
     if (startAt === "source") {
         const traceGroups = loadSessionTraces(workspace, {
             sessionTraceDir: options?.sessionTraceDir,
