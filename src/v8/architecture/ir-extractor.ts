@@ -4,7 +4,6 @@ import type {
     V8MemoryOriginType,
     V8EvidenceSpan,
     V8Unit,
-    V8NarrativeRecord,
 } from "../types_v8.js";
 
 export interface IrExtractionConfig {
@@ -22,68 +21,63 @@ const CONSTRAINT_PATTERNS = [
 ];
 const GOAL_PATTERNS = [/目标|要做|需要做|希望实现|计划/gi];
 const DECISION_PATTERNS = [/决定|改为|改成|采用|弃用|切换|选择/gi];
-const CONVERSATION_ACT_PATTERNS = [/更正|纠正|不是|不对|澄清|确认/gi];
+const CONVERSATION_ACT_PATTERNS = [/更正|纠正|不是|不对|澄清|确认|记住|记下|记着/gi];
 
 export function extractMemoryItems(
-    sources: V8NarrativeRecord[],
     units: V8Unit[],
     evidenceSpans: V8EvidenceSpan[],
     config?: IrExtractionConfig
 ): V8MemoryItem[] {
     const confidence = config?.defaultConfidence ?? DEFAULT_CONFIDENCE;
     const unitsById = new Map(units.map((u) => [u.id, u]));
-    const sourceById = new Map(sources.map((s) => [s.id, s]));
 
     const items: V8MemoryItem[] = [];
+    const seen = new Set<string>();
 
     for (const span of evidenceSpans) {
         const unit = unitsById.get(span.unitId);
         if (!unit) continue;
-        const source = sourceById.get(unit.narrativeRecordId);
         const text = span.text || unit.text;
-        const speaker = source?.speaker ?? "unknown";
-        const sourceCategory = source?.metadata?.sourceCategory;
+        const speaker = unit.speaker ?? "unknown";
+        const sourceCategory = unit.sourceCategory;
         const allowControl = sourceCategory !== "operation";
 
         const controlType = allowControl ? detectControlType(text) : null;
         if (controlType) {
+            const object = normalizeObject(text);
+            const predicate = controlPredicate(controlType);
+            const key = `${unit.narrativeRecordId}|${speaker}|${predicate}|${object}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
             items.push(
                 buildItem({
                     itemType: controlType,
                     originType: "asserted",
                     layer: "micro",
                     subject: speaker,
-                    predicate: controlPredicate(controlType),
-                    object: normalizeObject(text),
+                    predicate,
+                    object,
                     label: truncateLabel(text),
                     narrativeRecordId: unit.narrativeRecordId,
-                    sourceRef: source?.sourceRef ?? "",
+                    sourceRef: unit.narrativeRef,
                     evidenceSpanIds: [span.id],
                     unitIds: [unit.id],
                     confidence,
                 })
             );
         }
-
-        items.push(
-            buildItem({
-                itemType: "discourse_unit",
-                originType: "asserted",
-                layer: "micro",
-                subject: speaker,
-                predicate: "summarizes",
-                object: truncateLabel(text),
-                label: truncateLabel(text),
-                narrativeRecordId: unit.narrativeRecordId,
-                sourceRef: source?.sourceRef ?? "",
-                evidenceSpanIds: [span.id],
-                unitIds: [unit.id],
-                confidence: confidence - 0.08,
-            })
-        );
     }
 
     return items;
+}
+
+function isLikelyControlCandidate(text: string): boolean {
+    const cleaned = text.trim().replace(/\s+/g, " ");
+    if (!cleaned) return false;
+    // Keep command-like short directives (e.g., "改成1h"), but skip trivial chatter.
+    if (/^(hi|hello|hey|ok|好的|收到|嗯|啊|哈喽)$/i.test(cleaned)) return false;
+    if (cleaned.length >= 4) return true;
+    return /改|换|记|禁|要|别/.test(cleaned);
 }
 
 function buildItem(input: {
@@ -124,6 +118,7 @@ function buildItem(input: {
 }
 
 function detectControlType(text: string): V8MemoryItemType | null {
+    if (!isLikelyControlCandidate(text)) return null;
     if (matchesAny(text, DECISION_PATTERNS)) return "decision";
     if (matchesAny(text, GOAL_PATTERNS)) return "goal";
     if (matchesAny(text, CONSTRAINT_PATTERNS)) return "constraint";
