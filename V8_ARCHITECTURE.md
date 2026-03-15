@@ -954,6 +954,7 @@ It is no longer the place where basic memory structure first appears.
 - `hybrid` (default): changed docs + recent hot window (current default `48h`)
 - optional dev knob: `max_narrative_docs` for tuning speed during prompt/parameter iteration
 - each run writes diagnostics to `.memory/runtime/build_report.json` for tuning
+- partial runs (`max_narrative_docs`) do not update the incremental manifest baseline
 
 Temporary marker is kept in code to avoid forgetting cleanup:
 

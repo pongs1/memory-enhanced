@@ -115,11 +115,13 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         logStage("source normalization persisted");
     }
 
-    let allNarrativeDocs = loadNarrativeRecords(store.rawDir);
+    const loadedNarrativeDocs = loadNarrativeRecords(store.rawDir);
+    let allNarrativeDocs = loadedNarrativeDocs;
     logStage(`narratives loaded (${allNarrativeDocs.length})`);
     if (startAt === "narrative" && allNarrativeDocs.length === 0) {
         throw new Error("No narrative docs found in .memory/raw/observations/assembled.");
     }
+    const isPartialBuild = typeof options?.maxNarrativeDocs === "number";
     if (options?.maxNarrativeDocs && allNarrativeDocs.length > options.maxNarrativeDocs) {
         allNarrativeDocs = allNarrativeDocs
             .slice()
@@ -161,6 +163,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const buildStats = {
         rebuildMode,
         hotWindowHours,
+        partialBuild: isPartialBuild,
+        maxNarrativeDocs: options?.maxNarrativeDocs ?? null,
         hotDocs: scope.hotDocIds.size,
         coldDocs: scope.coldDocIds.size,
         removedDocs: scope.removedDocIds.size,
@@ -249,7 +253,9 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         writeJsonl(store.units, units);
         writeJsonl(store.evidenceSpans, evidenceSpans);
         logStage("evidence persisted");
-        persistBuildManifest(store.buildManifest, allNarrativeDocs);
+        if (!isPartialBuild) {
+            persistBuildManifest(store.buildManifest, loadedNarrativeDocs);
+        }
         persistRunReport({
             llmStatus: "skipped",
             units: units.length,
@@ -314,7 +320,9 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         writeJsonl(store.evidenceSpans, evidenceSpans);
         writeJsonl(store.memoryItems, memoryItems);
         logStage("memory_ir persisted");
-        persistBuildManifest(store.buildManifest, allNarrativeDocs);
+        if (!isPartialBuild) {
+            persistBuildManifest(store.buildManifest, loadedNarrativeDocs);
+        }
         persistRunReport({
             llmStatus,
             units: units.length,
@@ -359,7 +367,9 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     writeJsonl(store.ignitionNodes, projections.ignitionNodes);
     writeJsonl(store.ignitionEdges, projections.ignitionEdges);
     writeJsonl(store.recallBundles, projections.recallBundles);
-    persistBuildManifest(store.buildManifest, allNarrativeDocs);
+    if (!isPartialBuild) {
+        persistBuildManifest(store.buildManifest, loadedNarrativeDocs);
+    }
     persistRunReport({
         llmStatus,
         units: units.length,
@@ -429,6 +439,8 @@ interface BuildReport {
     buildStats: {
         rebuildMode: "full" | "incremental" | "hybrid";
         hotWindowHours: number;
+        partialBuild: boolean;
+        maxNarrativeDocs: number | null;
         hotDocs: number;
         coldDocs: number;
         removedDocs: number;

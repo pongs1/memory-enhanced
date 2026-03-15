@@ -186,7 +186,7 @@ export async function executeMemoryConsolidate(
         `ignitionEdges=${output.ignitionEdges.length}`,
         `recallBundles=${output.recallBundles.length}`,
         output.buildStats
-            ? `buildScope=hot:${output.buildStats.hotDocs} cold:${output.buildStats.coldDocs} removed:${output.buildStats.removedDocs} reusedCache:${output.buildStats.reusedCache} noopReuse:${output.buildStats.noopReuse}`
+            ? `buildScope=hot:${output.buildStats.hotDocs} cold:${output.buildStats.coldDocs} removed:${output.buildStats.removedDocs} reusedCache:${output.buildStats.reusedCache} noopReuse:${output.buildStats.noopReuse} partial:${output.buildStats.partialBuild}`
             : null,
     ]
         .filter(Boolean)
