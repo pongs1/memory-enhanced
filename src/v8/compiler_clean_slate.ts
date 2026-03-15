@@ -81,7 +81,11 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
     const startAt = options?.startAt ?? (options?.planOnly ? "narrative" : "source");
     let sourceNarrativeDocs: V8NarrativeRecord[] | null = null;
-    let sourcePersistStats: { writtenFiles: number; skippedFiles: number } | null = null;
+    let sourcePersistStats: {
+        writtenFiles: number;
+        skippedFiles: number;
+        appendOnlySkippedFiles: number;
+    } | null = null;
     let sourceNormalizationStats: {
         recordCount: number;
         rawChars: number;
@@ -132,6 +136,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         sourcePersistStats = {
             writtenFiles: persistResult.writtenFiles,
             skippedFiles: persistResult.skippedFiles,
+            appendOnlySkippedFiles: persistResult.appendOnlySkippedFiles,
         };
         logStage("source normalization persisted");
     }
@@ -197,6 +202,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         noopReuse: hotBuildIsNoop,
         sourceNarrativeWrittenFiles: sourcePersistStats?.writtenFiles ?? 0,
         sourceNarrativeSkippedFiles: sourcePersistStats?.skippedFiles ?? 0,
+        sourceNarrativeAppendOnlySkippedFiles:
+            sourcePersistStats?.appendOnlySkippedFiles ?? 0,
         sourceNormalizationRecordCount: sourceNormalizationStats?.recordCount ?? 0,
         sourceNormalizationRawChars: sourceNormalizationStats?.rawChars ?? 0,
         sourceNormalizationCleanChars: sourceNormalizationStats?.cleanChars ?? 0,
@@ -539,6 +546,7 @@ interface BuildReport {
         noopReuse: boolean;
         sourceNarrativeWrittenFiles: number;
         sourceNarrativeSkippedFiles: number;
+        sourceNarrativeAppendOnlySkippedFiles: number;
         sourceNormalizationRecordCount: number;
         sourceNormalizationRawChars: number;
         sourceNormalizationCleanChars: number;
@@ -655,7 +663,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
         `- cache: reused=${String(report.buildStats.reusedCache)}, noop=${String(report.buildStats.noopReuse)}`
     );
     lines.push(
-        `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedUnchanged=${report.buildStats.sourceNarrativeSkippedFiles}`
+        `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedUnchanged=${report.buildStats.sourceNarrativeSkippedFiles}, skippedByAppendOnly=${report.buildStats.sourceNarrativeAppendOnlySkippedFiles}`
     );
     lines.push(
         `- sourceNormalization: records=${report.buildStats.sourceNormalizationRecordCount}, touchedRecords=${report.buildStats.sourceNormalizationTouchedRecords}, rawChars=${report.buildStats.sourceNormalizationRawChars}, cleanChars=${report.buildStats.sourceNormalizationCleanChars}, removedChars=${report.buildStats.sourceNormalizationRemovedChars}, removedRatioPct=${report.buildStats.sourceNormalizationRemovedRatioPct.toFixed(2)}`
@@ -886,9 +894,10 @@ function persistAssembledObservationMarkdown(
     docs: V8NarrativeRecord[];
     writtenFiles: number;
     skippedFiles: number;
+    appendOnlySkippedFiles: number;
 } {
     if (!records.length) {
-        return { docs: [], writtenFiles: 0, skippedFiles: 0 };
+        return { docs: [], writtenFiles: 0, skippedFiles: 0, appendOnlySkippedFiles: 0 };
     }
     const outDir = path.join(rawDir, "observations", "assembled");
     fs.mkdirSync(outDir, { recursive: true });
@@ -1224,11 +1233,13 @@ function persistSessionNarratives(
     docs: V8NarrativeRecord[];
     writtenFiles: number;
     skippedFiles: number;
+    appendOnlySkippedFiles: number;
 } {
     const sessions = new Map<string, NarrativeEntry[]>();
     const docs: V8NarrativeRecord[] = [];
     let writtenFiles = 0;
     let skippedFiles = 0;
+    let appendOnlySkippedFiles = 0;
     for (const record of records) {
         if (record.sourceType !== "session_trace") continue;
         const rawText = record.cleanText || record.rawText || "";
@@ -1274,26 +1285,49 @@ function persistSessionNarratives(
             sessionId,
         });
         docs.push(doc);
-        const wrote = writeFileIfChanged(fullPath, markdown);
-        if (wrote) writtenFiles += 1;
-        else skippedFiles += 1;
+        const result = writeFileIfChangedAppendOnly(fullPath, markdown);
+        if (result === "written") writtenFiles += 1;
+        if (result === "skipped_unchanged") skippedFiles += 1;
+        if (result === "skipped_append_only") appendOnlySkippedFiles += 1;
     }
     return {
         docs: sortNarrativeRecords(docs),
         writtenFiles,
         skippedFiles,
+        appendOnlySkippedFiles,
     };
 }
 
-function writeFileIfChanged(filePath: string, content: string): boolean {
+type NarrativeWriteResult =
+    | "written"
+    | "skipped_unchanged"
+    | "skipped_append_only";
+
+function writeFileIfChangedAppendOnly(
+    filePath: string,
+    content: string
+): NarrativeWriteResult {
     try {
-        const current = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : null;
-        if (current === content) return false;
-        fs.writeFileSync(filePath, content, "utf-8");
-        return true;
+        if (!fs.existsSync(filePath)) {
+            fs.writeFileSync(filePath, content, "utf-8");
+            return "written";
+        }
+        const current = fs.readFileSync(filePath, "utf-8");
+        if (current === content) return "skipped_unchanged";
+        const currentTrimmed = current.trimEnd();
+        const nextTrimmed = content.trimEnd();
+        if (
+            nextTrimmed.length > currentTrimmed.length &&
+            nextTrimmed.startsWith(currentTrimmed)
+        ) {
+            fs.writeFileSync(filePath, content, "utf-8");
+            return "written";
+        }
+        // Append-only guard: never overwrite with a shorter or structurally divergent body.
+        return "skipped_append_only";
     } catch {
-        // ignore write failures to keep consolidation moving
-        return false;
+        // Fail-safe for raw-like narrative persistence: prefer no mutation on error.
+        return "skipped_append_only";
     }
 }
 

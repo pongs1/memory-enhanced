@@ -1108,6 +1108,8 @@ Practical compile switches:
 - build summary/report includes source-cleaning stats:
   - volume: `sourceNormalizationRecordCount/rawChars/cleanChars/removedChars`
   - impact: `sourceNormalizationTouchedRecords/removedRatioPct`
+- append-only narrative persistence stats:
+  - `sourceNarrativeWrittenFiles/sourceNarrativeSkippedFiles/sourceNarrativeAppendOnlySkippedFiles`
 - source-stage assembly is append-only for `session_*_narrative.md` and never prunes existing narrative files
 - when `max_narrative_docs` is set, the run is marked as partial and does not update `build_manifest.json`
 - when `stop_after` is used, downstream artifact files are cleared to avoid stale graph/runtime reads
