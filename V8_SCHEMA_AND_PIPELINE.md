@@ -1092,6 +1092,7 @@ Practical compile switches:
 - tool summary includes compact `hotDocPreview/coldDocPreview/removedDocPreview` for quick inspection
 - when `max_narrative_docs` is set, the run is marked as partial and does not update `build_manifest.json`
 - when `stop_after` is used, downstream artifact files are cleared to avoid stale graph/runtime reads
+- when `start_at=source`, assembled narratives are passed through in-memory to unitization (no immediate write-read roundtrip)
 
 ### 9.8 Multi-path retrieval contract
 

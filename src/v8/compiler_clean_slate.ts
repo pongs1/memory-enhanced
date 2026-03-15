@@ -10,7 +10,11 @@ import {
 } from "./architecture/narrative-normalizer.js";
 import { loadResolvedToolCleaningProfiles } from "./architecture/tool-cleaning-profiles.js";
 import { checkToolCatalogAgainstRules } from "./architecture/tool-catalog-check.js";
-import { loadNarrativeRecords } from "./architecture/narrative-source.js";
+import {
+    buildNarrativeRecordFromMarkdown,
+    loadNarrativeRecords,
+    sortNarrativeRecords,
+} from "./architecture/narrative-source.js";
 import { unitizeNarrativeRecordsParallel } from "./architecture/unitizer.js";
 import { extractEvidenceSpans } from "./architecture/evidence.js";
 import { extractMemoryItems } from "./architecture/ir-extractor.js";
@@ -76,6 +80,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     logStage("tool catalog loaded");
 
     const startAt = options?.startAt ?? (options?.planOnly ? "narrative" : "source");
+    let sourceNarrativeDocs: V8NarrativeRecord[] | null = null;
     if (startAt === "source") {
         const traceGroups = loadSessionTraces(workspace, {
             sessionTraceDir: options?.sessionTraceDir,
@@ -112,11 +117,14 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             }
         }
         const traceRecords = [...traceNarrativeRecords, ...linkedNarrativeRecords];
-        persistAssembledObservationMarkdown(store.rawDir, traceRecords);
+        sourceNarrativeDocs = persistAssembledObservationMarkdown(store.rawDir, traceRecords);
         logStage("source normalization persisted");
     }
 
-    const loadedNarrativeDocs = loadNarrativeRecords(store.rawDir);
+    const loadedNarrativeDocs =
+        startAt === "source" && sourceNarrativeDocs
+            ? sourceNarrativeDocs
+            : loadNarrativeRecords(store.rawDir);
     let allNarrativeDocs = loadedNarrativeDocs;
     logStage(`narratives loaded (${allNarrativeDocs.length})`);
     if (startAt === "narrative" && allNarrativeDocs.length === 0) {
@@ -805,11 +813,14 @@ function loadAllArtifacts(
     };
 }
 
-function persistAssembledObservationMarkdown(rawDir: string, records: V8NarrativeRecord[]): void {
-    if (!records.length) return;
+function persistAssembledObservationMarkdown(
+    rawDir: string,
+    records: V8NarrativeRecord[]
+): V8NarrativeRecord[] {
+    if (!records.length) return [];
     const outDir = path.join(rawDir, "observations", "assembled");
     fs.mkdirSync(outDir, { recursive: true });
-    persistSessionNarratives(outDir, records);
+    return persistSessionNarratives(outDir, records);
 }
 
 interface SessionLinkRef {
@@ -1134,8 +1145,12 @@ interface NarrativeEntry {
     originLabel?: string;
 }
 
-function persistSessionNarratives(outDir: string, records: V8NarrativeRecord[]): void {
+function persistSessionNarratives(
+    outDir: string,
+    records: V8NarrativeRecord[]
+): V8NarrativeRecord[] {
     const sessions = new Map<string, NarrativeEntry[]>();
+    const docs: V8NarrativeRecord[] = [];
     for (const record of records) {
         if (record.sourceType !== "session_trace") continue;
         const rawText = record.cleanText || record.rawText || "";
@@ -1173,12 +1188,21 @@ function persistSessionNarratives(outDir: string, records: V8NarrativeRecord[]):
         if (!markdown.trim()) continue;
         const fileName =
             sanitizeFileName(`session_${sessionId}_narrative`) + ".md";
+        const fullPath = path.join(outDir, fileName);
+        const doc = buildNarrativeRecordFromMarkdown({
+            sourceRef: fullPath,
+            content: markdown,
+            fileNameHint: fileName,
+            sessionId,
+        });
+        docs.push(doc);
         try {
-            fs.writeFileSync(path.join(outDir, fileName), markdown, "utf-8");
+            fs.writeFileSync(fullPath, markdown, "utf-8");
         } catch {
             // ignore write failures to keep consolidation moving
         }
     }
+    return sortNarrativeRecords(docs);
 }
 
 function compareNarrativeEntries(a: NarrativeEntry, b: NarrativeEntry): number {

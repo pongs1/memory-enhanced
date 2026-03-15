@@ -2,6 +2,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { V8NarrativeRecord } from "../types_v8.js";
 
+export interface BuildNarrativeRecordInput {
+    sourceRef: string;
+    content: string;
+    fileNameHint?: string;
+    sessionId?: string;
+}
+
 export function loadNarrativeRecords(rawDir: string): V8NarrativeRecord[] {
     const assembledDir = path.join(rawDir, "observations", "assembled");
     if (!fs.existsSync(assembledDir)) return [];
@@ -13,28 +20,45 @@ export function loadNarrativeRecords(rawDir: string): V8NarrativeRecord[] {
         const fullPath = path.join(assembledDir, file);
         const content = fs.readFileSync(fullPath, "utf-8");
         if (!content.trim()) continue;
-        const sessionId = parseSessionId(content, file);
-        const timelineStart = extractTimelineStart(content);
-        records.push({
-            id: `narr_${sessionId}`,
-            sourceClass: "raw",
-            sourceType: "session_narrative",
-            sourceRef: fullPath,
-            speaker: null,
-            timestamp: null,
-            rawText: content,
-            cleanText: content,
-            cleanMap: [],
-            language: detectLanguage(content),
-            metadata: {
-                sessionId,
+        records.push(
+            buildNarrativeRecordFromMarkdown({
                 sourceRef: fullPath,
-                timelineStart,
-            },
-        });
+                content,
+                fileNameHint: file,
+            })
+        );
     }
-    records.sort(compareNarrativeRecords);
-    return records;
+    return sortNarrativeRecords(records);
+}
+
+export function buildNarrativeRecordFromMarkdown(
+    input: BuildNarrativeRecordInput
+): V8NarrativeRecord {
+    const inferredSessionId =
+        input.sessionId ||
+        parseSessionId(input.content, input.fileNameHint || path.basename(input.sourceRef));
+    const timelineStart = extractTimelineStart(input.content);
+    return {
+        id: `narr_${inferredSessionId}`,
+        sourceClass: "raw",
+        sourceType: "session_narrative",
+        sourceRef: input.sourceRef,
+        speaker: null,
+        timestamp: null,
+        rawText: input.content,
+        cleanText: input.content,
+        cleanMap: [],
+        language: detectLanguage(input.content),
+        metadata: {
+            sessionId: inferredSessionId,
+            sourceRef: input.sourceRef,
+            timelineStart,
+        },
+    };
+}
+
+export function sortNarrativeRecords(records: V8NarrativeRecord[]): V8NarrativeRecord[] {
+    return records.sort(compareNarrativeRecords);
 }
 
 function parseSessionId(content: string, fileName: string): string {
