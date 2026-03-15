@@ -142,7 +142,7 @@ export default function register(api: OpenClawPluginApi) {
         description:
             "Build the memory graph directly from raw session traces. " +
             "This handles structural ingestion and graph materialization with zero token cost. " +
-            "Use compile_phase=stream for ongoing sessions and compile_phase=final for end-of-session full recompilation.",
+            "Use compile_phase=stream for active conversations and compile_phase=final when you need a full global recompilation.",
         parameters: MemoryConsolidateParams,
         execute: toolExecute((id: string, params: any, ctx: any) =>
             executeMemoryConsolidate(id, params, { ...ctx, config: pluginConfig })),

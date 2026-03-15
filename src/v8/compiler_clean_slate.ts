@@ -234,6 +234,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         compilePhase,
         hotTailSkipUnits,
         llmLayers: llmLayers.join(","),
+        hotTailDroppedUnits: 0,
         irRuleItems: 0,
         irLlmItems: 0,
         irFallbackItems: 0,
@@ -341,13 +342,20 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         };
     }
 
-    const hotUnits = await unitizeNarrativeRecordsParallel(
+    const hotUnitsAll = await unitizeNarrativeRecordsParallel(
         hotNarratives,
         undefined,
         options?.workerCount ?? 1
     );
+    const hotUnits =
+        compilePhase === "stream" && hotTailSkipUnits > 0
+            ? trimTrailingUnitsByNarrativeForCompile(hotUnitsAll, hotTailSkipUnits)
+            : hotUnitsAll;
+    buildStats.hotTailDroppedUnits = Math.max(0, hotUnitsAll.length - hotUnits.length);
     const units = [...cached.units, ...hotUnits];
-    logStage(`units built hot=${hotUnits.length} total=${units.length}`);
+    logStage(
+        `units built hot=${hotUnits.length} droppedTail=${buildStats.hotTailDroppedUnits} total=${units.length}`
+    );
     if (options?.emitUnitPreview !== false) {
         persistNarrativeUnitPreview(store.rawDir, units, allNarrativeDocs);
         logStage("unit preview written");
@@ -404,7 +412,6 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
     const llmJobs = buildLlmIrJobs(hotUnits, hotEvidenceSpans, {
         layers: llmLayers,
-        dropTrailingUnitsPerNarrative: hotTailSkipUnits,
     });
     logStage(`llm jobs built hot=${llmJobs.length}`);
     writeIrLlmJobs(store.irLlmJobs, llmJobs);
@@ -592,6 +599,7 @@ interface BuildReport {
         compilePhase: "stream" | "final";
         hotTailSkipUnits: number;
         llmLayers: string;
+        hotTailDroppedUnits: number;
         irRuleItems: number;
         irLlmItems: number;
         irFallbackItems: number;
@@ -625,6 +633,36 @@ function emptyCachedArtifacts(): Pick<
         evidenceSpans: [],
         memoryItems: [],
     };
+}
+
+function trimTrailingUnitsByNarrativeForCompile(
+    units: V8Unit[],
+    dropPerNarrative: number
+): V8Unit[] {
+    if (dropPerNarrative <= 0 || units.length === 0) return units;
+    const byNarrative = new Map<string, V8Unit[]>();
+    for (const unit of units) {
+        const list = byNarrative.get(unit.narrativeRecordId) || [];
+        list.push(unit);
+        byNarrative.set(unit.narrativeRecordId, list);
+    }
+    const dropIds = new Set<string>();
+    for (const list of byNarrative.values()) {
+        const ordered = list
+            .slice()
+            .sort(
+                (a, b) =>
+                    a.ordinal - b.ordinal || a.charStart - b.charStart || a.id.localeCompare(b.id)
+            );
+        const keepUntil = Math.max(0, ordered.length - dropPerNarrative);
+        for (let idx = keepUntil; idx < ordered.length; idx += 1) {
+            const unit = ordered[idx];
+            if (unit) {
+                dropIds.add(unit.id);
+            }
+        }
+    }
+    return units.filter((unit) => !dropIds.has(unit.id));
 }
 
 function loadBuildManifest(filePath: string): BuildManifest | null {
@@ -712,7 +750,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
         `- sourceNormalization: records=${report.buildStats.sourceNormalizationRecordCount}, touchedRecords=${report.buildStats.sourceNormalizationTouchedRecords}, rawChars=${report.buildStats.sourceNormalizationRawChars}, cleanChars=${report.buildStats.sourceNormalizationCleanChars}, removedChars=${report.buildStats.sourceNormalizationRemovedChars}, removedRatioPct=${report.buildStats.sourceNormalizationRemovedRatioPct.toFixed(2)}`
     );
     lines.push(
-        `- compilePhase: ${report.buildStats.compilePhase} (layers=${report.buildStats.llmLayers}, hotTailSkipUnits=${report.buildStats.hotTailSkipUnits})`
+        `- compilePhase: ${report.buildStats.compilePhase} (layers=${report.buildStats.llmLayers}, hotTailSkipUnits=${report.buildStats.hotTailSkipUnits}, hotTailDroppedUnits=${report.buildStats.hotTailDroppedUnits})`
     );
     lines.push(
         `- irExtraction: rule=${report.buildStats.irRuleItems}, llm=${report.buildStats.irLlmItems}, fallback=${report.buildStats.irFallbackItems}, fallbackApplied=${String(report.buildStats.irFallbackApplied)}`

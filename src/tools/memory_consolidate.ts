@@ -37,7 +37,7 @@ export const MemoryConsolidateParams = Type.Object({
     start_at: Type.Optional(
         Type.Union([Type.Literal("source"), Type.Literal("narrative")], {
             description:
-                "Pipeline start stage. narrative skips session re-normalization and starts from existing *_narrative.md files.",
+                "Pipeline start stage. source rebuilds/updates narrative files from raw session traces; narrative starts directly from existing *_narrative.md files.",
         })
     ),
     stop_after: Type.Optional(
@@ -64,7 +64,7 @@ export const MemoryConsolidateParams = Type.Object({
             [Type.Literal("full"), Type.Literal("incremental"), Type.Literal("hybrid")],
             {
                 description:
-                    "Build scope mode. full=rebuild all; incremental=only changed narrative docs; hybrid=changed + recent hot window.",
+                    "Build scope mode. full=rebuild all docs; incremental=only changed docs; hybrid=changed docs plus recent hot-window docs and cache-reuse for cold docs.",
             }
         )
     ),

@@ -29,7 +29,6 @@ export interface V8IrLlmJob {
 
 export interface BuildLlmIrJobOptions {
     layers?: V8GraphLayer[];
-    dropTrailingUnitsPerNarrative?: number;
 }
 
 interface EdgeCatalogFile {
@@ -170,20 +169,12 @@ export function buildLlmIrJobs(
     const enabledLayers = requestedLayers.filter((layer) =>
         evidenceIndex.layerOrder.includes(layer)
     );
-    const dropTrailingUnitsPerNarrative = Math.max(
-        0,
-        options?.dropTrailingUnitsPerNarrative ?? 0
-    );
 
     const jobs: V8IrLlmJob[] = [];
     for (const layer of enabledLayers) {
-        const layerUnitsRaw = (evidenceIndex.unitsByLayer.get(layer) || []).filter((unit) =>
+        const layerUnits = (evidenceIndex.unitsByLayer.get(layer) || []).filter((unit) =>
             unit.text.trim().length > 0
         );
-        const layerUnits =
-            dropTrailingUnitsPerNarrative > 0
-                ? trimTrailingUnitsByNarrative(layerUnitsRaw, dropTrailingUnitsPerNarrative)
-                : layerUnitsRaw;
         const batchConfig = BATCH_CONFIG_BY_LAYER[layer];
         const batches = buildLayerBatches(layer, layerUnits, batchConfig);
         for (const batch of batches) {
@@ -227,26 +218,6 @@ export function buildLlmIrJobs(
     }
 
     return jobs;
-}
-
-function trimTrailingUnitsByNarrative(units: V8Unit[], dropPerNarrative: number): V8Unit[] {
-    if (dropPerNarrative <= 0 || units.length === 0) return units;
-    const dropIds = new Set<string>();
-    for (const group of groupUnitsByNarrative(units)) {
-        if (group.length <= dropPerNarrative) {
-            for (const unit of group) {
-                dropIds.add(unit.id);
-            }
-            continue;
-        }
-        for (let idx = group.length - dropPerNarrative; idx < group.length; idx += 1) {
-            const unit = group[idx];
-            if (unit) {
-                dropIds.add(unit.id);
-            }
-        }
-    }
-    return units.filter((unit) => !dropIds.has(unit.id));
 }
 
 function buildLayerBatches(
