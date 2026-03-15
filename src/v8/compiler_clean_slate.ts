@@ -242,6 +242,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         relationGroupSummaries: 0,
         relationSearchPlans: 0,
         relationShardSelections: 0,
+        relationCandidateHits: 0,
+        relationReviewJobs: 0,
     };
     const persistRunReport = (payload: {
         llmStatus: string;
@@ -579,6 +581,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     buildStats.relationSearchPlans = relationPlanning.relationSearchPlans.length;
     buildStats.relationShardSelections =
         relationPlanning.narrativeShardSelections.length;
+    buildStats.relationCandidateHits = relationPlanning.relationCandidateHits.length;
+    buildStats.relationReviewJobs = relationPlanning.relationReviewJobs.length;
     logStage("relation planning artifacts built");
     writeJsonl(store.units, units);
     writeJsonl(store.evidenceSpans, evidenceSpans);
@@ -596,6 +600,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         store.narrativeShardSelections,
         relationPlanning.narrativeShardSelections
     );
+    writeJsonl(store.relationCandidateHits, relationPlanning.relationCandidateHits);
+    writeJsonl(store.relationReviewJobs, relationPlanning.relationReviewJobs);
     if (!isPartialBuild) {
         persistBuildManifest(store.buildManifest, loadedNarrativeDocs);
         persistNarrativeCompileState(
@@ -721,6 +727,8 @@ interface BuildReport {
         relationGroupSummaries: number;
         relationSearchPlans: number;
         relationShardSelections: number;
+        relationCandidateHits: number;
+        relationReviewJobs: number;
     };
     llmStatus: string;
     scopePreview: {
@@ -1071,7 +1079,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
         `- irExtraction: rule=${report.buildStats.irRuleItems}, llm=${report.buildStats.irLlmItems}, fallback=${report.buildStats.irFallbackItems}, fallbackApplied=${String(report.buildStats.irFallbackApplied)}`
     );
     lines.push(
-        `- relationPlanning: entityPostings=${report.buildStats.relationEntityPostings}, scopeCards=${report.buildStats.relationScopeCards}, groupSummaries=${report.buildStats.relationGroupSummaries}, searchPlans=${report.buildStats.relationSearchPlans}, shardSelections=${report.buildStats.relationShardSelections}`
+        `- relationPlanning: entityPostings=${report.buildStats.relationEntityPostings}, scopeCards=${report.buildStats.relationScopeCards}, groupSummaries=${report.buildStats.relationGroupSummaries}, searchPlans=${report.buildStats.relationSearchPlans}, shardSelections=${report.buildStats.relationShardSelections}, candidateHits=${report.buildStats.relationCandidateHits}, reviewJobs=${report.buildStats.relationReviewJobs}`
     );
     lines.push(
         `- partialBuild: ${String(report.buildStats.partialBuild)}${report.buildStats.maxNarrativeDocs ? ` (maxNarrativeDocs=${report.buildStats.maxNarrativeDocs})` : ""}`

@@ -1,17 +1,19 @@
 import * as crypto from "node:crypto";
 import type {
     V8EvidenceSpan,
+    V8EntityPosting,
+    V8EntityScopeCard,
     V8GraphEdge,
     V8GraphNode,
     V8GroupSummary,
     V8HintSource,
     V8NarrativeShardSelection,
     V8RecallBundleProjection,
+    V8RelationCandidateHit,
+    V8RelationReviewJob,
     V8RelationSearchPlan,
     V8ScoredHint,
     V8SearchLane,
-    V8EntityPosting,
-    V8EntityScopeCard,
 } from "../types_v8.js";
 
 export interface BuildRelationPlanningArtifactsInput {
@@ -28,6 +30,8 @@ export interface RelationPlanningArtifacts {
     groupSummaries: V8GroupSummary[];
     relationSearchPlans: V8RelationSearchPlan[];
     narrativeShardSelections: V8NarrativeShardSelection[];
+    relationCandidateHits: V8RelationCandidateHit[];
+    relationReviewJobs: V8RelationReviewJob[];
 }
 
 const ANCHOR_MEMORY_TYPES = new Set<string>([
@@ -105,6 +109,12 @@ export function buildRelationPlanningArtifacts(
         allShardHints,
         compilePhase: input.compilePhase,
     });
+    const { relationCandidateHits, relationReviewJobs } = buildRelationCandidateHitsAndJobs({
+        relationSearchPlans,
+        narrativeShardSelections,
+        evidenceSpans: input.evidenceSpans,
+        compilePhase: input.compilePhase,
+    });
 
     return {
         entityPostings: sortById(entityPostings),
@@ -112,6 +122,8 @@ export function buildRelationPlanningArtifacts(
         groupSummaries: sortById(groupSummaries),
         relationSearchPlans: sortById(relationSearchPlans),
         narrativeShardSelections: sortById(narrativeShardSelections),
+        relationCandidateHits: sortById(relationCandidateHits),
+        relationReviewJobs: sortById(relationReviewJobs),
     };
 }
 
@@ -405,6 +417,105 @@ function buildRelationSearchPlans(input: {
     };
 }
 
+function buildRelationCandidateHitsAndJobs(input: {
+    relationSearchPlans: V8RelationSearchPlan[];
+    narrativeShardSelections: V8NarrativeShardSelection[];
+    evidenceSpans: V8EvidenceSpan[];
+    compilePhase: "stream" | "final";
+}): {
+    relationCandidateHits: V8RelationCandidateHit[];
+    relationReviewJobs: V8RelationReviewJob[];
+} {
+    const selectionByPlanId = new Map(
+        input.narrativeShardSelections.map((selection) => [selection.planId, selection])
+    );
+    const spansByShard = new Map<string, V8EvidenceSpan[]>();
+    for (const span of input.evidenceSpans) {
+        const shardId = normalizeShardId(span.narrativeRecordId);
+        const list = spansByShard.get(shardId) || [];
+        list.push(span);
+        spansByShard.set(shardId, list);
+    }
+
+    const maxPlans = input.compilePhase === "stream" ? 24 : 72;
+    const planRanked = input.relationSearchPlans
+        .slice()
+        .sort((a, b) => planPriority(b) - planPriority(a) || a.id.localeCompare(b.id))
+        .slice(0, maxPlans);
+
+    const relationCandidateHits: V8RelationCandidateHit[] = [];
+    const relationReviewJobs: V8RelationReviewJob[] = [];
+    const hitIdSet = new Set<string>();
+
+    for (const plan of planRanked) {
+        const selection = selectionByPlanId.get(plan.id);
+        const allowedShardIds = (selection?.selectedShardHints || [])
+            .map((hint) => hint.id)
+            .filter(Boolean);
+        if (allowedShardIds.length === 0) continue;
+
+        const laneTopK = plan.lane === "focused" ? 6 : plan.lane === "broadened" ? 9 : 12;
+        const candidates: Array<{ span: V8EvidenceSpan; score: number }> = [];
+        const terms = tokenizeTerms(plan.queryTerms);
+        const boostedSpanIds = new Set(plan.hintSpanIds || []);
+        for (const shardId of allowedShardIds) {
+            for (const span of spansByShard.get(shardId) || []) {
+                const base = scoreSpanAgainstTerms(span.text, terms);
+                if (base <= 0) continue;
+                const score = boostedSpanIds.has(span.id) ? base + 0.08 : base;
+                candidates.push({ span, score });
+            }
+        }
+        candidates.sort((a, b) => b.score - a.score || a.span.id.localeCompare(b.span.id));
+        const top = candidates.slice(0, laneTopK);
+        if (top.length === 0) continue;
+
+        const candidateHitIds: string[] = [];
+        const evidenceSpanIds: string[] = [];
+        for (const item of top) {
+            const candidateEdgeType =
+                plan.edgeFamilyHints[0]?.id || "supports";
+            const hitId = `rch_${shortHash(`${plan.id}|${item.span.id}|${candidateEdgeType}`)}`;
+            if (hitIdSet.has(hitId)) continue;
+            hitIdSet.add(hitId);
+            relationCandidateHits.push({
+                id: hitId,
+                planId: plan.id,
+                candidateEdgeType,
+                spanId: item.span.id,
+                unitId: item.span.unitId,
+                narrativeRef: item.span.narrativeRef,
+                score: round3(item.score),
+                spanText: item.span.text,
+                createdAt: new Date().toISOString(),
+            });
+            candidateHitIds.push(hitId);
+            evidenceSpanIds.push(item.span.id);
+        }
+        if (candidateHitIds.length === 0) continue;
+
+        const jobId = `rrj_${shortHash(plan.id)}`;
+        relationReviewJobs.push({
+            id: jobId,
+            planId: plan.id,
+            anchorNodeIds: [...plan.anchorNodeIds],
+            candidateEdgeTypes: plan.edgeFamilyHints.map((hint) => hint.id).slice(0, 5),
+            candidateHitIds,
+            evidenceSpanIds: uniqueList(evidenceSpanIds).slice(0, 40),
+            bundleIds: [...(plan.hintBundleIds || [])].slice(0, 10),
+            reviewQuestion: buildReviewQuestion(plan),
+            modeHint: plan.recallMode,
+            status: "pending",
+            createdAt: new Date().toISOString(),
+        });
+    }
+
+    return {
+        relationCandidateHits,
+        relationReviewJobs,
+    };
+}
+
 function selectShardHintsByLane(
     cardHints: V8ScoredHint[],
     allShardHints: V8ScoredHint[],
@@ -467,6 +578,29 @@ function addTerm(set: Set<string>, value: string): void {
     const normalized = (value || "").trim();
     if (!normalized) return;
     set.add(normalized);
+}
+
+function scoreSpanAgainstTerms(spanText: string, terms: string[]): number {
+    if (terms.length === 0) return 0;
+    const text = (spanText || "").toLowerCase();
+    if (!text) return 0;
+    let hit = 0;
+    for (const term of terms) {
+        if (text.includes(term)) hit += 1;
+    }
+    if (hit === 0) return 0;
+    return hit / terms.length;
+}
+
+function tokenizeTerms(terms: string[]): string[] {
+    const output: string[] = [];
+    for (const raw of terms || []) {
+        const normalized = (raw || "").trim().toLowerCase();
+        if (!normalized) continue;
+        if (normalized.length < 2) continue;
+        output.push(normalized);
+    }
+    return uniqueList(output).slice(0, 24);
 }
 
 function indexBundlesByNode(
@@ -549,6 +683,14 @@ function cardPriority(card: V8EntityScopeCard): number {
     return shard * 0.45 + edge * 0.4 + coanchor * 0.15;
 }
 
+function planPriority(plan: V8RelationSearchPlan): number {
+    const edge = plan.edgeFamilyHints[0]?.score || 0;
+    const scope = plan.searchScope === "global_archive" ? 1 : 0.7;
+    const laneWeight =
+        plan.lane === "focused" ? 1 : plan.lane === "broadened" ? 0.85 : 0.7;
+    return edge * scope * laneWeight;
+}
+
 function compareTs(a: string | null, b: string | null): number {
     const aTs = a ? Date.parse(a) : NaN;
     const bTs = b ? Date.parse(b) : NaN;
@@ -571,6 +713,19 @@ function normalizeShardId(value: string): string {
 
 function round3(value: number): number {
     return Math.round(value * 1000) / 1000;
+}
+
+function buildReviewQuestion(plan: V8RelationSearchPlan): string {
+    const anchor = plan.anchorLabels?.[0] || "anchor";
+    const edgeList = plan.edgeFamilyHints
+        .map((hint) => hint.id)
+        .slice(0, 4)
+        .join(", ");
+    return `Verify whether direct evidence supports relations for ${anchor} under edge families: ${edgeList}.`;
+}
+
+function uniqueList<T>(items: T[]): T[] {
+    return Array.from(new Set(items));
 }
 
 function shortHash(text: string): string {

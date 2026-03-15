@@ -251,7 +251,7 @@ export async function executeMemoryConsolidate(
             ? `irExtraction=rule:${output.buildStats.irRuleItems} llm:${output.buildStats.irLlmItems} fallback:${output.buildStats.irFallbackItems} fallbackApplied:${output.buildStats.irFallbackApplied}`
             : null,
         output.buildStats
-            ? `relationPlanning=entityPostings:${output.buildStats.relationEntityPostings} scopeCards:${output.buildStats.relationScopeCards} groupSummaries:${output.buildStats.relationGroupSummaries} searchPlans:${output.buildStats.relationSearchPlans} shardSelections:${output.buildStats.relationShardSelections}`
+            ? `relationPlanning=entityPostings:${output.buildStats.relationEntityPostings} scopeCards:${output.buildStats.relationScopeCards} groupSummaries:${output.buildStats.relationGroupSummaries} searchPlans:${output.buildStats.relationSearchPlans} shardSelections:${output.buildStats.relationShardSelections} candidateHits:${output.buildStats.relationCandidateHits} reviewJobs:${output.buildStats.relationReviewJobs}`
             : null,
         output.buildStats
             ? `llmCache=hitUnits:${output.buildStats.llmCacheHitUnits} missUnits:${output.buildStats.llmCacheMissUnits} entries:${output.buildStats.llmCacheEntries}`
