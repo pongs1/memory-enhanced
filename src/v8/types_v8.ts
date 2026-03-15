@@ -8,6 +8,8 @@ export type V8SourceType =
     | "skill_md"
     | "event_jsonl";
 
+export type V8NarrativeSourceCategory = "conversation" | "operation" | "unknown";
+
 export type V8GraphLayer = "micro" | "meso" | "macro";
 
 export type V8EdgeLayer = V8GraphLayer | "cross";
@@ -346,6 +348,7 @@ export interface V8NarrativeRecord {
 export interface V8Unit {
     id: string;
     narrativeRecordId: string;
+    narrativeRef: string;
     layer: V8GraphLayer;
     ordinal: number;
     charStart: number;
@@ -353,16 +356,23 @@ export interface V8Unit {
     text: string;
     parentUnitId: string | null;
     language: "zh" | "en" | "mixed" | "unknown";
+    speaker: "user" | "assistant" | "system" | "unknown" | null;
+    timestamp: string | null;
+    sourceCategory: V8NarrativeSourceCategory;
 }
 
 export interface V8EvidenceSpan {
     id: string;
     narrativeRecordId: string;
+    narrativeRef: string;
     unitId: string;
     charStart: number;
     charEnd: number;
     text: string;
     speaker: "user" | "assistant" | "system" | "unknown" | null;
+    timestamp: string | null;
+    sourceClass: V8SourceClass;
+    sourceType: V8SourceType;
     score: number;
 }
 
@@ -448,6 +458,7 @@ export interface V8HypothesisEdge {
 export interface V8IgnitionNodeProjection {
     nodeId: string;
     bundleId: string;
+    bundleIds?: string[];
     kind: "episodic" | "semantic" | "procedural";
     names: { zh: string; en: string };
     aliases: string[];

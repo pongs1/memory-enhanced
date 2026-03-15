@@ -222,6 +222,14 @@ export function buildRuntimeProjections(input: {
     }
 
     const groupedBundles = buildBundlesFromCandidates(candidates, input.edges, edgeKinds, spanById);
+    const groupBundleIdsByNode = new Map<string, string[]>();
+    for (const bundle of groupedBundles) {
+        for (const nodeId of bundle.nodeIds) {
+            const list = groupBundleIdsByNode.get(nodeId) || [];
+            list.push(bundle.bundleId);
+            groupBundleIdsByNode.set(nodeId, list);
+        }
+    }
     for (const [bundleId, bundleCandidates] of candidatesByMicroBundle.entries()) {
         const sorted = bundleCandidates
             .slice()
@@ -262,10 +270,14 @@ export function buildRuntimeProjections(input: {
     }
 
     for (const candidate of candidates) {
+        const primaryBundleId =
+            microBundleIdByNodeId.get(candidate.node.id) || `micro_${candidate.node.id}`;
+        const linkedGroupIds = (groupBundleIdsByNode.get(candidate.node.id) || []).slice(0, 4);
+        const bundleIds = unique([primaryBundleId, ...linkedGroupIds]);
         ignitionNodes.push({
             nodeId: candidate.node.id,
-            bundleId:
-                microBundleIdByNodeId.get(candidate.node.id) || `micro_${candidate.node.id}`,
+            bundleId: primaryBundleId,
+            bundleIds,
             kind: candidate.kind,
             names: {
                 zh: candidate.label,

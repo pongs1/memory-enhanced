@@ -574,6 +574,12 @@ function buildPrompt(input: {
             : layer === "meso"
               ? "Extraction budget: usually 1-6 relations per unit. Do not force coverage."
               : "Extraction budget: keep local object/fact relations only.";
+    const suggestedBatchBudget =
+        layer === "macro"
+            ? `Suggested total items for this batch: 2-${Math.min(10, units.length * 3)}`
+            : layer === "meso"
+              ? `Suggested total items for this batch: 4-${Math.min(24, units.length * 6)}`
+              : `Suggested total items for this batch: ${Math.min(80, units.length * 18)} max`;
     const unitBlocks = units.flatMap((unit) => {
         const evidenceLines = (spansByUnit.get(unit.id) || []).map(
             (span) => `- (${span.id}) ${sanitizeLine(span.text)}`
@@ -592,6 +598,8 @@ function buildPrompt(input: {
     return [
         "Please extract only evidence-backed relations from the batched units below.",
         "If nothing can be extracted, output `[]` only.",
+        "Active background: this is an ongoing long-horizon agent task memory graph.",
+        "Prioritize durable state shifts, decisions, constraints, and evidence-backed relations.",
         "",
         "Rules:",
         "- Use only the relations listed under Allowed relations (by group).",
@@ -623,6 +631,7 @@ function buildPrompt(input: {
         allowedLine,
         itemTypeLine,
         layerBudgetHint,
+        suggestedBatchBudget,
         ...groupedLines,
         "",
         "### Batch",

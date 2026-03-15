@@ -43,6 +43,7 @@ interface LoadedGraphData {
     edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>;
     policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
     groupBundles: V8RecallBundleProjection[];
+    groupBundleById: Map<string, V8RecallBundleProjection>;
     groupBundleTokens: Map<string, Set<string>>;
     hypothesisEdges: V8HypothesisEdge[];
 }
@@ -239,6 +240,7 @@ export class V8GraphScanner {
         const groupBundles = recallBundles.filter(
             (bundle) => bundle.bundleId.startsWith("group_") && bundle.nodeIds.length >= 2
         );
+        const groupBundleById = new Map(groupBundles.map((bundle) => [bundle.bundleId, bundle]));
         const groupBundleTokens = new Map<string, Set<string>>();
         for (const bundle of groupBundles) {
             const text = `${bundle.title || ""} ${bundle.summaryText || ""}`.trim();
@@ -386,6 +388,7 @@ export class V8GraphScanner {
             edgeKinds,
             policyByKindMode,
             groupBundles,
+            groupBundleById,
             groupBundleTokens,
             hypothesisEdges,
         };
@@ -597,6 +600,40 @@ export class V8GraphScanner {
         this.spreadActivation();
 
         const now = nowMs();
+        const resolveBundleBindings = (
+            nodeId: string,
+            projection: V8IgnitionNodeProjection | null
+        ): Array<{ bundleId: string; weight: number }> => {
+            const primary = projection?.bundleId || nodeId;
+            const all = projection?.bundleIds && projection.bundleIds.length > 0
+                ? projection.bundleIds
+                : [primary];
+            const seen = new Set<string>();
+            const out: Array<{ bundleId: string; weight: number }> = [];
+            // Always keep primary bundle.
+            out.push({ bundleId: primary, weight: 1 });
+            seen.add(primary);
+
+            const secondary = all.filter((id) => !seen.has(id)).slice(0, 6);
+            const scored = secondary.map((bundleId) => {
+                const bundle = this.graph.groupBundleById.get(bundleId);
+                const bundleTokens = this.graph.groupBundleTokens.get(bundleId) || new Set<string>();
+                const semantic = overlapScore(tokens, bundleTokens);
+                const sizePenalty = bundle ? Math.min(0.45, bundle.nodeIds.length * 0.035) : 0.3;
+                const score = semantic - sizePenalty;
+                return { bundleId, score };
+            });
+            scored
+                .sort((a, b) => b.score - a.score)
+                .slice(0, 2)
+                .forEach((item) => {
+                    if (item.score < -0.1) return;
+                    const weight = clamp01(0.45 + item.score);
+                    if (weight < 0.2) return;
+                    out.push({ bundleId: item.bundleId, weight });
+                });
+            return out;
+        };
 
         const collectEvidence = (
             entries: Array<{ nodeId: string; energy: number; evidenceSpanIds: string[] }>,
@@ -634,10 +671,6 @@ export class V8GraphScanner {
                 const node = this.graph.nodesById.get(nodeId);
                 if (!node) continue;
                 const projection = this.graph.ignitionNodesById?.get(nodeId) || null;
-                const bundleId = projection?.bundleId || nodeId;
-                const bundleCooldownUntil = this.bundleCooldowns.get(bundleId) || 0;
-                if (bundleCooldownUntil > now) continue;
-
                 const evidenceSpanIds =
                     projection?.bestEvidenceSpanIds && projection.bestEvidenceSpanIds.length > 0
                         ? projection.bestEvidenceSpanIds
@@ -646,11 +679,17 @@ export class V8GraphScanner {
                           : node.bestEvidenceSpanIds.length > 0
                             ? node.bestEvidenceSpanIds
                             : node.evidenceSpanIds;
-
-                const entry = bundleMap.get(bundleId) || { energy: 0, nodes: [] };
-                entry.energy += energy;
-                entry.nodes.push({ nodeId, energy, evidenceSpanIds });
-                bundleMap.set(bundleId, entry);
+                const bindings = resolveBundleBindings(nodeId, projection);
+                for (const binding of bindings) {
+                    const bundleCooldownUntil = this.bundleCooldowns.get(binding.bundleId) || 0;
+                    if (bundleCooldownUntil > now) continue;
+                    const weightedEnergy = energy * binding.weight;
+                    if (weightedEnergy < 0.03) continue;
+                    const entry = bundleMap.get(binding.bundleId) || { energy: 0, nodes: [] };
+                    entry.energy += weightedEnergy;
+                    entry.nodes.push({ nodeId, energy: weightedEnergy, evidenceSpanIds });
+                    bundleMap.set(binding.bundleId, entry);
+                }
             }
 
             const bundles: V8ActivatedBundle[] = [];
