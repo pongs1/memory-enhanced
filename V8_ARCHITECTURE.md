@@ -776,6 +776,8 @@ This keeps exploratory creativity available while protecting day-to-day recall p
 
 ### 10.10 Graph-guided archive search (anti-noise-storm retrieval)
 
+Status: frozen/deferred until V8 core delivery is complete.
+
 V8 should include an explicit second-stage archive search path, but keep it graph-guided.
 
 Goal:

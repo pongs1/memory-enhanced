@@ -1098,6 +1098,8 @@ The practical retrieval flow is:
 
 ### 9.8.1 Archive search tool contract (integrated into V8)
 
+Status: frozen/deferred until V8 core implementation is stable.
+
 V8 should expose an explicit archive search interface to complete multi-path retrieval:
 
 - `memory_search_archive(query, mode=hybrid|bm25|vector, top_k, hint_span_ids?, hint_bundle_ids?)`
