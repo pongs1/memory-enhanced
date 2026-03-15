@@ -75,6 +75,19 @@ export const MemoryConsolidateParams = Type.Object({
                 "Hot window (hours) used by rebuild_mode=hybrid to force recent docs through full recompilation.",
         })
     ),
+    compile_phase: Type.Optional(
+        Type.Union([Type.Literal("stream"), Type.Literal("final")], {
+            description:
+                "IR compile phase. stream=meso/micro only and skips newest unstable tail units; final=full macro+meso+micro compile.",
+        })
+    ),
+    hot_tail_skip_units: Type.Optional(
+        Type.Number({
+            minimum: 0,
+            description:
+                "When compile_phase=stream, skip this many latest units per narrative from LLM IR jobs.",
+        })
+    ),
     rule_ir_mode: Type.Optional(
         Type.Union([Type.Literal("off"), Type.Literal("micro_light")], {
             description:
@@ -153,6 +166,15 @@ export async function executeMemoryConsolidate(
             : typeof (pluginConfig as any)?.v8HotWindowHours === "number"
               ? (pluginConfig as any).v8HotWindowHours
               : undefined;
+    const compilePhase =
+        (params.compile_phase as "stream" | "final" | undefined) ||
+        ((pluginConfig as any)?.v8CompilePhase as "stream" | "final" | undefined);
+    const hotTailSkipUnits =
+        typeof params.hot_tail_skip_units === "number"
+            ? params.hot_tail_skip_units
+            : typeof (pluginConfig as any)?.v8HotTailSkipUnits === "number"
+              ? (pluginConfig as any).v8HotTailSkipUnits
+              : undefined;
     const ruleIrMode =
         (params.rule_ir_mode as "off" | "micro_light" | undefined) ||
         ((pluginConfig as any)?.v8RuleIrMode as "off" | "micro_light" | undefined) ||
@@ -172,6 +194,8 @@ export async function executeMemoryConsolidate(
         llmCommandTimeoutMs: llmTimeoutMs,
         rebuildMode,
         hotWindowHours,
+        compilePhase,
+        hotTailSkipUnits,
         ruleIrMode,
     });
 
@@ -190,6 +214,10 @@ export async function executeMemoryConsolidate(
         `ruleIrMode=${ruleIrMode}`,
         `rebuildMode=${rebuildMode}`,
         hotWindowHours ? `hotWindowHours=${hotWindowHours}` : null,
+        compilePhase ? `compilePhase=${compilePhase}` : null,
+        typeof hotTailSkipUnits === "number"
+            ? `hotTailSkipUnits=${hotTailSkipUnits}`
+            : null,
         maxNarrativeDocs ? `devFastBuildMarker=${DEV_FAST_BUILD_MARKER}` : null,
         llmCommand ? `llmStatus=${output.llmStatus}` : null,
         "units=narrative",

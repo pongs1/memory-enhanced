@@ -27,6 +27,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type {
     V8EvidenceSpan,
+    V8GraphLayer,
     V8GraphEdge,
     V8GraphNode,
     V8IgnitionEdgeProjection,
@@ -49,6 +50,8 @@ export interface CleanSlateBuildOptions {
     emitUnitPreview?: boolean;
     workerCount?: number;
     ruleIrMode?: "off" | "micro_light";
+    compilePhase?: "stream" | "final";
+    hotTailSkipUnits?: number;
     rebuildMode?: "full" | "incremental" | "hybrid";
     hotWindowHours?: number;
     planOnly?: boolean;
@@ -176,6 +179,14 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
     const rebuildMode = options?.rebuildMode ?? "hybrid";
     const hotWindowHours = Math.max(1, options?.hotWindowHours ?? DEFAULT_HOT_WINDOW_HOURS);
+    const compilePhase =
+        options?.compilePhase ?? (rebuildMode === "full" ? "final" : "stream");
+    const hotTailSkipUnits = Math.max(
+        0,
+        options?.hotTailSkipUnits ?? (compilePhase === "stream" ? 6 : 0)
+    );
+    const llmLayers: V8GraphLayer[] =
+        compilePhase === "final" ? ["macro", "meso", "micro"] : ["meso", "micro"];
     const manifest = loadBuildManifest(store.buildManifest);
     const scope = computeBuildScope({
         narratives: allNarrativeDocs,
@@ -220,6 +231,9 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         sourceNormalizationRemovedChars: sourceNormalizationStats?.removedChars ?? 0,
         sourceNormalizationTouchedRecords: sourceNormalizationStats?.touchedRecords ?? 0,
         sourceNormalizationRemovedRatioPct: sourceNormalizationStats?.removedRatioPct ?? 0,
+        compilePhase,
+        hotTailSkipUnits,
+        llmLayers: llmLayers.join(","),
         irRuleItems: 0,
         irLlmItems: 0,
         irFallbackItems: 0,
@@ -388,7 +402,10 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         };
     }
 
-    const llmJobs = buildLlmIrJobs(hotUnits, hotEvidenceSpans);
+    const llmJobs = buildLlmIrJobs(hotUnits, hotEvidenceSpans, {
+        layers: llmLayers,
+        dropTrailingUnitsPerNarrative: hotTailSkipUnits,
+    });
     logStage(`llm jobs built hot=${llmJobs.length}`);
     writeIrLlmJobs(store.irLlmJobs, llmJobs);
     logStage("llm jobs persisted");
@@ -413,23 +430,13 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         ruleIrMode === "micro_light"
             ? extractMemoryItems(hotUnits, hotEvidenceSpans)
             : [];
-    const llmNeedsFallback =
-        ruleIrMode === "off" &&
-        hotUnits.length > 0 &&
-        llmJobs.length > 0 &&
-        llmItems.length === 0 &&
-        llmStatus !== "completed";
-    const fallbackRuleItems = llmNeedsFallback
-        ? extractMemoryItems(hotUnits, hotEvidenceSpans)
-        : [];
+    const fallbackRuleItems: V8MemoryItem[] = [];
     buildStats.irRuleItems = ruleItems.length;
     buildStats.irLlmItems = llmItems.length;
     buildStats.irFallbackItems = fallbackRuleItems.length;
-    buildStats.irFallbackApplied = llmNeedsFallback && fallbackRuleItems.length > 0;
-    const resolvedLlmStatus = buildStats.irFallbackApplied
-        ? `${llmStatus}+fallback(rule_micro_light)`
-        : llmStatus;
-    const hotMemoryItems = [...ruleItems, ...llmItems, ...fallbackRuleItems];
+    buildStats.irFallbackApplied = false;
+    const resolvedLlmStatus = llmStatus;
+    const hotMemoryItems = [...ruleItems, ...llmItems];
     const memoryItems = [...cached.memoryItems, ...hotMemoryItems];
     logStage(
         `memory items extracted hot(rule=${ruleItems.length}, llm=${llmItems.length}, fallback=${fallbackRuleItems.length}) total=${memoryItems.length}`
@@ -582,6 +589,9 @@ interface BuildReport {
         sourceNormalizationRemovedChars: number;
         sourceNormalizationTouchedRecords: number;
         sourceNormalizationRemovedRatioPct: number;
+        compilePhase: "stream" | "final";
+        hotTailSkipUnits: number;
+        llmLayers: string;
         irRuleItems: number;
         irLlmItems: number;
         irFallbackItems: number;
@@ -700,6 +710,9 @@ function renderBuildReportMarkdown(report: BuildReport): string {
     );
     lines.push(
         `- sourceNormalization: records=${report.buildStats.sourceNormalizationRecordCount}, touchedRecords=${report.buildStats.sourceNormalizationTouchedRecords}, rawChars=${report.buildStats.sourceNormalizationRawChars}, cleanChars=${report.buildStats.sourceNormalizationCleanChars}, removedChars=${report.buildStats.sourceNormalizationRemovedChars}, removedRatioPct=${report.buildStats.sourceNormalizationRemovedRatioPct.toFixed(2)}`
+    );
+    lines.push(
+        `- compilePhase: ${report.buildStats.compilePhase} (layers=${report.buildStats.llmLayers}, hotTailSkipUnits=${report.buildStats.hotTailSkipUnits})`
     );
     lines.push(
         `- irExtraction: rule=${report.buildStats.irRuleItems}, llm=${report.buildStats.irLlmItems}, fallback=${report.buildStats.irFallbackItems}, fallbackApplied=${String(report.buildStats.irFallbackApplied)}`
