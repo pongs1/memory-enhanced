@@ -947,6 +947,17 @@ Offline annotation still matters, but only as a secondary stage:
 
 It is no longer the place where basic memory structure first appears.
 
+### 14.1 Build Profiles (Development)
+
+- `full`: compile all narrative docs
+- `incremental`: compile only changed docs
+- `hybrid` (default): changed docs + recent hot window (current default `48h`)
+- optional dev knob: `max_narrative_docs` for tuning speed during prompt/parameter iteration
+
+Temporary marker is kept in code to avoid forgetting cleanup:
+
+- `TODO_REMOVE_BEFORE_RELEASE__V8_FAST_BUILD_DEFAULTS`
+
 ## 15. Migration Rule
 
 During migration:
