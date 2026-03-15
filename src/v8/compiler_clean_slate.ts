@@ -108,6 +108,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             sessionTraceDir: options?.sessionTraceDir,
             maxFiles: options?.maxSessionFiles,
         });
+        const assembledDir = path.join(store.rawDir, "observations", "assembled");
+        const existingSessionIds = listExistingSessionNarrativeIds(assembledDir);
         const sessionTraceDir =
             resolveSessionTraceDir(workspace, options?.sessionTraceDir) ||
             (traceGroups.length > 0
@@ -116,7 +118,13 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
         const traceNarrativeRecords: V8NarrativeRecord[] = [];
         const linkedNarrativeRecords: V8NarrativeRecord[] = [];
+        let skippedExistingSessions = 0;
         for (const group of traceGroups) {
+            const parentSessionId = deriveSessionIdFromSourceRef(group.sourceRefPrefix);
+            if (existingSessionIds.has(parentSessionId)) {
+                skippedExistingSessions += 1;
+                continue;
+            }
             const baseRecords = normalizeSessionMessages(group.messages, {
                 sourceRefPrefix: group.sourceRefPrefix,
                 workspace,
@@ -124,7 +132,6 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             });
             traceNarrativeRecords.push(...baseRecords);
 
-            const parentSessionId = deriveSessionIdFromSourceRef(group.sourceRefPrefix);
             const links = extractSessionLinksFromMessages(group.messages);
             if (links.length && sessionTraceDir) {
                 linkedNarrativeRecords.push(
@@ -146,6 +153,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             skippedFiles: persistResult.skippedFiles,
         };
         logStage("source normalization persisted");
+        logStage(`source groups skipped(existing narrative)=${skippedExistingSessions}`);
     }
 
     const loadedNarrativeDocs = loadNarrativeRecords(store.rawDir);
@@ -886,6 +894,25 @@ function summarizeSourceNormalization(records: V8NarrativeRecord[]): {
         touchedRecords,
         removedRatioPct: rawChars > 0 ? (removedChars * 100) / rawChars : 0,
     };
+}
+
+function listExistingSessionNarrativeIds(assembledDir: string): Set<string> {
+    const sessionIds = new Set<string>();
+    try {
+        if (!fs.existsSync(assembledDir)) return sessionIds;
+        const files = fs
+            .readdirSync(assembledDir)
+            .filter((name) => /^session_.+_narrative\.md$/i.test(name));
+        for (const file of files) {
+            const match = file.match(/^session_(.+)_narrative\.md$/i);
+            if (match?.[1]) {
+                sessionIds.add(match[1]);
+            }
+        }
+    } catch {
+        // ignore listing failures
+    }
+    return sessionIds;
 }
 
 function persistAssembledObservationMarkdown(

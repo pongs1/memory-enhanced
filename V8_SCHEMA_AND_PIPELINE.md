@@ -1114,6 +1114,7 @@ Practical compile switches:
 - source-stage persistence is simple append-only:
   - create `session_*_narrative.md` only when missing
   - existing narrative files are never rewritten
+- in `start_at=source`, traces whose target `session_*_narrative.md` already exists are skipped
 - source-stage assembly is append-only for `session_*_narrative.md` and never prunes existing narrative files
 - when `max_narrative_docs` is set, the run is marked as partial and does not update `build_manifest.json`
 - when `stop_after` is used, downstream artifact files are cleared to avoid stale graph/runtime reads

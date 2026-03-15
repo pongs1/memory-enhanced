@@ -959,6 +959,7 @@ It is no longer the place where basic memory structure first appears.
 - diagnostics include append-only persistence behavior (`written/skippedExisting`)
 - partial runs (`max_narrative_docs`) do not update the incremental manifest baseline
 - source-stage narrative assembly is append-only for `session_*_narrative.md` (no stale file pruning)
+- source-stage ingestion skips session traces that already have a persisted narrative file
 
 Temporary marker is kept in code to avoid forgetting cleanup:
 
