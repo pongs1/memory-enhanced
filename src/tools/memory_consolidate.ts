@@ -254,6 +254,9 @@ export async function executeMemoryConsolidate(
             ? `relationPlanning=entityPostings:${output.buildStats.relationEntityPostings} scopeCards:${output.buildStats.relationScopeCards} groupSummaries:${output.buildStats.relationGroupSummaries} searchPlans:${output.buildStats.relationSearchPlans} shardSelections:${output.buildStats.relationShardSelections} candidateHits:${output.buildStats.relationCandidateHits} reviewJobs:${output.buildStats.relationReviewJobs}`
             : null,
         output.buildStats
+            ? `relationReview=accepted:${output.buildStats.relationReviewedAccepted} hypothesis:${output.buildStats.relationReviewedHypothesis} rejected:${output.buildStats.relationReviewedRejected} completedJobs:${output.buildStats.relationReviewJobsCompleted} learningEvents:${output.buildStats.learningEvents} searchFeedbackSignals:${output.buildStats.searchFeedbackSignals}`
+            : null,
+        output.buildStats
             ? `llmCache=hitUnits:${output.buildStats.llmCacheHitUnits} missUnits:${output.buildStats.llmCacheMissUnits} entries:${output.buildStats.llmCacheEntries}`
             : null,
         output.scopePreview?.hotDocIds?.length
