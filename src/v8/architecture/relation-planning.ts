@@ -7,12 +7,14 @@ import type {
     V8GraphNode,
     V8GroupSummary,
     V8HintSource,
+    V8LearningEvent,
     V8NarrativeShardSelection,
     V8RecallBundleProjection,
     V8RelationCandidateHit,
     V8RelationReviewJob,
     V8RelationSearchPlan,
     V8ScoredHint,
+    V8SearchFeedbackSignal,
     V8SearchLane,
 } from "../types_v8.js";
 
@@ -21,6 +23,8 @@ export interface BuildRelationPlanningArtifactsInput {
     edges: V8GraphEdge[];
     evidenceSpans: V8EvidenceSpan[];
     recallBundles: V8RecallBundleProjection[];
+    searchFeedbackSignals?: V8SearchFeedbackSignal[];
+    learningEvents?: V8LearningEvent[];
     compilePhase: "stream" | "final";
 }
 
@@ -32,6 +36,11 @@ export interface RelationPlanningArtifacts {
     narrativeShardSelections: V8NarrativeShardSelection[];
     relationCandidateHits: V8RelationCandidateHit[];
     relationReviewJobs: V8RelationReviewJob[];
+}
+
+interface SearchHintPriors {
+    globalDeltaByHint: Map<string, number>;
+    laneDeltaByHint: Map<V8SearchLane, Map<string, number>>;
 }
 
 const ANCHOR_MEMORY_TYPES = new Set<string>([
@@ -80,6 +89,10 @@ export function buildRelationPlanningArtifacts(
     const spanById = new Map(input.evidenceSpans.map((span) => [span.id, span]));
     const bundlesByNodeId = indexBundlesByNode(input.recallBundles);
     const allShardHints = buildGlobalShardHints(input.evidenceSpans);
+    const hintPriors = buildSearchHintPriors(
+        input.searchFeedbackSignals || [],
+        input.learningEvents || []
+    );
 
     const anchorNodes = input.nodes.filter(isAnchorNode);
     const entityPostings: V8EntityPosting[] = [];
@@ -107,6 +120,7 @@ export function buildRelationPlanningArtifacts(
         nodes: anchorNodes,
         bundlesByNodeId,
         allShardHints,
+        hintPriors,
         compilePhase: input.compilePhase,
     });
     const { relationCandidateHits, relationReviewJobs } = buildRelationCandidateHitsAndJobs({
@@ -344,6 +358,7 @@ function buildRelationSearchPlans(input: {
     nodes: V8GraphNode[];
     bundlesByNodeId: Map<string, V8RecallBundleProjection[]>;
     allShardHints: V8ScoredHint[];
+    hintPriors: SearchHintPriors;
     compilePhase: "stream" | "final";
 }): {
     relationSearchPlans: V8RelationSearchPlan[];
@@ -368,12 +383,18 @@ function buildRelationSearchPlans(input: {
         if (!node) continue;
         const bundles = input.bundlesByNodeId.get(card.entityNodeId) || [];
         for (const lane of lanes) {
-            const edgeFamilyHints = selectHintsByLane(card.edgeFamilyHints, lane, 8);
+            const edgeFamilyHints = selectHintsByLane(
+                card.edgeFamilyHints,
+                lane,
+                8,
+                input.hintPriors
+            );
             if (edgeFamilyHints.length === 0) continue;
             const shardHints = selectShardHintsByLane(
                 card.shardHints,
                 input.allShardHints,
-                lane
+                lane,
+                input.hintPriors
             );
             const planId = `rsp_${shortHash(`${card.id}|${lane}`)}`;
             const scope = input.compilePhase === "stream" ? "local_active" : "global_archive";
@@ -519,48 +540,77 @@ function buildRelationCandidateHitsAndJobs(input: {
 function selectShardHintsByLane(
     cardHints: V8ScoredHint[],
     allShardHints: V8ScoredHint[],
-    lane: V8SearchLane
+    lane: V8SearchLane,
+    priors: SearchHintPriors
 ): V8ScoredHint[] {
+    const rankByPrior = (hints: V8ScoredHint[]) =>
+        rankHintsWithPriors(hints, lane, priors);
     if (cardHints.length === 0) {
-        if (lane === "focused") return allShardHints.slice(0, 3);
-        if (lane === "broadened") return allShardHints.slice(0, 6);
-        return allShardHints.slice(0, 5).map((hint) => ({
-            ...hint,
-            source: "novelty" as V8HintSource,
-        }));
+        if (lane === "focused") return rankByPrior(allShardHints).slice(0, 3);
+        if (lane === "broadened") return rankByPrior(allShardHints).slice(0, 6);
+        return rankByPrior(
+            allShardHints.slice(0, 5).map((hint) => ({
+                ...hint,
+                source: "novelty" as V8HintSource,
+            }))
+        ).slice(0, 5);
     }
+    const rankedCardHints = rankByPrior(cardHints);
     if (lane === "focused") {
-        return cardHints.slice(0, 4);
+        return rankedCardHints.slice(0, 4);
     }
     if (lane === "broadened") {
-        return cardHints.slice(0, 8);
+        return rankedCardHints.slice(0, 8);
     }
-    const primary = cardHints.slice(0, 3);
+    const primary = rankedCardHints.slice(0, 3);
     const seen = new Set(primary.map((hint) => hint.id));
-    const novelty = allShardHints
+    const novelty = rankByPrior(
+        allShardHints
         .filter((hint) => !seen.has(hint.id))
         .slice(0, 5)
-        .map((hint) => ({ ...hint, source: "novelty" as V8HintSource }));
+        .map((hint) => ({ ...hint, source: "novelty" as V8HintSource }))
+    );
     return [...primary, ...novelty];
 }
 
 function selectHintsByLane(
     hints: V8ScoredHint[],
     lane: V8SearchLane,
-    maxCount: number
+    maxCount: number,
+    priors: SearchHintPriors
 ): V8ScoredHint[] {
     if (hints.length === 0) return [];
-    if (lane === "focused") return hints.slice(0, Math.min(4, maxCount));
-    if (lane === "broadened") return hints.slice(0, Math.min(8, maxCount));
-    const selected = hints.slice(0, Math.min(6, maxCount));
+    const ranked = rankHintsWithPriors(hints, lane, priors);
+    if (lane === "focused") return ranked.slice(0, Math.min(4, maxCount));
+    if (lane === "broadened") return ranked.slice(0, Math.min(8, maxCount));
+    const selected = ranked.slice(0, Math.min(6, maxCount));
     if (selected.length < maxCount) {
-        const tail = hints
-            .slice(Math.min(8, hints.length))
+        const tail = ranked
+            .slice(Math.min(8, ranked.length))
             .slice(0, Math.max(0, maxCount - selected.length))
             .map((hint) => ({ ...hint, source: "novelty" as V8HintSource }));
         selected.push(...tail);
     }
     return selected.slice(0, maxCount);
+}
+
+function rankHintsWithPriors(
+    hints: V8ScoredHint[],
+    lane: V8SearchLane,
+    priors: SearchHintPriors
+): V8ScoredHint[] {
+    return hints
+        .map((hint) => {
+            const globalDelta = priors.globalDeltaByHint.get(hint.id) || 0;
+            const laneDelta = priors.laneDeltaByHint.get(lane)?.get(hint.id) || 0;
+            const delta = globalDelta + laneDelta;
+            return {
+                ...hint,
+                score: round3(clamp01(hint.score + delta)),
+                source: Math.abs(delta) >= 0.03 ? ("feedback" as V8HintSource) : hint.source,
+            };
+        })
+        .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 }
 
 function buildQueryTerms(card: V8EntityScopeCard, node: V8GraphNode): string[] {
@@ -691,6 +741,76 @@ function planPriority(plan: V8RelationSearchPlan): number {
     return edge * scope * laneWeight;
 }
 
+function buildSearchHintPriors(
+    signals: V8SearchFeedbackSignal[],
+    learningEvents: V8LearningEvent[]
+): SearchHintPriors {
+    const globalDeltaByHint = new Map<string, number>();
+    const laneDeltaByHint = new Map<V8SearchLane, Map<string, number>>([
+        ["focused", new Map()],
+        ["broadened", new Map()],
+        ["exploratory", new Map()],
+    ]);
+    const now = Date.now();
+
+    for (const signal of signals) {
+        const lane: V8SearchLane =
+            signal.lane === "broadened" || signal.lane === "exploratory"
+                ? signal.lane
+                : "focused";
+        const ts = Date.parse(signal.createdAt || "");
+        const ageDays =
+            Number.isNaN(ts) || ts <= 0 ? 30 : Math.max(0, (now - ts) / 86400000);
+        const decay = Math.exp(-ageDays / 45);
+        const delta = clampDelta(signal.scoreDelta * decay);
+        for (const hintId of signal.hintIds || []) {
+            accumulateDelta(globalDeltaByHint, hintId, delta);
+            accumulateDelta(laneDeltaByHint.get(lane)!, hintId, delta * 0.85);
+        }
+    }
+
+    for (const event of learningEvents) {
+        if (
+            event.eventType !== "review_relation_accepted" &&
+            event.eventType !== "review_relation_rejected"
+        ) {
+            continue;
+        }
+        const edgeType = String(event.features?.edgeType || "").trim();
+        if (!edgeType) continue;
+        const base = event.eventType === "review_relation_accepted" ? 0.04 : -0.04;
+        accumulateDelta(globalDeltaByHint, edgeType, base);
+    }
+
+    capDeltaMap(globalDeltaByHint, 0.35);
+    for (const laneMap of laneDeltaByHint.values()) {
+        capDeltaMap(laneMap, 0.25);
+    }
+
+    return {
+        globalDeltaByHint,
+        laneDeltaByHint,
+    };
+}
+
+function accumulateDelta(map: Map<string, number>, hintId: string, delta: number): void {
+    const normalizedId = (hintId || "").trim();
+    if (!normalizedId) return;
+    if (!Number.isFinite(delta) || delta === 0) return;
+    map.set(normalizedId, (map.get(normalizedId) || 0) + delta);
+}
+
+function capDeltaMap(map: Map<string, number>, cap: number): void {
+    for (const [key, value] of map.entries()) {
+        map.set(key, clampDelta(value, cap));
+    }
+}
+
+function clampDelta(value: number, cap = 0.35): number {
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(-cap, Math.min(cap, value));
+}
+
 function compareTs(a: string | null, b: string | null): number {
     const aTs = a ? Date.parse(a) : NaN;
     const bTs = b ? Date.parse(b) : NaN;
@@ -713,6 +833,11 @@ function normalizeShardId(value: string): string {
 
 function round3(value: number): number {
     return Math.round(value * 1000) / 1000;
+}
+
+function clamp01(value: number): number {
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(0, Math.min(1, value));
 }
 
 function buildReviewQuestion(plan: V8RelationSearchPlan): string {

@@ -38,9 +38,11 @@ import type {
     V8HypothesisEdge,
     V8IgnitionEdgeProjection,
     V8IgnitionNodeProjection,
+    V8LearningEvent,
     V8MemoryItem,
     V8NarrativeRecord,
     V8RecallBundleProjection,
+    V8SearchFeedbackSignal,
     V8ReviewedRelation,
     V8Unit,
 } from "./types_v8.js";
@@ -576,6 +578,10 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     logStage(`graph materialized (nodes=${nodes.length} edges=${baseEdges.length})`);
     const reviewedRelationsInput = readJsonl<V8ReviewedRelation>(store.reviewedRelations);
     const existingHypothesisEdges = readJsonl<V8HypothesisEdge>(store.hypothesisEdges);
+    const existingLearningEvents = readJsonl<V8LearningEvent>(store.learningEvents);
+    const existingSearchFeedbackSignals = readJsonl<V8SearchFeedbackSignal>(
+        store.searchFeedbackSignals
+    );
     const reviewedOverlay = applyReviewedRelationsToGraph({
         nodes,
         edges: baseEdges,
@@ -600,6 +606,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         edges,
         evidenceSpans,
         recallBundles: projections.recallBundles,
+        searchFeedbackSignals: existingSearchFeedbackSignals,
+        learningEvents: existingLearningEvents,
         compilePhase,
     });
     buildStats.relationEntityPostings = relationPlanning.entityPostings.length;
@@ -615,9 +623,17 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         relationReviewJobs: relationPlanning.relationReviewJobs,
         relationSearchPlans: relationPlanning.relationSearchPlans,
     });
+    const mergedLearningEvents = mergeRecordsById([
+        ...existingLearningEvents,
+        ...reviewedArtifacts.learningEvents,
+    ]);
+    const mergedSearchFeedbackSignals = mergeRecordsById([
+        ...existingSearchFeedbackSignals,
+        ...reviewedArtifacts.searchFeedbackSignals,
+    ]);
     buildStats.relationReviewJobsCompleted = reviewedArtifacts.stats.completedJobs;
-    buildStats.learningEvents = reviewedArtifacts.stats.learningEvents;
-    buildStats.searchFeedbackSignals = reviewedArtifacts.stats.searchFeedbackSignals;
+    buildStats.learningEvents = mergedLearningEvents.length;
+    buildStats.searchFeedbackSignals = mergedSearchFeedbackSignals.length;
     logStage("relation planning artifacts built");
     writeJsonl(store.units, units);
     writeJsonl(store.evidenceSpans, evidenceSpans);
@@ -639,8 +655,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     writeJsonl(store.relationReviewJobs, reviewedArtifacts.relationReviewJobs);
     writeJsonl(store.reviewedRelations, reviewedOverlay.reviewedRelations);
     writeJsonl(store.hypothesisEdges, reviewedOverlay.hypothesisEdges);
-    writeJsonl(store.learningEvents, reviewedArtifacts.learningEvents);
-    writeJsonl(store.searchFeedbackSignals, reviewedArtifacts.searchFeedbackSignals);
+    writeJsonl(store.learningEvents, mergedLearningEvents);
+    writeJsonl(store.searchFeedbackSignals, mergedSearchFeedbackSignals);
     if (!isPartialBuild) {
         persistBuildManifest(store.buildManifest, loadedNarrativeDocs);
         persistNarrativeCompileState(
@@ -1069,6 +1085,15 @@ function clearJsonlFiles(filePaths: string[]): void {
             // ignore cleanup failures
         }
     }
+}
+
+function mergeRecordsById<T extends { id: string }>(records: T[]): T[] {
+    const map = new Map<string, T>();
+    for (const record of records) {
+        if (!record?.id) continue;
+        map.set(record.id, record);
+    }
+    return Array.from(map.values()).sort((a, b) => a.id.localeCompare(b.id));
 }
 
 function buildScopePreview(
