@@ -75,6 +75,12 @@ export const MemoryConsolidateParams = Type.Object({
                 "Hot window (hours) used by rebuild_mode=hybrid to force recent docs through full recompilation.",
         })
     ),
+    rule_ir_mode: Type.Optional(
+        Type.Union([Type.Literal("off"), Type.Literal("micro_light")], {
+            description:
+                "Rule-based IR extraction mode. micro_light adds lightweight micro anchors before LLM IR merge.",
+        })
+    ),
 });
 
 export type MemoryConsolidateInput = Static<typeof MemoryConsolidateParams>;
@@ -147,6 +153,10 @@ export async function executeMemoryConsolidate(
             : typeof (pluginConfig as any)?.v8HotWindowHours === "number"
               ? (pluginConfig as any).v8HotWindowHours
               : undefined;
+    const ruleIrMode =
+        (params.rule_ir_mode as "off" | "micro_light" | undefined) ||
+        ((pluginConfig as any)?.v8RuleIrMode as "off" | "micro_light" | undefined) ||
+        "off";
 
     const output = await buildCleanSlateGraph({
         workspace,
@@ -162,6 +172,7 @@ export async function executeMemoryConsolidate(
         llmCommandTimeoutMs: llmTimeoutMs,
         rebuildMode,
         hotWindowHours,
+        ruleIrMode,
     });
 
     const summary = [
@@ -176,6 +187,7 @@ export async function executeMemoryConsolidate(
         startAt ? `startAt=${startAt}` : null,
         stopAfter ? `stopAfter=${stopAfter}` : null,
         planOnly ? "planOnly=true" : null,
+        `ruleIrMode=${ruleIrMode}`,
         `rebuildMode=${rebuildMode}`,
         hotWindowHours ? `hotWindowHours=${hotWindowHours}` : null,
         maxNarrativeDocs ? `devFastBuildMarker=${DEV_FAST_BUILD_MARKER}` : null,
@@ -206,6 +218,9 @@ export async function executeMemoryConsolidate(
             : null,
         output.buildStats
             ? `sourceNormalization=records:${output.buildStats.sourceNormalizationRecordCount} touchedRecords:${output.buildStats.sourceNormalizationTouchedRecords} rawChars:${output.buildStats.sourceNormalizationRawChars} cleanChars:${output.buildStats.sourceNormalizationCleanChars} removedChars:${output.buildStats.sourceNormalizationRemovedChars} removedRatioPct:${output.buildStats.sourceNormalizationRemovedRatioPct.toFixed(2)}`
+            : null,
+        output.buildStats
+            ? `irExtraction=rule:${output.buildStats.irRuleItems} llm:${output.buildStats.irLlmItems} fallback:${output.buildStats.irFallbackItems} fallbackApplied:${output.buildStats.irFallbackApplied}`
             : null,
         output.scopePreview?.hotDocIds?.length
             ? `hotDocPreview=${output.scopePreview.hotDocIds.slice(0, 8).join(",")}`
