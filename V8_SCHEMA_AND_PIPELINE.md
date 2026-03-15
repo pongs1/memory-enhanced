@@ -1096,6 +1096,21 @@ The practical retrieval flow is:
 3. rerank by structural fit and current task anchors
 4. align final candidates back to evidence spans
 
+### 9.8.1 Archive search tool contract (V9-compatible)
+
+To align with V9's "Graph is guide, Archive is truth", serving should expose an explicit archive search tool:
+
+- `memory_search_archive(query, mode=hybrid|bm25|vector, top_k)`
+- step 1: retrieve candidate `evidence_span` ids via BM25 + vector
+- step 2: resolve `span -> narrativeRef + charStart/charEnd`
+- step 3: read original narrative text slice by offsets, then return to LLM
+
+This keeps online recall light:
+
+- graph ignition only injects compact IR/map hints
+- deep evidence loading happens only when the LLM calls archive search
+- evidence always returns as span-backed raw text, not regenerated summaries
+
 ### 9.9 Edge participation profiles for runtime
 
 Edge typing and runtime propagation are separate, but runtime still needs a stable participation contract.

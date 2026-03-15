@@ -1,9 +1,10 @@
 /**
  * memory-enhanced — OpenClaw plugin entry point.
  *
- * Registers 2 agent tools:
+ * Registers 3 agent tools:
  *   - memory_consolidate: Build V8 clean-slate graph from session traces
  *   - memory_working:     Passive working-memory ledger & scratchpad
+ *   - memory_search_archive: Hybrid BM25+vector span search over raw archive
  *
  * These complement (not replace) the built-in memory_search and memory_get tools.
  */
@@ -16,6 +17,10 @@ import {
     executeMemoryWorking,
     MemoryWorkingParams,
 } from "./tools/memory_working.js";
+import {
+    executeMemorySearchArchive,
+    MemorySearchArchiveParams,
+} from "./tools/memory_search_archive.js";
 
 import {
     isSyntheticControlRequest,
@@ -156,6 +161,17 @@ export default function register(api: OpenClawPluginApi) {
             "Use 'scratchpad_append' for rough notes and 'scratchpad_refill' to recover parked tasks.",
         parameters: MemoryWorkingParams,
         execute: toolExecute(executeMemoryWorking),
+    });
+
+    // --- memory_search_archive ---
+    api.registerTool({
+        name: "memory_search_archive",
+        label: "Search Archive",
+        description:
+            "Search evidence spans from raw session archive with hybrid BM25 + vector scoring, " +
+            "then return span hits with original narrative text context.",
+        parameters: MemorySearchArchiveParams,
+        execute: toolExecute(executeMemorySearchArchive),
     });
 
     // --- HOOKS ---

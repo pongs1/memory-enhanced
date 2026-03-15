@@ -48,7 +48,7 @@ When the user asks, *"Why did the system crash when I uploaded a huge image?"*
 1. **Stream Ignition (System 1):** The user's tokens trigger the graph. The graph activates `IR Node: 'Image Upload Out-Of-Memory (Meso)'` and `IR Node: 'Nginx Body Size Limit (Macro)'`.
 2. **Context Assembly:** V9 does **NOT** query the vector database yet. It simply injects these two lightweight IR nodes into the system prompt as "Hot Hints."
 3. **LLM Evaluation:** The LLM reads the user prompt, sees the Hot Hints, and realizes: *"I need the exact Nginx error code and the exact container timestamp."*
-4. **Tool Execution (System 2):** The LLM autonomously executes `search_memory(query="Nginx Body Size Limit timeout", source="raw_archive")`.
+4. **Tool Execution (System 2):** The LLM autonomously executes `memory_search_archive(query="Nginx Body Size Limit timeout", mode="hybrid")`.
 5. **Final Generation:** The BM25+Vector archive returns the pristine, undisturbed raw server blocks. The LLM then generates a perfectly grounded response.
 
 ---
