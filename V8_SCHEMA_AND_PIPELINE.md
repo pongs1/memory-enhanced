@@ -193,6 +193,20 @@ Required pre-clean steps:
 - keep high-signal regions such as errors, warnings, verdict lines, selected excerpts, result heads/tails
 - leave semantic denoising to the later unit/IR stage instead of trying to fully solve it here
 
+Current default strip targets (code-level, regex based):
+
+- injected memory blocks:
+  - `<!-- Memory Context (Live) --> ... <!-- End Memory Context -->`
+  - `<!-- Memory Recall ... -->`
+  - `<memory-context> ... </memory-context>`
+- task/control wrappers:
+  - `<task-ledger> ... </task-ledger>`
+  - `<!-- Task Ledger ... -->`
+- transport/prompt scaffolding lines:
+  - `Conversation info (untrusted metadata): ...`
+  - `Current time: ...`
+  - heartbeat trigger/ack lines (`Read HEARTBEAT.md`, `HEARTBEAT_OK`)
+
 Practical rule:
 
 - high-density natural-language tool output may pass through almost unchanged after wrapper stripping
@@ -1091,8 +1105,7 @@ Practical compile switches:
 - build diagnostics snapshot is persisted to `.memory/runtime/build_report.json` and `.memory/runtime/build_report.md`
 - tool summary includes compact `hotDocPreview/coldDocPreview/removedDocPreview` for quick inspection
 - build summary/report includes `sourceNarrativeWrittenFiles/sourceNarrativeSkippedFiles` to show write-avoidance efficiency
-- source-stage assembly also removes stale `session_*_narrative.md` files not present in current build output
-  - stale pruning is skipped when `max_session_files` is set (partial source ingestion guard)
+- source-stage assembly is append-only for `session_*_narrative.md` and never prunes existing narrative files
 - when `max_narrative_docs` is set, the run is marked as partial and does not update `build_manifest.json`
 - when `stop_after` is used, downstream artifact files are cleared to avoid stale graph/runtime reads
 - when `start_at=source`, assembled narratives are passed through in-memory to unitization (no immediate write-read roundtrip)

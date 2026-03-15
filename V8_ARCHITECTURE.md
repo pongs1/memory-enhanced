@@ -956,8 +956,7 @@ It is no longer the place where basic memory structure first appears.
 - optional diagnostics-only run: `plan_only=true` to inspect hot/cold scope without recompiling artifacts
 - each run writes diagnostics to `.memory/runtime/build_report.json` and `.memory/runtime/build_report.md` for tuning
 - partial runs (`max_narrative_docs`) do not update the incremental manifest baseline
-- source-stage narrative assembly removes stale `session_*_narrative.md` files that are no longer part of current output
-  - stale pruning is disabled when source ingestion is capped (`max_session_files`) to avoid partial-run data loss
+- source-stage narrative assembly is append-only for `session_*_narrative.md` (no stale file pruning)
 
 Temporary marker is kept in code to avoid forgetting cleanup:
 
