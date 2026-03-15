@@ -43,6 +43,7 @@ interface LoadedGraphData {
     edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>;
     policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
     groupBundles: V8RecallBundleProjection[];
+    groupBundleTokens: Map<string, Set<string>>;
     hypothesisEdges: V8HypothesisEdge[];
 }
 
@@ -235,6 +236,14 @@ export class V8GraphScanner {
             ? loadJsonl<V8RecallBundleProjection>(store.recallBundles)
             : [];
         const hypothesisEdges = loadHypothesisEdges(this.workspace);
+        const groupBundles = recallBundles.filter(
+            (bundle) => bundle.bundleId.startsWith("group_") && bundle.nodeIds.length >= 2
+        );
+        const groupBundleTokens = new Map<string, Set<string>>();
+        for (const bundle of groupBundles) {
+            const text = `${bundle.title || ""} ${bundle.summaryText || ""}`.trim();
+            groupBundleTokens.set(bundle.bundleId, new Set(tokenize(text)));
+        }
 
         const nodesById = new Map<string, V8GraphNode>();
         const nodeTokens = new Map<string, Set<string>>();
@@ -376,9 +385,8 @@ export class V8GraphScanner {
             nodeDayKeys,
             edgeKinds,
             policyByKindMode,
-            groupBundles: recallBundles.filter(
-                (bundle) => bundle.bundleId.startsWith("group_") && bundle.nodeIds.length >= 2
-            ),
+            groupBundles,
+            groupBundleTokens,
             hypothesisEdges,
         };
     }
@@ -705,6 +713,10 @@ export class V8GraphScanner {
                 activeNodeIds.add(nodeId);
             }
         }
+        const currentTokens = new Set(tokenize(this.recentWindow));
+        const baseEnergyAvg =
+            baseBundles.reduce((sum, bundle) => sum + bundle.energy, 0) /
+            Math.max(1, baseBundles.length);
 
         const extraBundles: V8ActivatedBundle[] = [];
         for (const group of this.graph.groupBundles) {
@@ -712,21 +724,34 @@ export class V8GraphScanner {
             if (cooldownUntil > now) continue;
 
             const overlapNodeIds = group.nodeIds.filter((nodeId) => activeNodeIds.has(nodeId));
-            if (overlapNodeIds.length < 2) continue;
-
             const overlapRatio = overlapNodeIds.length / Math.max(1, group.nodeIds.length);
-            let activationSum = 0;
-            for (const nodeId of overlapNodeIds) {
-                activationSum += this.activations.get(nodeId) || 0;
+            let energy = 0;
+            let selectedNodeIds = overlapNodeIds.slice();
+
+            if (overlapNodeIds.length >= 2) {
+                let activationSum = 0;
+                for (const nodeId of overlapNodeIds) {
+                    activationSum += this.activations.get(nodeId) || 0;
+                }
+                const meanActivation = activationSum / overlapNodeIds.length;
+                energy = clamp01(meanActivation * (0.65 + 0.35 * overlapRatio));
+            } else {
+                // Similar bundle-group backfill: allow triggering by semantic match
+                // even when current active nodes are not the exact historical nodes.
+                if (baseBundles.length < 2) continue;
+                const groupTokens = this.graph.groupBundleTokens.get(group.bundleId) || new Set<string>();
+                const semanticOverlap = overlapScore(currentTokens, groupTokens);
+                if (semanticOverlap < 0.22) continue;
+                selectedNodeIds = group.nodeIds.slice(0, Math.min(4, group.nodeIds.length));
+                energy = clamp01(baseEnergyAvg * 0.45 + semanticOverlap * 0.55);
             }
-            const meanActivation = activationSum / overlapNodeIds.length;
-            const energy = clamp01(meanActivation * (0.65 + 0.35 * overlapRatio));
+
             const tier = scoreTier(energy, this.config);
             if (!tier) continue;
 
             extraBundles.push({
                 bundleId: group.bundleId,
-                nodeIds: overlapNodeIds,
+                nodeIds: selectedNodeIds,
                 tier,
                 energy,
                 evidenceSpanIds:
