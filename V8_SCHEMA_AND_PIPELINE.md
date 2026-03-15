@@ -965,7 +965,7 @@ High-value relations should also reserve normalized qualifiers:
 - `certainty`
 - `evidence_unit_ids`
 
-The full-feature expansion path remains preserved in `memory-enhanced/V9_FULL_FEATURE_REFERENCE.md`.
+The full-feature expansion path remains preserved in a separate reference.
 
 ### 9.4 Vertical mappings and state-overlay taxonomy
 
@@ -1096,20 +1096,42 @@ The practical retrieval flow is:
 3. rerank by structural fit and current task anchors
 4. align final candidates back to evidence spans
 
-### 9.8.1 Archive search tool contract (V9-compatible)
+### 9.8.1 Archive search tool contract (integrated into V8)
 
-To align with V9's "Graph is guide, Archive is truth", serving should expose an explicit archive search tool:
+V8 should expose an explicit archive search interface to complete multi-path retrieval:
 
-- `memory_search_archive(query, mode=hybrid|bm25|vector, top_k)`
+- `memory_search_archive(query, mode=hybrid|bm25|vector, top_k, hint_span_ids?, hint_bundle_ids?)`
 - step 1: retrieve candidate `evidence_span` ids via BM25 + vector
-- step 2: resolve `span -> narrativeRef + charStart/charEnd`
-- step 3: read original narrative text slice by offsets, then return to LLM
+- step 2: apply optional graph-guided rerank using hint spans, bundles, and active mode (`profile|trajectory|oblique|audit`)
+- step 3: resolve `span -> narrativeRef + charStart/charEnd`
+- step 4: read original narrative text slice by offsets, then return to LLM
 
-This keeps online recall light:
+This keeps online recall light while avoiding retrieval noise storms:
 
-- graph ignition only injects compact IR/map hints
-- deep evidence loading happens only when the LLM calls archive search
+- ignition injects compact IR/map hints first, not heavy raw payloads
+- deep evidence loading happens only when the model explicitly asks for search
 - evidence always returns as span-backed raw text, not regenerated summaries
+- graph hints constrain lexical/vector search to the right semantic neighborhood
+
+### 9.8.2 Graph-guided search planning contract
+
+To improve over plain Mem0/LanceDB-style top-k retrieval, V8 should add a light query planning layer before archive search:
+
+- build `search_hints` from activated memory:
+  - hot `micro` bundle ids
+  - linked `group` summary ids
+  - relation-direction hints (`horizontal`, `vertical`, `oblique`)
+  - optional time/state anchors from control context
+- generate high-quality query terms from active IR labels + relation context, not from user text alone
+- run search with both:
+  - semantic intent terms (what the model wants now)
+  - anchored terms (what V8 says is likely relevant evidence)
+
+This contract should ensure:
+
+- if current recalled memory is incomplete, the model can still climb from injected span/unit anchors to the exact evidence it needs
+- same-attribute/same-semantic but cross-topic evidence is retrievable with much lower noise
+- vertical and oblique relationships can be searched deliberately instead of relying on random vector neighbors
 
 ### 9.9 Edge participation profiles for runtime
 

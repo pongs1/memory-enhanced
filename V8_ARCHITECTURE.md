@@ -97,7 +97,7 @@ V8 keeps `L0 Control` and rewrites the rest around a shared ingestion model.
 `L0` is intentionally separate.
 Focus stack is execution control, not long-term memory.
 
-The full-feature relation/taxonomy variant is preserved separately in `memory-enhanced/V9_FULL_FEATURE_REFERENCE.md` so V8 can stay lean without losing the richer design work.
+The full-feature relation/taxonomy variant is preserved as a separate reference so V8 can stay lean without losing richer design options.
 
 ## 4. The Soul of V8: Online Ignition
 
@@ -479,7 +479,7 @@ Each unit should emit only the relations actually supported by local evidence.
 Within each layer, extraction should stay inside that layer's bounded relation range.
 Absent relation types are simply absent.
 
-The fuller expansion path is still preserved in `memory-enhanced/V9_FULL_FEATURE_REFERENCE.md`, but the bounded relation scope itself belongs to current V8.
+The fuller expansion path is still preserved in a separate reference, but the bounded relation scope itself belongs to current V8.
 
 ### 9.4 Vertical mappings and state/trajectory overlay
 
@@ -773,6 +773,43 @@ Rules:
 - stale or repeatedly unsupported hypotheses should decay out
 
 This keeps exploratory creativity available while protecting day-to-day recall precision.
+
+### 10.10 Graph-guided archive search (anti-noise-storm retrieval)
+
+V8 should include an explicit second-stage archive search path, but keep it graph-guided.
+
+Goal:
+
+- avoid pure top-k lexical/vector noise storms
+- let the model retrieve deeper evidence only when needed
+- preserve span-grounded provenance
+
+Serving contract:
+
+- first inject compact graph memory (`micro`/`group` bundle hints, active state hints)
+- if memory is incomplete for the current answer, let the model call archive search
+- archive search returns `span` hits first, then raw narrative slices by offsets
+
+Interface (contract-level):
+
+- `memory_search_archive(query, mode=hybrid|bm25|vector, top_k, hint_span_ids?, hint_bundle_ids?)`
+- returned item should contain at least:
+  - `span_id`, `unit_id`, `score`
+  - `narrativeRef`, `charStart`, `charEnd`
+  - `span_text`, `raw_text`
+
+Rerank priority:
+
+- structural fit to activated graph neighborhood
+- scope and mode fit (`profile|trajectory|oblique|audit`)
+- evidence density and contradiction risk
+
+This is the missing piece over plain Mem0/LanceDB-style retrieval:
+
+- graph gives the model high-quality search direction
+- BM25/vector gives broad candidate coverage
+- span-first grounding prevents large irrelevant payload injection
+- vertical/oblique relations can be searched deliberately, not by chance
 
 ## 11. Where `knowledge` and `skill` Fit
 
