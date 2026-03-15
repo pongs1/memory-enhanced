@@ -629,16 +629,18 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         relationPlanning.narrativeShardSelections.length;
     buildStats.relationCandidateHits = relationPlanning.relationCandidateHits.length;
     buildStats.relationReviewJobs = relationPlanning.relationReviewJobs.length;
-    writeRelationReviewJobsMarkdown({
-        filePath: store.relationReviewJobsMd,
-        jobs: relationPlanning.relationReviewJobs,
-        plans: relationPlanning.relationSearchPlans,
-        candidateHits: relationPlanning.relationCandidateHits,
-        nodes,
-        evidenceSpans,
-    });
     const relationReviewLlmCommand = (options?.relationReviewLlmCommand || "").trim();
     const relationReviewLlmEnabled = relationReviewLlmCommand.length > 0;
+    if (relationReviewLlmEnabled) {
+        writeRelationReviewJobsMarkdown({
+            filePath: store.relationReviewJobsMd,
+            jobs: relationPlanning.relationReviewJobs,
+            plans: relationPlanning.relationSearchPlans,
+            candidateHits: relationPlanning.relationCandidateHits,
+            nodes,
+            evidenceSpans,
+        });
+    }
     const relationReviewLlmStatus = relationReviewLlmEnabled
         ? relationPlanning.relationReviewJobs.length > 0
             ? maybeRunRelationReviewLlm({
