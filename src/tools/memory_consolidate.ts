@@ -23,6 +23,22 @@ export const MemoryConsolidateParams = Type.Object({
                 "or rely on V8_IR_JOBS/V8_IR_ITEMS_MD/V8_IR_ITEMS_JSONL env vars.",
         })
     ),
+    rebuild_mode: Type.Optional(
+        Type.Union(
+            [Type.Literal("full"), Type.Literal("incremental"), Type.Literal("hybrid")],
+            {
+                description:
+                    "Build scope mode. full=rebuild all; incremental=only changed narrative docs; hybrid=changed + recent hot window.",
+            }
+        )
+    ),
+    hot_window_hours: Type.Optional(
+        Type.Number({
+            minimum: 1,
+            description:
+                "Hot window (hours) used by rebuild_mode=hybrid to force recent docs through full recompilation.",
+        })
+    ),
 });
 
 export type MemoryConsolidateInput = Static<typeof MemoryConsolidateParams>;
@@ -47,19 +63,37 @@ export async function executeMemoryConsolidate(
         typeof (pluginConfig as any)?.v8IrLlmTimeoutMs === "number"
             ? (pluginConfig as any).v8IrLlmTimeoutMs
             : undefined;
+    const rebuildMode =
+        (params.rebuild_mode as "full" | "incremental" | "hybrid" | undefined) ||
+        ((pluginConfig as any)?.v8RebuildMode as
+            | "full"
+            | "incremental"
+            | "hybrid"
+            | undefined) ||
+        "hybrid";
+    const hotWindowHours =
+        typeof params.hot_window_hours === "number"
+            ? params.hot_window_hours
+            : typeof (pluginConfig as any)?.v8HotWindowHours === "number"
+              ? (pluginConfig as any).v8HotWindowHours
+              : undefined;
 
-    const output = buildCleanSlateGraph({
+    const output = await buildCleanSlateGraph({
         workspace,
         sessionTraceDir,
         maxSessionFiles,
         llmCommand,
         llmCommandTimeoutMs: llmTimeoutMs,
+        rebuildMode,
+        hotWindowHours,
     });
 
     const summary = [
         "Clean-slate V8 build completed.",
         `sessionTraceDir=${sessionTraceDir || "default"}`,
         maxSessionFiles ? `maxSessionFiles=${maxSessionFiles}` : null,
+        `rebuildMode=${rebuildMode}`,
+        hotWindowHours ? `hotWindowHours=${hotWindowHours}` : null,
         llmCommand ? `llmStatus=${output.llmStatus}` : null,
         "units=narrative",
         output.toolCatalogCheck
@@ -68,7 +102,7 @@ export async function executeMemoryConsolidate(
         output.toolCatalogCheck?.promptPath
             ? `toolCatalogPrompt=${output.toolCatalogCheck.promptPath}`
             : null,
-        `narrativeRecords=${output.narrativeRecords.length}`,
+        `narrativeDocs=${output.narrativeDocs.length}`,
         `units=${output.units.length}`,
         `evidenceSpans=${output.evidenceSpans.length}`,
         `memoryItems=${output.memoryItems.length}`,

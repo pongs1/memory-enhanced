@@ -19,9 +19,20 @@ import { materializeGraph } from "./architecture/graph-materializer.js";
 import { buildRuntimeProjections } from "./architecture/runtime-projection.js";
 import { readJsonl, writeJsonl } from "./architecture/io.js";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { V8NarrativeRecord, V8Unit } from "./types_v8.js";
+import type {
+    V8EvidenceSpan,
+    V8GraphEdge,
+    V8GraphNode,
+    V8IgnitionEdgeProjection,
+    V8IgnitionNodeProjection,
+    V8MemoryItem,
+    V8NarrativeRecord,
+    V8RecallBundleProjection,
+    V8Unit,
+} from "./types_v8.js";
 
 export interface CleanSlateBuildOptions {
     workspace?: string;
@@ -35,6 +46,8 @@ export interface CleanSlateBuildOptions {
     emitUnitPreview?: boolean;
     workerCount?: number;
     ruleIrMode?: "off" | "micro_light";
+    rebuildMode?: "full" | "incremental" | "hybrid";
+    hotWindowHours?: number;
 }
 
 export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
@@ -96,35 +109,88 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         logStage("source normalization persisted");
     }
 
-    let narrativeDocs = loadNarrativeRecords(store.rawDir);
-    logStage(`narratives loaded (${narrativeDocs.length})`);
-    if (startAt === "narrative" && narrativeDocs.length === 0) {
+    let allNarrativeDocs = loadNarrativeRecords(store.rawDir);
+    logStage(`narratives loaded (${allNarrativeDocs.length})`);
+    if (startAt === "narrative" && allNarrativeDocs.length === 0) {
         throw new Error("No narrative docs found in .memory/raw/observations/assembled.");
     }
-    if (options?.maxNarrativeDocs && narrativeDocs.length > options.maxNarrativeDocs) {
-        narrativeDocs = narrativeDocs
+    if (options?.maxNarrativeDocs && allNarrativeDocs.length > options.maxNarrativeDocs) {
+        allNarrativeDocs = allNarrativeDocs
             .slice()
             .sort((a, b) => (a.sourceRef || "").localeCompare(b.sourceRef || ""))
             .slice(-options.maxNarrativeDocs);
     }
-    const units = await unitizeNarrativeRecordsParallel(
-        narrativeDocs,
+
+    const rebuildMode = options?.rebuildMode ?? "hybrid";
+    const hotWindowHours = Math.max(1, options?.hotWindowHours ?? 36);
+    const manifest = loadBuildManifest(store.buildManifest);
+    const scope = computeBuildScope({
+        narratives: allNarrativeDocs,
+        manifest,
+        mode: rebuildMode,
+        hotWindowHours,
+    });
+    logStage(
+        `build scope mode=${rebuildMode} hot=${scope.hotDocIds.size} cold=${scope.coldDocIds.size} removed=${scope.removedDocIds.size}`
+    );
+
+    const canReuseCache =
+        rebuildMode !== "full" &&
+        hasReusableArtifacts(store) &&
+        scope.coldDocIds.size > 0;
+    const cached = canReuseCache
+        ? loadCachedArtifactsForDocs(store, scope.coldDocIds, scope.activeDocIds)
+        : emptyCachedArtifacts();
+
+    const hotNarratives = allNarrativeDocs.filter((doc) => scope.hotDocIds.has(doc.id));
+    const hotBuildIsNoop =
+        hotNarratives.length === 0 &&
+        scope.removedDocIds.size === 0 &&
+        hasReusableArtifacts(store);
+
+    if (hotBuildIsNoop && options?.stopAfter !== "evidence" && options?.stopAfter !== "memory_ir") {
+        const reused = loadAllArtifacts(store);
+        logStage("no-op incremental build: reused all persisted artifacts");
+        return {
+            narrativeDocs: allNarrativeDocs,
+            units: reused.units,
+            evidenceSpans: reused.evidenceSpans,
+            memoryItems: reused.memoryItems,
+            llmJobs: [],
+            llmItems: [],
+            llmStatus: "skipped(no_changes)",
+            toolCatalogCheck,
+            nodes: reused.nodes,
+            edges: reused.edges,
+            ignitionNodes: reused.ignitionNodes,
+            ignitionEdges: reused.ignitionEdges,
+            recallBundles: reused.recallBundles,
+        };
+    }
+
+    const hotUnits = await unitizeNarrativeRecordsParallel(
+        hotNarratives,
         undefined,
         options?.workerCount ?? 1
     );
-    logStage(`units built (${units.length})`);
+    const units = [...cached.units, ...hotUnits];
+    logStage(`units built hot=${hotUnits.length} total=${units.length}`);
     if (options?.emitUnitPreview !== false) {
-        persistNarrativeUnitPreview(store.rawDir, units, narrativeDocs);
+        persistNarrativeUnitPreview(store.rawDir, units, allNarrativeDocs);
         logStage("unit preview written");
     }
-    const evidenceSpans = extractEvidenceSpans(units, narrativeDocs);
-    logStage(`evidence spans built (${evidenceSpans.length})`);
+    const hotEvidenceSpans = extractEvidenceSpans(hotUnits, hotNarratives);
+    const evidenceSpans = [...cached.evidenceSpans, ...hotEvidenceSpans];
+    logStage(
+        `evidence spans built hot=${hotEvidenceSpans.length} total=${evidenceSpans.length}`
+    );
     if (options?.stopAfter === "evidence") {
         writeJsonl(store.units, units);
         writeJsonl(store.evidenceSpans, evidenceSpans);
         logStage("evidence persisted");
+        persistBuildManifest(store.buildManifest, allNarrativeDocs);
         return {
-            narrativeDocs,
+            narrativeDocs: allNarrativeDocs,
             units,
             evidenceSpans,
             memoryItems: [],
@@ -139,35 +205,45 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             recallBundles: [],
         };
     }
-    const llmJobs = buildLlmIrJobs(units, evidenceSpans);
-    logStage(`llm jobs built (${llmJobs.length})`);
+
+    const llmJobs = buildLlmIrJobs(hotUnits, hotEvidenceSpans);
+    logStage(`llm jobs built hot=${llmJobs.length}`);
     writeIrLlmJobs(store.irLlmJobs, llmJobs);
     logStage("llm jobs persisted");
-    const llmStatus = maybeRunIrLlm({
-        command: options?.llmCommand,
-        jobsPath: store.irLlmJobs,
-        itemsMdPath: store.irLlmItemsMd,
-        itemsJsonlPath: store.irLlmItems,
-        timeoutMs: options?.llmCommandTimeoutMs,
-    });
+    const llmStatus =
+        llmJobs.length > 0
+            ? maybeRunIrLlm({
+                  command: options?.llmCommand,
+                  jobsPath: store.irLlmJobs,
+                  itemsMdPath: store.irLlmItemsMd,
+                  itemsJsonlPath: store.irLlmItems,
+                  timeoutMs: options?.llmCommandTimeoutMs,
+              })
+            : "skipped(no_hot_jobs)";
     logStage(`llm step finished (${llmStatus})`);
     const llmItems = loadLlmIrItems(
         { mdPath: store.irLlmItemsMd, jsonlPath: store.irLlmItems },
-        units,
-        evidenceSpans
+        hotUnits,
+        hotEvidenceSpans
     );
     const ruleIrMode = options?.ruleIrMode ?? "off";
     const ruleItems =
-        ruleIrMode === "micro_light" ? extractMemoryItems(units, evidenceSpans) : [];
-    logStage(`memory items extracted (rule=${ruleItems.length} llm=${llmItems.length})`);
-    const memoryItems = [...ruleItems, ...llmItems];
+        ruleIrMode === "micro_light"
+            ? extractMemoryItems(hotUnits, hotEvidenceSpans)
+            : [];
+    const hotMemoryItems = [...ruleItems, ...llmItems];
+    const memoryItems = [...cached.memoryItems, ...hotMemoryItems];
+    logStage(
+        `memory items extracted hot(rule=${ruleItems.length}, llm=${llmItems.length}) total=${memoryItems.length}`
+    );
     if (options?.stopAfter === "memory_ir") {
         writeJsonl(store.units, units);
         writeJsonl(store.evidenceSpans, evidenceSpans);
         writeJsonl(store.memoryItems, memoryItems);
         logStage("memory_ir persisted");
+        persistBuildManifest(store.buildManifest, allNarrativeDocs);
         return {
-            narrativeDocs,
+            narrativeDocs: allNarrativeDocs,
             units,
             evidenceSpans,
             memoryItems,
@@ -198,9 +274,10 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     writeJsonl(store.ignitionNodes, projections.ignitionNodes);
     writeJsonl(store.ignitionEdges, projections.ignitionEdges);
     writeJsonl(store.recallBundles, projections.recallBundles);
+    persistBuildManifest(store.buildManifest, allNarrativeDocs);
 
     return {
-        narrativeDocs,
+        narrativeDocs: allNarrativeDocs,
         units,
         evidenceSpans,
         memoryItems,
@@ -213,6 +290,218 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         ignitionNodes: projections.ignitionNodes,
         ignitionEdges: projections.ignitionEdges,
         recallBundles: projections.recallBundles,
+    };
+}
+
+interface BuildManifestDocState {
+    id: string;
+    sourceRef: string;
+    hash: string;
+    timelineStart?: string;
+    mtimeMs?: number;
+}
+
+interface BuildManifest {
+    version: number;
+    generatedAt: string;
+    docs: Record<string, BuildManifestDocState>;
+}
+
+interface BuildScope {
+    activeDocIds: Set<string>;
+    hotDocIds: Set<string>;
+    coldDocIds: Set<string>;
+    removedDocIds: Set<string>;
+}
+
+interface ArtifactSnapshot {
+    units: V8Unit[];
+    evidenceSpans: V8EvidenceSpan[];
+    memoryItems: V8MemoryItem[];
+    nodes: V8GraphNode[];
+    edges: V8GraphEdge[];
+    ignitionNodes: V8IgnitionNodeProjection[];
+    ignitionEdges: V8IgnitionEdgeProjection[];
+    recallBundles: V8RecallBundleProjection[];
+}
+
+function emptyCachedArtifacts(): Pick<
+    ArtifactSnapshot,
+    "units" | "evidenceSpans" | "memoryItems"
+> {
+    return {
+        units: [],
+        evidenceSpans: [],
+        memoryItems: [],
+    };
+}
+
+function loadBuildManifest(filePath: string): BuildManifest | null {
+    try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(raw) as BuildManifest;
+        if (!parsed || typeof parsed !== "object") return null;
+        if (typeof parsed.version !== "number") return null;
+        if (!parsed.docs || typeof parsed.docs !== "object") return null;
+        return parsed;
+    } catch {
+        return null;
+    }
+}
+
+function persistBuildManifest(filePath: string, narratives: V8NarrativeRecord[]): void {
+    const docs: Record<string, BuildManifestDocState> = {};
+    for (const narrative of narratives) {
+        docs[narrative.id] = {
+            id: narrative.id,
+            sourceRef: narrative.sourceRef,
+            hash: hashNarrative(narrative),
+            timelineStart: narrative.metadata?.timelineStart,
+            mtimeMs: safeStatMtime(narrative.sourceRef),
+        };
+    }
+    const payload: BuildManifest = {
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        docs,
+    };
+    try {
+        fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf-8");
+    } catch {
+        // ignore manifest persistence errors
+    }
+}
+
+function computeBuildScope(input: {
+    narratives: V8NarrativeRecord[];
+    manifest: BuildManifest | null;
+    mode: "full" | "incremental" | "hybrid";
+    hotWindowHours: number;
+}): BuildScope {
+    const activeDocIds = new Set(input.narratives.map((narrative) => narrative.id));
+    const hotDocIds = new Set<string>();
+    const coldDocIds = new Set<string>();
+    const removedDocIds = new Set<string>();
+
+    if (input.mode === "full" || !input.manifest) {
+        for (const narrative of input.narratives) {
+            hotDocIds.add(narrative.id);
+        }
+        return { activeDocIds, hotDocIds, coldDocIds, removedDocIds };
+    }
+
+    const hotCutoff =
+        input.mode === "hybrid"
+            ? Date.now() - input.hotWindowHours * 60 * 60 * 1000
+            : Number.NEGATIVE_INFINITY;
+
+    for (const narrative of input.narratives) {
+        const previous = input.manifest.docs[narrative.id];
+        const hash = hashNarrative(narrative);
+        const changed =
+            !previous ||
+            previous.hash !== hash ||
+            previous.sourceRef !== narrative.sourceRef;
+        const recent =
+            input.mode === "hybrid"
+                ? resolveNarrativeSortTimestamp(narrative) >= hotCutoff
+                : false;
+        if (changed || recent) {
+            hotDocIds.add(narrative.id);
+        } else {
+            coldDocIds.add(narrative.id);
+        }
+    }
+
+    for (const existingId of Object.keys(input.manifest.docs)) {
+        if (!activeDocIds.has(existingId)) {
+            removedDocIds.add(existingId);
+        }
+    }
+
+    return { activeDocIds, hotDocIds, coldDocIds, removedDocIds };
+}
+
+function resolveNarrativeSortTimestamp(narrative: V8NarrativeRecord): number {
+    const timelineStart = narrative.metadata?.timelineStart;
+    if (timelineStart) {
+        const parsed = Date.parse(timelineStart.includes("T") ? timelineStart : timelineStart.replace(" ", "T"));
+        if (!Number.isNaN(parsed)) return parsed;
+    }
+    const byMtime = safeStatMtime(narrative.sourceRef);
+    return typeof byMtime === "number" ? byMtime : 0;
+}
+
+function safeStatMtime(filePath: string): number | undefined {
+    try {
+        return fs.statSync(filePath).mtimeMs;
+    } catch {
+        return undefined;
+    }
+}
+
+function hashNarrative(narrative: V8NarrativeRecord): string {
+    const content = narrative.cleanText ?? narrative.rawText ?? "";
+    return createHash("sha1")
+        .update(narrative.id)
+        .update("\n")
+        .update(content)
+        .digest("hex");
+}
+
+function hasReusableArtifacts(store: ReturnType<typeof ensureV8StoreDirs>): boolean {
+    return (
+        fs.existsSync(store.units) &&
+        fs.existsSync(store.evidenceSpans) &&
+        fs.existsSync(store.memoryItems) &&
+        fs.existsSync(store.graphNodes) &&
+        fs.existsSync(store.graphEdges) &&
+        fs.existsSync(store.ignitionNodes) &&
+        fs.existsSync(store.ignitionEdges) &&
+        fs.existsSync(store.recallBundles)
+    );
+}
+
+function loadCachedArtifactsForDocs(
+    store: ReturnType<typeof ensureV8StoreDirs>,
+    coldDocIds: Set<string>,
+    activeDocIds: Set<string>
+): Pick<ArtifactSnapshot, "units" | "evidenceSpans" | "memoryItems"> {
+    if (coldDocIds.size === 0) return emptyCachedArtifacts();
+    const units = readJsonl<V8Unit>(store.units).filter(
+        (unit) => coldDocIds.has(unit.narrativeRecordId) && activeDocIds.has(unit.narrativeRecordId)
+    );
+    const coldUnitIds = new Set(units.map((unit) => unit.id));
+    const evidenceSpans = readJsonl<V8EvidenceSpan>(store.evidenceSpans).filter(
+        (span) => coldUnitIds.has(span.unitId) && activeDocIds.has(span.narrativeRecordId)
+    );
+    const coldSpanIds = new Set(evidenceSpans.map((span) => span.id));
+    const memoryItems = readJsonl<V8MemoryItem>(store.memoryItems).filter((item) => {
+        if (!activeDocIds.has(item.narrativeRecordId)) return false;
+        if (!coldDocIds.has(item.narrativeRecordId)) return false;
+        const hasHotEvidence = item.evidenceSpanIds.some((spanId) => !coldSpanIds.has(spanId));
+        const hasHotUnit = item.unitIds.some((unitId) => !coldUnitIds.has(unitId));
+        return !hasHotEvidence && !hasHotUnit;
+    });
+    return {
+        units,
+        evidenceSpans,
+        memoryItems,
+    };
+}
+
+function loadAllArtifacts(
+    store: ReturnType<typeof ensureV8StoreDirs>
+): ArtifactSnapshot {
+    return {
+        units: readJsonl<V8Unit>(store.units),
+        evidenceSpans: readJsonl<V8EvidenceSpan>(store.evidenceSpans),
+        memoryItems: readJsonl<V8MemoryItem>(store.memoryItems),
+        nodes: readJsonl<V8GraphNode>(store.graphNodes),
+        edges: readJsonl<V8GraphEdge>(store.graphEdges),
+        ignitionNodes: readJsonl<V8IgnitionNodeProjection>(store.ignitionNodes),
+        ignitionEdges: readJsonl<V8IgnitionEdgeProjection>(store.ignitionEdges),
+        recallBundles: readJsonl<V8RecallBundleProjection>(store.recallBundles),
     };
 }
 

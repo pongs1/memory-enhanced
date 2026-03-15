@@ -1078,6 +1078,12 @@ Recommended rule:
 
 This is what keeps long-lived graph ids, evidence refs, and recall bundles stable under continuous updates.
 
+Practical compile switches:
+
+- `rebuild_mode=full`: recompile everything
+- `rebuild_mode=incremental`: only changed narrative docs
+- `rebuild_mode=hybrid`: changed docs + recent hot window (`hot_window_hours`)
+
 ### 9.8 Multi-path retrieval contract
 
 The report also requires multi-path retrieval.

@@ -6,7 +6,6 @@ export interface V8StorePaths {
     rawDir: string;
     runtimeDir: string;
     sessionsDir: string;
-    narrativeRecords: string;
     units: string;
     evidenceSpans: string;
     memoryItems: string;
@@ -24,6 +23,7 @@ export interface V8StorePaths {
     packCache: string;
     feedbackRecords: string;
     feedbackOverrides: string;
+    buildManifest: string;
 }
 
 export function v8StorePaths(workspace: string): V8StorePaths {
@@ -37,7 +37,6 @@ export function v8StorePaths(workspace: string): V8StorePaths {
         rawDir,
         runtimeDir,
         sessionsDir,
-        narrativeRecords: path.join(rootDir, "narrative_records.jsonl"),
         units: path.join(rootDir, "units.jsonl"),
         evidenceSpans: path.join(rootDir, "evidence_spans.jsonl"),
         memoryItems: path.join(rootDir, "memory_items.jsonl"),
@@ -55,6 +54,7 @@ export function v8StorePaths(workspace: string): V8StorePaths {
         packCache: path.join(rootDir, "pack_cache.jsonl"),
         feedbackRecords: path.join(runtimeDir, "feedback_records.jsonl"),
         feedbackOverrides: path.join(runtimeDir, "feedback_overrides.jsonl"),
+        buildManifest: path.join(runtimeDir, "build_manifest.json"),
     };
 }
 
