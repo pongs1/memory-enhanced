@@ -341,6 +341,28 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
     if (hotBuildIsNoop && options?.stopAfter !== "evidence" && options?.stopAfter !== "memory_ir") {
         const reused = loadAllArtifacts(store);
+        buildStats.relationEntityPostings = countJsonlRecords(store.entityPostings);
+        buildStats.relationScopeCards = countJsonlRecords(store.entityScopeCards);
+        buildStats.relationGroupSummaries = countJsonlRecords(store.groupSummaries);
+        buildStats.relationSearchPlans = countJsonlRecords(store.relationSearchPlans);
+        buildStats.relationShardSelections = countJsonlRecords(store.narrativeShardSelections);
+        buildStats.relationCandidateHits = countJsonlRecords(store.relationCandidateHits);
+        buildStats.relationReviewJobs = countJsonlRecords(store.relationReviewJobs);
+        buildStats.relationReviewedAccepted = countReviewedRelationsByStatus(
+            store.reviewedRelations,
+            "accepted"
+        );
+        buildStats.relationReviewedHypothesis = countReviewedRelationsByStatus(
+            store.reviewedRelations,
+            "hypothesis"
+        );
+        buildStats.relationReviewedRejected = countReviewedRelationsByStatus(
+            store.reviewedRelations,
+            "rejected"
+        );
+        buildStats.learningEvents = countJsonlRecords(store.learningEvents);
+        buildStats.searchFeedbackSignals = countJsonlRecords(store.searchFeedbackSignals);
+        buildStats.relationReviewLlmStatus = "skipped(no_changes)";
         logStage("no-op incremental build: reused all persisted artifacts");
         persistRunReport({
             llmStatus: "skipped(no_changes)",
@@ -1148,6 +1170,29 @@ function clearJsonlFiles(filePaths: string[]): void {
         } catch {
             // ignore cleanup failures
         }
+    }
+}
+
+function countJsonlRecords(filePath: string): number {
+    try {
+        const raw = fs.readFileSync(filePath, "utf-8").trim();
+        if (!raw) return 0;
+        return raw.split(/\r?\n/).filter((line) => line.trim().length > 0).length;
+    } catch {
+        return 0;
+    }
+}
+
+function countReviewedRelationsByStatus(
+    filePath: string,
+    status: "accepted" | "hypothesis" | "rejected"
+): number {
+    try {
+        return readJsonl<V8ReviewedRelation>(filePath).filter(
+            (item) => item.status === status
+        ).length;
+    } catch {
+        return 0;
     }
 }
 
