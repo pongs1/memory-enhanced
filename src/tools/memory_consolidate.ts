@@ -22,6 +22,17 @@ export const MemoryConsolidateParams = Type.Object({
                 "Optional dev-only cap for narrative docs compiled in one run (temporary fast-build knob).",
         })
     ),
+    worker_count: Type.Optional(
+        Type.Number({
+            minimum: 1,
+            description: "Optional worker count for unitization.",
+        })
+    ),
+    emit_unit_preview: Type.Optional(
+        Type.Boolean({
+            description: "Whether to write unit preview markdown files.",
+        })
+    ),
     ir_llm_command: Type.Optional(
         Type.String({
             description:
@@ -71,6 +82,18 @@ export async function executeMemoryConsolidate(
             : typeof (pluginConfig as any)?.v8MaxNarrativeDocs === "number"
               ? (pluginConfig as any).v8MaxNarrativeDocs
               : undefined;
+    const workerCount =
+        typeof params.worker_count === "number"
+            ? params.worker_count
+            : typeof (pluginConfig as any)?.v8WorkerCount === "number"
+              ? (pluginConfig as any).v8WorkerCount
+              : undefined;
+    const emitUnitPreview =
+        typeof params.emit_unit_preview === "boolean"
+            ? params.emit_unit_preview
+            : typeof (pluginConfig as any)?.v8EmitUnitPreview === "boolean"
+              ? (pluginConfig as any).v8EmitUnitPreview
+              : undefined;
     const llmCommand =
         (params.ir_llm_command as string | undefined) ||
         (pluginConfig as any)?.v8IrLlmCommand ||
@@ -99,6 +122,8 @@ export async function executeMemoryConsolidate(
         sessionTraceDir,
         maxSessionFiles,
         maxNarrativeDocs,
+        workerCount,
+        emitUnitPreview,
         llmCommand,
         llmCommandTimeoutMs: llmTimeoutMs,
         rebuildMode,
@@ -110,6 +135,10 @@ export async function executeMemoryConsolidate(
         `sessionTraceDir=${sessionTraceDir || "default"}`,
         maxSessionFiles ? `maxSessionFiles=${maxSessionFiles}` : null,
         maxNarrativeDocs ? `maxNarrativeDocs=${maxNarrativeDocs}` : null,
+        workerCount ? `workerCount=${workerCount}` : null,
+        typeof emitUnitPreview === "boolean"
+            ? `emitUnitPreview=${String(emitUnitPreview)}`
+            : null,
         `rebuildMode=${rebuildMode}`,
         hotWindowHours ? `hotWindowHours=${hotWindowHours}` : null,
         maxNarrativeDocs ? `devFastBuildMarker=${DEV_FAST_BUILD_MARKER}` : null,
@@ -132,6 +161,9 @@ export async function executeMemoryConsolidate(
         `ignitionNodes=${output.ignitionNodes.length}`,
         `ignitionEdges=${output.ignitionEdges.length}`,
         `recallBundles=${output.recallBundles.length}`,
+        output.buildStats
+            ? `buildScope=hot:${output.buildStats.hotDocs} cold:${output.buildStats.coldDocs} removed:${output.buildStats.removedDocs} reusedCache:${output.buildStats.reusedCache} noopReuse:${output.buildStats.noopReuse}`
+            : null,
     ]
         .filter(Boolean)
         .join("\n");

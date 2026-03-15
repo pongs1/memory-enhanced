@@ -121,7 +121,11 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     if (options?.maxNarrativeDocs && allNarrativeDocs.length > options.maxNarrativeDocs) {
         allNarrativeDocs = allNarrativeDocs
             .slice()
-            .sort((a, b) => (a.sourceRef || "").localeCompare(b.sourceRef || ""))
+            .sort((a, b) => {
+                const byTime = resolveNarrativeSortTimestamp(a) - resolveNarrativeSortTimestamp(b);
+                if (byTime !== 0) return byTime;
+                return (a.sourceRef || "").localeCompare(b.sourceRef || "");
+            })
             .slice(-options.maxNarrativeDocs);
     }
 
@@ -152,6 +156,15 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         hotNarratives.length === 0 &&
         scope.removedDocIds.size === 0 &&
         hasReusableArtifacts(store);
+    const buildStats = {
+        rebuildMode,
+        hotWindowHours,
+        hotDocs: scope.hotDocIds.size,
+        coldDocs: scope.coldDocIds.size,
+        removedDocs: scope.removedDocIds.size,
+        reusedCache: canReuseCache,
+        noopReuse: hotBuildIsNoop,
+    };
 
     if (hotBuildIsNoop && options?.stopAfter !== "evidence" && options?.stopAfter !== "memory_ir") {
         const reused = loadAllArtifacts(store);
@@ -170,6 +183,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             ignitionNodes: reused.ignitionNodes,
             ignitionEdges: reused.ignitionEdges,
             recallBundles: reused.recallBundles,
+            buildStats,
         };
     }
 
@@ -208,6 +222,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             ignitionNodes: [],
             ignitionEdges: [],
             recallBundles: [],
+            buildStats,
         };
     }
 
@@ -261,6 +276,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             ignitionNodes: [],
             ignitionEdges: [],
             recallBundles: [],
+            buildStats,
         };
     }
     const { nodes, edges } = materializeGraph(memoryItems, units, evidenceSpans);
@@ -295,6 +311,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         ignitionNodes: projections.ignitionNodes,
         ignitionEdges: projections.ignitionEdges,
         recallBundles: projections.recallBundles,
+        buildStats,
     };
 }
 
