@@ -9,7 +9,6 @@ import type {
     V8IgnitionEdgeProjection,
     V8IgnitionNodeProjection,
     V8RecallBundleProjection,
-    V8NarrativeRecord,
 } from "../types_v8.js";
 
 interface EdgeCatalogFile {
@@ -77,8 +76,7 @@ function toDayKey(timestamp: string | null): string | null {
 
 function classifyKind(
     spanIds: string[],
-    spanById: Map<string, V8EvidenceSpan>,
-    sourceById: Map<string, V8NarrativeRecord>
+    spanById: Map<string, V8EvidenceSpan>
 ): { kind: "episodic" | "semantic" | "procedural"; dayKey: string | null } {
     let hasProcedural = false;
     let hasCurated = false;
@@ -88,18 +86,16 @@ function classifyKind(
     for (const spanId of spanIds) {
         const span = spanById.get(spanId);
         if (!span) continue;
-        const source = sourceById.get(span.narrativeRecordId);
-        if (!source) continue;
-        if (source.sourceType === "skill_md") {
+        if (span.sourceType === "skill_md") {
             hasProcedural = true;
         }
-        if (source.sourceClass === "curated") {
+        if (span.sourceClass === "curated") {
             hasCurated = true;
         }
-        const ts = source.timestamp ? Date.parse(source.timestamp) : NaN;
+        const ts = span.timestamp ? Date.parse(span.timestamp) : NaN;
         if (!Number.isNaN(ts) && ts >= latestTs) {
             latestTs = ts;
-            latestDayKey = toDayKey(source.timestamp);
+            latestDayKey = toDayKey(span.timestamp);
         }
     }
 
@@ -114,14 +110,12 @@ function classifyKind(
 
 function resolveSourceRef(
     spanIds: string[],
-    spanById: Map<string, V8EvidenceSpan>,
-    sourceById: Map<string, V8NarrativeRecord>
+    spanById: Map<string, V8EvidenceSpan>
 ): string | null {
     for (const spanId of spanIds) {
         const span = spanById.get(spanId);
         if (!span) continue;
-        const source = sourceById.get(span.narrativeRecordId);
-        if (source?.sourceRef) return source.sourceRef;
+        if (span.narrativeRef) return span.narrativeRef;
     }
     return null;
 }
@@ -159,18 +153,27 @@ export function buildRuntimeProjections(input: {
     nodes: V8GraphNode[];
     edges: V8GraphEdge[];
     evidenceSpans: V8EvidenceSpan[];
-    sources: V8NarrativeRecord[];
 }): {
     ignitionNodes: V8IgnitionNodeProjection[];
     ignitionEdges: V8IgnitionEdgeProjection[];
     recallBundles: V8RecallBundleProjection[];
 } {
     const spanById = new Map(input.evidenceSpans.map((span) => [span.id, span]));
-    const sourceById = new Map(input.sources.map((source) => [source.id, source]));
     const edgeKinds = loadEdgeCatalog();
 
     const ignitionNodes: V8IgnitionNodeProjection[] = [];
     const recallBundles: V8RecallBundleProjection[] = [];
+    const candidates: Array<{
+        node: V8GraphNode;
+        kind: "episodic" | "semantic" | "procedural";
+        dayKey: string | null;
+        sourceRef: string | null;
+        label: string;
+        aliases: string[];
+        triggerTerms: string[];
+        searchText: string;
+        packType: V8RecallBundleProjection["packType"];
+    }> = [];
 
     for (const node of input.nodes) {
         if (node.memoryType === "evidence") continue;
@@ -184,42 +187,67 @@ export function buildRuntimeProjections(input: {
 
         const spanIds = node.evidenceSpanIds || [];
         const bestSpanIds = node.bestEvidenceSpanIds || [];
-        const { kind, dayKey } = classifyKind(spanIds, spanById, sourceById);
-        const sourceRef = resolveSourceRef(spanIds, spanById, sourceById);
+        const { kind, dayKey } = classifyKind(spanIds, spanById);
+        const sourceRef = resolveSourceRef(spanIds, spanById);
         const label = node.canonicalLabel || "";
         const aliases = node.aliases || [];
         const triggerTerms = unique(tokenize([label, ...aliases].join(" ")));
         const searchText = unique([label, ...aliases]).join(" ");
-        const names = {
-            zh: label,
-            en: label,
-        };
-
-        ignitionNodes.push({
-            nodeId: node.id,
-            bundleId: node.id,
+        candidates.push({
+            node,
             kind,
-            names,
+            dayKey: dayKey ?? null,
+            sourceRef,
+            label,
             aliases,
             triggerTerms,
-            summary: label,
             searchText,
-            sourceRef,
-            evidenceSpanIds: spanIds,
-            bestEvidenceSpanIds: bestSpanIds.length > 0 ? bestSpanIds : spanIds.slice(0, 1),
-            dayKey: dayKey ?? null,
-        });
-
-        recallBundles.push({
-            bundleId: node.id,
-            title: label,
-            kind,
-            nodeIds: [node.id],
-            sourceRefs: sourceRef ? [sourceRef] : [],
-            evidenceSpanIds: spanIds,
-            bestEvidenceSpanIds: bestSpanIds.length > 0 ? bestSpanIds : spanIds.slice(0, 1),
-            summaryText: label,
             packType: resolvePackType(node.memoryType),
+        });
+    }
+
+    const bundles = buildBundlesFromCandidates(candidates, input.edges, edgeKinds, spanById);
+    const bundleByNodeId = new Map<string, (typeof bundles)[number]>();
+    for (const bundle of bundles) {
+        for (const nodeId of bundle.nodeIds) {
+            bundleByNodeId.set(nodeId, bundle);
+        }
+        recallBundles.push({
+            bundleId: bundle.bundleId,
+            title: bundle.title,
+            kind: bundle.kind,
+            nodeIds: bundle.nodeIds,
+            sourceRefs: bundle.sourceRefs,
+            evidenceSpanIds: bundle.evidenceSpanIds,
+            bestEvidenceSpanIds: bundle.bestEvidenceSpanIds,
+            summaryText: bundle.summaryText,
+            packType: bundle.packType,
+        });
+    }
+
+    for (const candidate of candidates) {
+        const bundle = bundleByNodeId.get(candidate.node.id);
+        const bundleId = bundle?.bundleId || candidate.node.id;
+        const summary = bundle?.summaryText || candidate.label;
+        ignitionNodes.push({
+            nodeId: candidate.node.id,
+            bundleId,
+            kind: candidate.kind,
+            names: {
+                zh: candidate.label,
+                en: candidate.label,
+            },
+            aliases: candidate.aliases,
+            triggerTerms: candidate.triggerTerms,
+            summary,
+            searchText: candidate.searchText,
+            sourceRef: candidate.sourceRef,
+            evidenceSpanIds: candidate.node.evidenceSpanIds,
+            bestEvidenceSpanIds:
+                candidate.node.bestEvidenceSpanIds.length > 0
+                    ? candidate.node.bestEvidenceSpanIds
+                    : candidate.node.evidenceSpanIds.slice(0, 1),
+            dayKey: candidate.dayKey,
         });
     }
 
@@ -246,4 +274,177 @@ export function buildRuntimeProjections(input: {
         ignitionEdges,
         recallBundles,
     };
+}
+
+function buildBundlesFromCandidates(
+    candidates: Array<{
+        node: V8GraphNode;
+        kind: "episodic" | "semantic" | "procedural";
+        dayKey: string | null;
+        sourceRef: string | null;
+        label: string;
+        aliases: string[];
+        triggerTerms: string[];
+        searchText: string;
+        packType: V8RecallBundleProjection["packType"];
+    }>,
+    edges: V8GraphEdge[],
+    edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>,
+    spanById: Map<string, V8EvidenceSpan>
+): Array<{
+    bundleId: string;
+    title: string;
+    summaryText: string;
+    kind: "episodic" | "semantic" | "procedural";
+    packType: V8RecallBundleProjection["packType"];
+    nodeIds: string[];
+    sourceRefs: string[];
+    evidenceSpanIds: string[];
+    bestEvidenceSpanIds: string[];
+}> {
+    if (candidates.length === 0) return [];
+
+    const candidateById = new Map(candidates.map((item) => [item.node.id, item]));
+    const adjacency = new Map<string, Set<string>>();
+    for (const item of candidates) {
+        adjacency.set(item.node.id, new Set());
+    }
+
+    for (const edge of edges) {
+        if (!candidateById.has(edge.src) || !candidateById.has(edge.dst)) continue;
+        const kind = edgeKinds.get(edge.type) || "semantic";
+        // Ignore purely structural links for topic bundling.
+        if (kind === "structural") continue;
+        adjacency.get(edge.src)?.add(edge.dst);
+        adjacency.get(edge.dst)?.add(edge.src);
+    }
+
+    const visited = new Set<string>();
+    const components: string[][] = [];
+    for (const id of adjacency.keys()) {
+        if (visited.has(id)) continue;
+        const stack = [id];
+        const component: string[] = [];
+        visited.add(id);
+        while (stack.length > 0) {
+            const current = stack.pop()!;
+            component.push(current);
+            for (const next of adjacency.get(current) || []) {
+                if (visited.has(next)) continue;
+                visited.add(next);
+                stack.push(next);
+            }
+        }
+        components.push(component);
+    }
+
+    const bundles: Array<{
+        bundleId: string;
+        title: string;
+        summaryText: string;
+        kind: "episodic" | "semantic" | "procedural";
+        packType: V8RecallBundleProjection["packType"];
+        nodeIds: string[];
+        sourceRefs: string[];
+        evidenceSpanIds: string[];
+        bestEvidenceSpanIds: string[];
+    }> = [];
+
+    let bundleSeq = 0;
+    for (const component of components) {
+        const componentNodes = component
+            .map((id) => candidateById.get(id))
+            .filter(Boolean) as typeof candidates;
+        const dayBuckets = splitComponentByDay(componentNodes);
+        for (const bucket of dayBuckets) {
+            if (bucket.length === 0) continue;
+            bundleSeq += 1;
+            const sorted = bucket
+                .slice()
+                .sort((a, b) => b.node.state.confidence - a.node.state.confidence);
+            const nodeIds = sorted.map((item) => item.node.id);
+            const labelTop = sorted.slice(0, 3).map((item) => item.label).filter(Boolean);
+            const title = labelTop[0] || `bundle_${bundleSeq}`;
+            const summaryText = unique(labelTop).join(" | ") || title;
+            const sourceRefs = unique(
+                sorted
+                    .map((item) => item.sourceRef || "")
+                    .filter(Boolean)
+            );
+            const evidenceSpanIds = unique(
+                sorted.flatMap((item) => item.node.evidenceSpanIds || [])
+            );
+            const bestEvidenceSpanIds = selectBestSpans(evidenceSpanIds, spanById, 8);
+            bundles.push({
+                bundleId: `bundle_${bundleSeq}`,
+                title,
+                summaryText,
+                kind: resolveBundleKind(sorted.map((item) => item.kind)),
+                packType: resolveBundlePackType(sorted.map((item) => item.packType)),
+                nodeIds,
+                sourceRefs,
+                evidenceSpanIds: evidenceSpanIds.slice(0, 80),
+                bestEvidenceSpanIds,
+            });
+        }
+    }
+
+    return bundles;
+}
+
+function splitComponentByDay<T extends { dayKey: string | null }>(
+    nodes: T[]
+): T[][] {
+    const dated = nodes.filter((item) => !!item.dayKey);
+    const undated = nodes.filter((item) => !item.dayKey);
+    if (dated.length === 0) return [nodes];
+    const byDay = new Map<string, Array<{ dayKey: string | null }>>();
+    for (const item of dated) {
+        const key = item.dayKey!;
+        const list = byDay.get(key) || [];
+        list.push(item);
+        byDay.set(key, list);
+    }
+    const result = Array.from(byDay.values());
+    if (undated.length > 0) {
+        if (result.length === 0) {
+            result.push(undated);
+        } else {
+            // Attach undated nodes to the largest day bucket.
+            result.sort((a, b) => b.length - a.length);
+            result[0]!.push(...undated);
+        }
+    }
+    return result;
+}
+
+function resolveBundleKind(
+    kinds: Array<"episodic" | "semantic" | "procedural">
+): "episodic" | "semantic" | "procedural" {
+    if (kinds.includes("procedural")) return "procedural";
+    if (kinds.includes("semantic")) return "semantic";
+    return "episodic";
+}
+
+function resolveBundlePackType(
+    types: Array<V8RecallBundleProjection["packType"]>
+): V8RecallBundleProjection["packType"] {
+    const uniq = new Set(types);
+    if (uniq.size === 1) return types[0] || "raw_evidence";
+    if (uniq.has("state")) return "state";
+    if (uniq.has("summary")) return "summary";
+    return "mixed";
+}
+
+function selectBestSpans(
+    spanIds: string[],
+    spanById: Map<string, V8EvidenceSpan>,
+    limit: number
+): string[] {
+    return spanIds
+        .map((id) => spanById.get(id))
+        .filter(Boolean)
+        .sort((a, b) => (b?.score || 0) - (a?.score || 0))
+        .slice(0, limit)
+        .map((span) => span!.id);
 }
