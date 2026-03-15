@@ -152,11 +152,8 @@ export function buildLlmIrJobs(
             unit.text.trim().length > 0
         );
         const batchConfig = BATCH_CONFIG_BY_LAYER[layer];
-        let batch: V8Unit[] = [];
-        let batchChars = 0;
-
-        const flush = () => {
-            if (batch.length === 0) return;
+        const batches = buildLayerBatches(layer, layerUnits, batchConfig);
+        for (const batch of batches) {
             const spansByUnit = new Map<string, V8EvidenceSpan[]>();
             for (const unit of batch) {
                 spansByUnit.set(unit.id, evidenceIndex.spansByUnit.get(unit.id) || []);
@@ -193,26 +190,115 @@ export function buildLlmIrJobs(
                 evidenceSpanIds: dedupedSpans.map((span) => span.id),
                 prompt,
             });
-            batch = [];
-            batchChars = 0;
-        };
-
-        for (const unit of layerUnits) {
-            const unitChars = unit.text.trim().length;
-            const wouldOverflow =
-                batch.length > 0 &&
-                (batch.length >= batchConfig.maxUnits ||
-                    batchChars + unitChars > batchConfig.maxChars);
-            if (wouldOverflow) {
-                flush();
-            }
-            batch.push(unit);
-            batchChars += unitChars;
         }
-        flush();
     }
 
     return jobs;
+}
+
+function buildLayerBatches(
+    layer: V8GraphLayer,
+    units: V8Unit[],
+    config: LlmBatchConfig
+): V8Unit[][] {
+    if (units.length === 0) return [];
+    if (layer === "micro") {
+        return buildSequentialBatches(units, config);
+    }
+    return buildOverlappingBatches(units, config, layer === "macro" ? 2 : 1);
+}
+
+function buildSequentialBatches(units: V8Unit[], config: LlmBatchConfig): V8Unit[][] {
+    const batches: V8Unit[][] = [];
+    let batch: V8Unit[] = [];
+    let batchChars = 0;
+    const flush = () => {
+        if (batch.length === 0) return;
+        batches.push(batch);
+        batch = [];
+        batchChars = 0;
+    };
+    for (const unit of units) {
+        const unitChars = unit.text.trim().length;
+        const wouldOverflow =
+            batch.length > 0 &&
+            (batch.length >= config.maxUnits || batchChars + unitChars > config.maxChars);
+        if (wouldOverflow) flush();
+        batch.push(unit);
+        batchChars += unitChars;
+    }
+    flush();
+    return batches;
+}
+
+function buildOverlappingBatches(
+    units: V8Unit[],
+    config: LlmBatchConfig,
+    overlapUnits: number
+): V8Unit[][] {
+    const batches: V8Unit[][] = [];
+    const groups = groupUnitsByNarrative(units);
+    const stride = Math.max(1, config.maxUnits - overlapUnits);
+    for (const group of groups) {
+        if (group.length <= config.maxUnits) {
+            batches.push(trimBatchByChars(group, config.maxChars));
+            continue;
+        }
+        for (let start = 0; start < group.length; start += stride) {
+            const window = trimBatchByChars(
+                group.slice(start, start + config.maxUnits),
+                config.maxChars
+            );
+            if (window.length === 0) break;
+            batches.push(window);
+            if (start + config.maxUnits >= group.length) break;
+        }
+    }
+    return dedupeBatchWindows(batches);
+}
+
+function groupUnitsByNarrative(units: V8Unit[]): V8Unit[][] {
+    const map = new Map<string, V8Unit[]>();
+    for (const unit of units) {
+        const key = unit.narrativeRecordId;
+        const list = map.get(key) || [];
+        list.push(unit);
+        map.set(key, list);
+    }
+    return Array.from(map.values()).map((list) =>
+        list
+            .slice()
+            .sort(
+                (a, b) =>
+                    a.charStart - b.charStart || a.ordinal - b.ordinal || a.id.localeCompare(b.id)
+            )
+    );
+}
+
+function trimBatchByChars(units: V8Unit[], maxChars: number): V8Unit[] {
+    if (units.length === 0) return [];
+    const output: V8Unit[] = [];
+    let chars = 0;
+    for (const unit of units) {
+        const len = unit.text.trim().length;
+        if (output.length > 0 && chars + len > maxChars) break;
+        output.push(unit);
+        chars += len;
+    }
+    return output;
+}
+
+function dedupeBatchWindows(batches: V8Unit[][]): V8Unit[][] {
+    const seen = new Set<string>();
+    const output: V8Unit[][] = [];
+    for (const batch of batches) {
+        if (batch.length === 0) continue;
+        const key = batch.map((unit) => unit.id).join("|");
+        if (seen.has(key)) continue;
+        seen.add(key);
+        output.push(batch);
+    }
+    return output;
 }
 
 interface EvidenceIndex {
