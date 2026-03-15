@@ -1090,6 +1090,7 @@ Practical compile switches:
   - default start stage becomes `narrative` unless `start_at` is explicitly set
 - build diagnostics snapshot is persisted to `.memory/runtime/build_report.json` and `.memory/runtime/build_report.md`
 - tool summary includes compact `hotDocPreview/coldDocPreview/removedDocPreview` for quick inspection
+- build summary/report includes `sourceNarrativeWrittenFiles/sourceNarrativeSkippedFiles` to show write-avoidance efficiency
 - when `max_narrative_docs` is set, the run is marked as partial and does not update `build_manifest.json`
 - when `stop_after` is used, downstream artifact files are cleared to avoid stale graph/runtime reads
 - when `start_at=source`, assembled narratives are passed through in-memory to unitization (no immediate write-read roundtrip)

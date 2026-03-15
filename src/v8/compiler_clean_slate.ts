@@ -81,6 +81,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
     const startAt = options?.startAt ?? (options?.planOnly ? "narrative" : "source");
     let sourceNarrativeDocs: V8NarrativeRecord[] | null = null;
+    let sourcePersistStats: { writtenFiles: number; skippedFiles: number } | null = null;
     if (startAt === "source") {
         const traceGroups = loadSessionTraces(workspace, {
             sessionTraceDir: options?.sessionTraceDir,
@@ -117,7 +118,12 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             }
         }
         const traceRecords = [...traceNarrativeRecords, ...linkedNarrativeRecords];
-        sourceNarrativeDocs = persistAssembledObservationMarkdown(store.rawDir, traceRecords);
+        const persistResult = persistAssembledObservationMarkdown(store.rawDir, traceRecords);
+        sourceNarrativeDocs = persistResult.docs;
+        sourcePersistStats = {
+            writtenFiles: persistResult.writtenFiles,
+            skippedFiles: persistResult.skippedFiles,
+        };
         logStage("source normalization persisted");
     }
 
@@ -180,6 +186,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         removedDocs: scope.removedDocIds.size,
         reusedCache: canReuseCache,
         noopReuse: hotBuildIsNoop,
+        sourceNarrativeWrittenFiles: sourcePersistStats?.writtenFiles ?? 0,
+        sourceNarrativeSkippedFiles: sourcePersistStats?.skippedFiles ?? 0,
     };
     const persistRunReport = (payload: {
         llmStatus: string;
@@ -514,6 +522,8 @@ interface BuildReport {
         removedDocs: number;
         reusedCache: boolean;
         noopReuse: boolean;
+        sourceNarrativeWrittenFiles: number;
+        sourceNarrativeSkippedFiles: number;
     };
     llmStatus: string;
     scopePreview: {
@@ -622,6 +632,9 @@ function renderBuildReportMarkdown(report: BuildReport): string {
     );
     lines.push(
         `- cache: reused=${String(report.buildStats.reusedCache)}, noop=${String(report.buildStats.noopReuse)}`
+    );
+    lines.push(
+        `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedUnchanged=${report.buildStats.sourceNarrativeSkippedFiles}`
     );
     lines.push(
         `- partialBuild: ${String(report.buildStats.partialBuild)}${report.buildStats.maxNarrativeDocs ? ` (maxNarrativeDocs=${report.buildStats.maxNarrativeDocs})` : ""}`
@@ -816,8 +829,10 @@ function loadAllArtifacts(
 function persistAssembledObservationMarkdown(
     rawDir: string,
     records: V8NarrativeRecord[]
-): V8NarrativeRecord[] {
-    if (!records.length) return [];
+): { docs: V8NarrativeRecord[]; writtenFiles: number; skippedFiles: number } {
+    if (!records.length) {
+        return { docs: [], writtenFiles: 0, skippedFiles: 0 };
+    }
     const outDir = path.join(rawDir, "observations", "assembled");
     fs.mkdirSync(outDir, { recursive: true });
     return persistSessionNarratives(outDir, records);
@@ -1148,9 +1163,11 @@ interface NarrativeEntry {
 function persistSessionNarratives(
     outDir: string,
     records: V8NarrativeRecord[]
-): V8NarrativeRecord[] {
+): { docs: V8NarrativeRecord[]; writtenFiles: number; skippedFiles: number } {
     const sessions = new Map<string, NarrativeEntry[]>();
     const docs: V8NarrativeRecord[] = [];
+    let writtenFiles = 0;
+    let skippedFiles = 0;
     for (const record of records) {
         if (record.sourceType !== "session_trace") continue;
         const rawText = record.cleanText || record.rawText || "";
@@ -1196,18 +1213,26 @@ function persistSessionNarratives(
             sessionId,
         });
         docs.push(doc);
-        writeFileIfChanged(fullPath, markdown);
+        const wrote = writeFileIfChanged(fullPath, markdown);
+        if (wrote) writtenFiles += 1;
+        else skippedFiles += 1;
     }
-    return sortNarrativeRecords(docs);
+    return {
+        docs: sortNarrativeRecords(docs),
+        writtenFiles,
+        skippedFiles,
+    };
 }
 
-function writeFileIfChanged(filePath: string, content: string): void {
+function writeFileIfChanged(filePath: string, content: string): boolean {
     try {
         const current = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : null;
-        if (current === content) return;
+        if (current === content) return false;
         fs.writeFileSync(filePath, content, "utf-8");
+        return true;
     } catch {
         // ignore write failures to keep consolidation moving
+        return false;
     }
 }
 
