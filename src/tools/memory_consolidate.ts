@@ -173,6 +173,7 @@ export async function executeMemoryConsolidate(
         output.toolCatalogCheck?.promptPath
             ? `toolCatalogPrompt=${output.toolCatalogCheck.promptPath}`
             : null,
+        `buildManifest=${store.buildManifest}`,
         `buildReport=${store.buildReport}`,
         `buildReportMd=${store.buildReportMd}`,
         `narrativeDocs=${output.narrativeDocs.length}`,
