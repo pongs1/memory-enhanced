@@ -1278,17 +1278,20 @@ function persistSessionNarratives(
         const fileName =
             sanitizeFileName(`session_${sessionId}_narrative`) + ".md";
         const fullPath = path.join(outDir, fileName);
-        const doc = buildNarrativeRecordFromMarkdown({
-            sourceRef: fullPath,
-            content: markdown,
-            fileNameHint: fileName,
-            sessionId,
-        });
-        docs.push(doc);
-        const result = writeFileIfChangedAppendOnly(fullPath, markdown);
-        if (result === "written") writtenFiles += 1;
-        if (result === "skipped_unchanged") skippedFiles += 1;
-        if (result === "skipped_append_only") appendOnlySkippedFiles += 1;
+        const outcome = writeFileIfChangedAppendOnly(fullPath, markdown);
+        if (outcome.result === "written") writtenFiles += 1;
+        if (outcome.result === "skipped_unchanged") skippedFiles += 1;
+        if (outcome.result === "skipped_append_only") appendOnlySkippedFiles += 1;
+
+        // Keep in-memory compile input consistent with persisted narrative text.
+        docs.push(
+            buildNarrativeRecordFromMarkdown({
+                sourceRef: fullPath,
+                content: outcome.persistedContent,
+                fileNameHint: fileName,
+                sessionId,
+            })
+        );
     }
     return {
         docs: sortNarrativeRecords(docs),
@@ -1303,17 +1306,30 @@ type NarrativeWriteResult =
     | "skipped_unchanged"
     | "skipped_append_only";
 
+interface NarrativeWriteOutcome {
+    result: NarrativeWriteResult;
+    persistedContent: string;
+}
+
 function writeFileIfChangedAppendOnly(
     filePath: string,
     content: string
-): NarrativeWriteResult {
+): NarrativeWriteOutcome {
     try {
         if (!fs.existsSync(filePath)) {
             fs.writeFileSync(filePath, content, "utf-8");
-            return "written";
+            return {
+                result: "written",
+                persistedContent: content,
+            };
         }
         const current = fs.readFileSync(filePath, "utf-8");
-        if (current === content) return "skipped_unchanged";
+        if (current === content) {
+            return {
+                result: "skipped_unchanged",
+                persistedContent: current,
+            };
+        }
         const currentTrimmed = current.trimEnd();
         const nextTrimmed = content.trimEnd();
         if (
@@ -1321,13 +1337,22 @@ function writeFileIfChangedAppendOnly(
             nextTrimmed.startsWith(currentTrimmed)
         ) {
             fs.writeFileSync(filePath, content, "utf-8");
-            return "written";
+            return {
+                result: "written",
+                persistedContent: content,
+            };
         }
         // Append-only guard: never overwrite with a shorter or structurally divergent body.
-        return "skipped_append_only";
+        return {
+            result: "skipped_append_only",
+            persistedContent: current,
+        };
     } catch {
         // Fail-safe for raw-like narrative persistence: prefer no mutation on error.
-        return "skipped_append_only";
+        return {
+            result: "skipped_append_only",
+            persistedContent: content,
+        };
     }
 }
 
