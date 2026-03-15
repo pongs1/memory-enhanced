@@ -698,17 +698,17 @@ export class V8GraphScanner {
                 .slice(0, this.config.maxInjectedBundles);
         };
 
-        let topBundles = buildBundles(this.mode, 0.05);
+        let topBundles = this.selectBundlesWithDiversity(buildBundles(this.mode, 0.05));
         topBundles = this.mergeGroupBundles(topBundles, now);
 
         if (topBundles.length === 0) {
             this.spreadActivation("oblique");
-            topBundles = buildBundles(
+            topBundles = this.selectBundlesWithDiversity(buildBundles(
                 "oblique",
                 this.config.secondWaveThreshold,
                 "background",
                 2
-            );
+            ));
             topBundles = this.mergeGroupBundles(topBundles, now);
         }
 
@@ -819,9 +819,36 @@ export class V8GraphScanner {
             }
         }
 
-        return Array.from(merged.values())
-            .sort((a, b) => b.energy - a.energy)
-            .slice(0, this.config.maxInjectedBundles);
+        return this.selectBundlesWithDiversity(Array.from(merged.values()));
+    }
+
+    private selectBundlesWithDiversity(bundles: V8ActivatedBundle[]): V8ActivatedBundle[] {
+        const sorted = bundles.slice().sort((a, b) => b.energy - a.energy);
+        const limit = this.config.maxInjectedBundles;
+        if (limit <= 1 || sorted.length <= 1) {
+            return sorted.slice(0, limit);
+        }
+
+        const micros = sorted.filter((b) => b.bundleId.startsWith("micro_"));
+        const groups = sorted.filter((b) => b.bundleId.startsWith("group_"));
+        const selected: V8ActivatedBundle[] = [];
+        const seen = new Set<string>();
+
+        if (micros.length > 0) {
+            selected.push(micros[0]!);
+            seen.add(micros[0]!.bundleId);
+        }
+        if (groups.length > 0 && selected.length < limit) {
+            selected.push(groups[0]!);
+            seen.add(groups[0]!.bundleId);
+        }
+        for (const bundle of sorted) {
+            if (selected.length >= limit) break;
+            if (seen.has(bundle.bundleId)) continue;
+            selected.push(bundle);
+            seen.add(bundle.bundleId);
+        }
+        return selected;
     }
 
     private activate(nodeId: string, energy: number): void {

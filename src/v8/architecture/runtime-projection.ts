@@ -442,7 +442,7 @@ function buildBundlesFromCandidates(
                 title,
                 summaryText,
                 kind: resolveBundleKind(sorted.map((item) => item.kind)),
-                packType: resolveBundlePackType(sorted.map((item) => item.packType)),
+                packType: resolveGroupPackType(sorted.map((item) => item.packType)),
                 nodeIds,
                 sourceRefs,
                 evidenceSpanIds: evidenceSpanIds.slice(0, 80),
@@ -501,6 +501,15 @@ function resolveBundlePackType(
     if (uniq.has("state")) return "state";
     if (uniq.has("summary")) return "summary";
     return "mixed";
+}
+
+function resolveGroupPackType(
+    types: Array<V8RecallBundleProjection["packType"]>
+): V8RecallBundleProjection["packType"] {
+    // Group bundles are for high-level recall injection; default to summary/state packs.
+    const uniq = new Set(types);
+    if (uniq.has("state")) return "state";
+    return "summary";
 }
 
 function selectBestSpans(
