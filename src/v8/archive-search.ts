@@ -28,6 +28,8 @@ export interface SearchArchiveSpansOptions {
     bm25Weight?: number;
     vectorWeight?: number;
     windowChars?: number;
+    allowedShardIds?: string[];
+    boostSpanIds?: string[];
 }
 
 export interface SearchArchiveSpanResult {
@@ -62,6 +64,14 @@ export function searchArchiveSpans(
     const windowChars = Math.max(80, Math.min(1200, options.windowChars || DEFAULT_WINDOW_CHARS));
     const bm25Weight = options.bm25Weight ?? 0.55;
     const vectorWeight = options.vectorWeight ?? 0.45;
+    const allowedShardIds =
+        options.allowedShardIds && options.allowedShardIds.length > 0
+            ? new Set(options.allowedShardIds)
+            : null;
+    const boostSpanIds =
+        options.boostSpanIds && options.boostSpanIds.length > 0
+            ? new Set(options.boostSpanIds)
+            : null;
 
     const index = loadOrBuildIndex(options.workspace);
     const queryTokens = tokenize(query);
@@ -71,7 +81,13 @@ export function searchArchiveSpans(
     const queryTfidf = buildTfidf(queryTf, index.idf);
     const queryNorm = l2Norm(queryTfidf);
 
-    const scored = index.docs.map((doc) => {
+    const scored = index.docs
+        .filter((doc) =>
+            allowedShardIds
+                ? allowedShardIds.has(doc.span.narrativeRecordId)
+                : true
+        )
+        .map((doc) => {
         const bm25Score = scoreBm25(doc, queryTf, index);
         const vectorScore = queryNorm > 0 ? scoreVector(doc, queryTfidf, queryNorm) : 0;
         let score = 0;
@@ -81,6 +97,9 @@ export function searchArchiveSpans(
             score = vectorScore;
         } else {
             score = bm25Weight * bm25Score + vectorWeight * vectorScore;
+        }
+        if (boostSpanIds?.has(doc.span.id)) {
+            score += 0.08;
         }
         return { doc, score, bm25Score, vectorScore };
     });
