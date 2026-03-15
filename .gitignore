@@ -4,3 +4,6 @@ dist/
 .DS_Store
 .openclaw-overlay/
 .memory/
+.tmp/
+.tmp-check/
+package-lock.json

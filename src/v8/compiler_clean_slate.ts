@@ -1196,13 +1196,19 @@ function persistSessionNarratives(
             sessionId,
         });
         docs.push(doc);
-        try {
-            fs.writeFileSync(fullPath, markdown, "utf-8");
-        } catch {
-            // ignore write failures to keep consolidation moving
-        }
+        writeFileIfChanged(fullPath, markdown);
     }
     return sortNarrativeRecords(docs);
+}
+
+function writeFileIfChanged(filePath: string, content: string): void {
+    try {
+        const current = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : null;
+        if (current === content) return;
+        fs.writeFileSync(filePath, content, "utf-8");
+    } catch {
+        // ignore write failures to keep consolidation moving
+    }
 }
 
 function compareNarrativeEntries(a: NarrativeEntry, b: NarrativeEntry): number {
