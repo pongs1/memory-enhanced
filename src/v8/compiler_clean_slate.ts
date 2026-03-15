@@ -238,6 +238,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             ignitionEdges: [],
             recallBundles: [],
             buildStats,
+            scopePreview,
         };
     }
 
@@ -270,6 +271,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             ignitionEdges: reused.ignitionEdges,
             recallBundles: reused.recallBundles,
             buildStats,
+            scopePreview,
         };
     }
 
@@ -330,6 +332,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             ignitionEdges: [],
             recallBundles: [],
             buildStats,
+            scopePreview,
         };
     }
 
@@ -404,6 +407,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             ignitionEdges: [],
             recallBundles: [],
             buildStats,
+            scopePreview,
         };
     }
     const { nodes, edges } = materializeGraph(memoryItems, units, evidenceSpans);
@@ -452,6 +456,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         ignitionEdges: projections.ignitionEdges,
         recallBundles: projections.recallBundles,
         buildStats,
+        scopePreview,
     };
 }
 

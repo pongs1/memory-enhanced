@@ -204,6 +204,15 @@ export async function executeMemoryConsolidate(
         output.buildStats
             ? `buildScope=hot:${output.buildStats.hotDocs} cold:${output.buildStats.coldDocs} removed:${output.buildStats.removedDocs} reusedCache:${output.buildStats.reusedCache} noopReuse:${output.buildStats.noopReuse} partial:${output.buildStats.partialBuild}`
             : null,
+        output.scopePreview?.hotDocIds?.length
+            ? `hotDocPreview=${output.scopePreview.hotDocIds.slice(0, 8).join(",")}`
+            : null,
+        output.scopePreview?.coldDocIds?.length
+            ? `coldDocPreview=${output.scopePreview.coldDocIds.slice(0, 5).join(",")}`
+            : null,
+        output.scopePreview?.removedDocIds?.length
+            ? `removedDocPreview=${output.scopePreview.removedDocIds.slice(0, 8).join(",")}`
+            : null,
     ]
         .filter(Boolean)
         .join("\n");
