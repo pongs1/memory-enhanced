@@ -202,7 +202,7 @@ export async function executeMemoryConsolidate(
         `ignitionEdges=${output.ignitionEdges.length}`,
         `recallBundles=${output.recallBundles.length}`,
         output.buildStats
-            ? `buildScope=hot:${output.buildStats.hotDocs} cold:${output.buildStats.coldDocs} removed:${output.buildStats.removedDocs} reusedCache:${output.buildStats.reusedCache} noopReuse:${output.buildStats.noopReuse} partial:${output.buildStats.partialBuild} sourceWrites:${output.buildStats.sourceNarrativeWrittenFiles} sourceSkips:${output.buildStats.sourceNarrativeSkippedFiles}`
+            ? `buildScope=hot:${output.buildStats.hotDocs} cold:${output.buildStats.coldDocs} removed:${output.buildStats.removedDocs} reusedCache:${output.buildStats.reusedCache} noopReuse:${output.buildStats.noopReuse} partial:${output.buildStats.partialBuild} sourceWrites:${output.buildStats.sourceNarrativeWrittenFiles} sourceSkips:${output.buildStats.sourceNarrativeSkippedFiles} sourceRemoved:${output.buildStats.sourceNarrativeRemovedFiles}`
             : null,
         output.scopePreview?.hotDocIds?.length
             ? `hotDocPreview=${output.scopePreview.hotDocIds.slice(0, 8).join(",")}`

@@ -81,7 +81,11 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
     const startAt = options?.startAt ?? (options?.planOnly ? "narrative" : "source");
     let sourceNarrativeDocs: V8NarrativeRecord[] | null = null;
-    let sourcePersistStats: { writtenFiles: number; skippedFiles: number } | null = null;
+    let sourcePersistStats: {
+        writtenFiles: number;
+        skippedFiles: number;
+        removedFiles: number;
+    } | null = null;
     if (startAt === "source") {
         const traceGroups = loadSessionTraces(workspace, {
             sessionTraceDir: options?.sessionTraceDir,
@@ -123,6 +127,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         sourcePersistStats = {
             writtenFiles: persistResult.writtenFiles,
             skippedFiles: persistResult.skippedFiles,
+            removedFiles: persistResult.removedFiles,
         };
         logStage("source normalization persisted");
     }
@@ -188,6 +193,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         noopReuse: hotBuildIsNoop,
         sourceNarrativeWrittenFiles: sourcePersistStats?.writtenFiles ?? 0,
         sourceNarrativeSkippedFiles: sourcePersistStats?.skippedFiles ?? 0,
+        sourceNarrativeRemovedFiles: sourcePersistStats?.removedFiles ?? 0,
     };
     const persistRunReport = (payload: {
         llmStatus: string;
@@ -524,6 +530,7 @@ interface BuildReport {
         noopReuse: boolean;
         sourceNarrativeWrittenFiles: number;
         sourceNarrativeSkippedFiles: number;
+        sourceNarrativeRemovedFiles: number;
     };
     llmStatus: string;
     scopePreview: {
@@ -634,7 +641,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
         `- cache: reused=${String(report.buildStats.reusedCache)}, noop=${String(report.buildStats.noopReuse)}`
     );
     lines.push(
-        `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedUnchanged=${report.buildStats.sourceNarrativeSkippedFiles}`
+        `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedUnchanged=${report.buildStats.sourceNarrativeSkippedFiles}, removedStale=${report.buildStats.sourceNarrativeRemovedFiles}`
     );
     lines.push(
         `- partialBuild: ${String(report.buildStats.partialBuild)}${report.buildStats.maxNarrativeDocs ? ` (maxNarrativeDocs=${report.buildStats.maxNarrativeDocs})` : ""}`
@@ -829,9 +836,14 @@ function loadAllArtifacts(
 function persistAssembledObservationMarkdown(
     rawDir: string,
     records: V8NarrativeRecord[]
-): { docs: V8NarrativeRecord[]; writtenFiles: number; skippedFiles: number } {
+): {
+    docs: V8NarrativeRecord[];
+    writtenFiles: number;
+    skippedFiles: number;
+    removedFiles: number;
+} {
     if (!records.length) {
-        return { docs: [], writtenFiles: 0, skippedFiles: 0 };
+        return { docs: [], writtenFiles: 0, skippedFiles: 0, removedFiles: 0 };
     }
     const outDir = path.join(rawDir, "observations", "assembled");
     fs.mkdirSync(outDir, { recursive: true });
@@ -1163,11 +1175,17 @@ interface NarrativeEntry {
 function persistSessionNarratives(
     outDir: string,
     records: V8NarrativeRecord[]
-): { docs: V8NarrativeRecord[]; writtenFiles: number; skippedFiles: number } {
+): {
+    docs: V8NarrativeRecord[];
+    writtenFiles: number;
+    skippedFiles: number;
+    removedFiles: number;
+} {
     const sessions = new Map<string, NarrativeEntry[]>();
     const docs: V8NarrativeRecord[] = [];
     let writtenFiles = 0;
     let skippedFiles = 0;
+    let removedFiles = 0;
     for (const record of records) {
         if (record.sourceType !== "session_trace") continue;
         const rawText = record.cleanText || record.rawText || "";
@@ -1217,11 +1235,43 @@ function persistSessionNarratives(
         if (wrote) writtenFiles += 1;
         else skippedFiles += 1;
     }
+    const removedStale = removeStaleSessionNarrativeFiles(
+        outDir,
+        new Set(docs.map((doc) => path.basename(doc.sourceRef)))
+    );
+    removedFiles = removedStale;
+
     return {
         docs: sortNarrativeRecords(docs),
         writtenFiles,
         skippedFiles,
+        removedFiles,
     };
+}
+
+function removeStaleSessionNarrativeFiles(
+    outDir: string,
+    keepFiles: Set<string>
+): number {
+    let removed = 0;
+    try {
+        const files = fs
+            .readdirSync(outDir)
+            .filter((name) => /^session_.+_narrative\.md$/i.test(name));
+        for (const file of files) {
+            if (keepFiles.has(file)) continue;
+            const fullPath = path.join(outDir, file);
+            try {
+                fs.unlinkSync(fullPath);
+                removed += 1;
+            } catch {
+                // ignore single-file removal errors
+            }
+        }
+    } catch {
+        // ignore directory listing errors
+    }
+    return removed;
 }
 
 function writeFileIfChanged(filePath: string, content: string): boolean {
