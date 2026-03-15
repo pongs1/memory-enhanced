@@ -206,12 +206,25 @@ export function buildRuntimeProjections(input: {
         });
     }
 
-    const bundles = buildBundlesFromCandidates(candidates, input.edges, edgeKinds, spanById);
-    const bundleByNodeId = new Map<string, (typeof bundles)[number]>();
-    for (const bundle of bundles) {
-        for (const nodeId of bundle.nodeIds) {
-            bundleByNodeId.set(nodeId, bundle);
-        }
+    const groupedBundles = buildBundlesFromCandidates(candidates, input.edges, edgeKinds, spanById);
+    for (const candidate of candidates) {
+        const bestEvidenceSpanIds =
+            candidate.node.bestEvidenceSpanIds.length > 0
+                ? candidate.node.bestEvidenceSpanIds
+                : candidate.node.evidenceSpanIds.slice(0, 1);
+        recallBundles.push({
+            bundleId: candidate.node.id,
+            title: candidate.label,
+            kind: candidate.kind,
+            nodeIds: [candidate.node.id],
+            sourceRefs: candidate.sourceRef ? [candidate.sourceRef] : [],
+            evidenceSpanIds: candidate.node.evidenceSpanIds,
+            bestEvidenceSpanIds,
+            summaryText: candidate.label,
+            packType: candidate.packType,
+        });
+    }
+    for (const bundle of groupedBundles) {
         recallBundles.push({
             bundleId: bundle.bundleId,
             title: bundle.title,
@@ -226,12 +239,9 @@ export function buildRuntimeProjections(input: {
     }
 
     for (const candidate of candidates) {
-        const bundle = bundleByNodeId.get(candidate.node.id);
-        const bundleId = bundle?.bundleId || candidate.node.id;
-        const summary = bundle?.summaryText || candidate.label;
         ignitionNodes.push({
             nodeId: candidate.node.id,
-            bundleId,
+            bundleId: candidate.node.id,
             kind: candidate.kind,
             names: {
                 zh: candidate.label,
@@ -239,7 +249,7 @@ export function buildRuntimeProjections(input: {
             },
             aliases: candidate.aliases,
             triggerTerms: candidate.triggerTerms,
-            summary,
+            summary: candidate.label,
             searchText: candidate.searchText,
             sourceRef: candidate.sourceRef,
             evidenceSpanIds: candidate.node.evidenceSpanIds,
@@ -376,7 +386,7 @@ function buildBundlesFromCandidates(
             );
             const bestEvidenceSpanIds = selectBestSpans(evidenceSpanIds, spanById, 8);
             bundles.push({
-                bundleId: `bundle_${bundleSeq}`,
+                bundleId: `group_${bundleSeq}`,
                 title,
                 summaryText,
                 kind: resolveBundleKind(sorted.map((item) => item.kind)),
@@ -395,17 +405,22 @@ function buildBundlesFromCandidates(
 function splitComponentByDay<T extends { dayKey: string | null }>(
     nodes: T[]
 ): T[][] {
+    if (nodes.length <= 10) return [nodes];
     const dated = nodes.filter((item) => !!item.dayKey);
     const undated = nodes.filter((item) => !item.dayKey);
     if (dated.length === 0) return [nodes];
-    const byDay = new Map<string, Array<{ dayKey: string | null }>>();
+    const byDay = new Map<string, T[]>();
     for (const item of dated) {
         const key = item.dayKey!;
         const list = byDay.get(key) || [];
         list.push(item);
         byDay.set(key, list);
     }
-    const result = Array.from(byDay.values());
+    const result = Array.from(byDay.values()) as T[][];
+    if (result.length <= 1) return [nodes];
+    const largest = result.reduce((max, bucket) => Math.max(max, bucket.length), 0);
+    // Keep cross-day continuity when one dominant thread spans most nodes.
+    if (largest / nodes.length >= 0.75) return [nodes];
     if (undated.length > 0) {
         if (result.length === 0) {
             result.push(undated);

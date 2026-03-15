@@ -17,11 +17,11 @@ import type {
     V8HypothesisEdge,
     V8IgnitionEdgeProjection,
     V8IgnitionNodeProjection,
+    V8RecallBundleProjection,
     V8RecallMode,
     V8ScanResult,
     V8ScannerConfig,
     V8SceneSignal,
-    V8NarrativeRecord,
 } from "./types_v8.js";
 
 interface EdgeCatalogFile {
@@ -42,6 +42,7 @@ interface LoadedGraphData {
     nodeDayKeys: Map<string, Set<string>>;
     edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>;
     policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
+    groupBundles: V8RecallBundleProjection[];
     hypothesisEdges: V8HypothesisEdge[];
 }
 
@@ -224,19 +225,20 @@ export class V8GraphScanner {
         const nodes = loadJsonl<V8GraphNode>(store.graphNodes);
         const graphEdges = loadJsonl<V8GraphEdge>(store.graphEdges);
         const evidenceSpans = loadJsonl<V8EvidenceSpan>(store.evidenceSpans);
-        const sources = loadJsonl<V8NarrativeRecord>(store.narrativeRecords);
         const ignitionNodes = fs.existsSync(store.ignitionNodes)
             ? loadJsonl<V8IgnitionNodeProjection>(store.ignitionNodes)
             : [];
         const ignitionEdges = fs.existsSync(store.ignitionEdges)
             ? loadJsonl<V8IgnitionEdgeProjection>(store.ignitionEdges)
             : [];
+        const recallBundles = fs.existsSync(store.recallBundles)
+            ? loadJsonl<V8RecallBundleProjection>(store.recallBundles)
+            : [];
         const hypothesisEdges = loadHypothesisEdges(this.workspace);
 
         const nodesById = new Map<string, V8GraphNode>();
         const nodeTokens = new Map<string, Set<string>>();
         const spanById = new Map(evidenceSpans.map((span) => [span.id, span]));
-        const sourceById = new Map(sources.map((source) => [source.id, source]));
         const nodeKinds = new Map<string, "episodic" | "semantic" | "procedural">();
         const nodeDayKeys = new Map<string, Set<string>>();
         const ignitionNodesById =
@@ -290,16 +292,14 @@ export class V8GraphScanner {
             for (const spanId of node.evidenceSpanIds || []) {
                 const span = spanById.get(spanId);
                 if (!span) continue;
-                const source = sourceById.get(span.narrativeRecordId);
-                if (!source) continue;
-                if (source.sourceType === "skill_md") {
+                if (span.sourceType === "skill_md") {
                     hasProcedural = true;
                 }
-                if (source.sourceClass === "curated") {
+                if (span.sourceClass === "curated") {
                     hasCurated = true;
                 }
-                if (source.timestamp) {
-                    const dayKey = toDayKey(source.timestamp);
+                if (span.timestamp) {
+                    const dayKey = toDayKey(span.timestamp);
                     if (dayKey) {
                         dayKeys.add(dayKey);
                     }
@@ -376,6 +376,7 @@ export class V8GraphScanner {
             nodeDayKeys,
             edgeKinds,
             policyByKindMode,
+            groupBundles: recallBundles.filter((bundle) => bundle.nodeIds.length >= 2),
             hypothesisEdges,
         };
     }
@@ -666,6 +667,7 @@ export class V8GraphScanner {
         };
 
         let topBundles = buildBundles(this.mode, 0.05);
+        topBundles = this.mergeGroupBundles(topBundles, now);
 
         if (topBundles.length === 0) {
             this.spreadActivation("oblique");
@@ -675,6 +677,7 @@ export class V8GraphScanner {
                 "background",
                 2
             );
+            topBundles = this.mergeGroupBundles(topBundles, now);
         }
 
         for (const bundle of topBundles) {
@@ -685,6 +688,67 @@ export class V8GraphScanner {
         }
 
         return { activatedBundles: topBundles, recentWindow: this.recentWindow };
+    }
+
+    private mergeGroupBundles(
+        baseBundles: V8ActivatedBundle[],
+        now: number
+    ): V8ActivatedBundle[] {
+        if (baseBundles.length === 0) return baseBundles;
+        if (this.graph.groupBundles.length === 0) return baseBundles;
+
+        const activeNodeIds = new Set<string>();
+        for (const bundle of baseBundles) {
+            for (const nodeId of bundle.nodeIds) {
+                activeNodeIds.add(nodeId);
+            }
+        }
+
+        const extraBundles: V8ActivatedBundle[] = [];
+        for (const group of this.graph.groupBundles) {
+            const cooldownUntil = this.bundleCooldowns.get(group.bundleId) || 0;
+            if (cooldownUntil > now) continue;
+
+            const overlapNodeIds = group.nodeIds.filter((nodeId) => activeNodeIds.has(nodeId));
+            if (overlapNodeIds.length < 2) continue;
+
+            const overlapRatio = overlapNodeIds.length / Math.max(1, group.nodeIds.length);
+            let activationSum = 0;
+            for (const nodeId of overlapNodeIds) {
+                activationSum += this.activations.get(nodeId) || 0;
+            }
+            const meanActivation = activationSum / overlapNodeIds.length;
+            const energy = clamp01(meanActivation * (0.65 + 0.35 * overlapRatio));
+            const tier = scoreTier(energy, this.config);
+            if (!tier) continue;
+
+            extraBundles.push({
+                bundleId: group.bundleId,
+                nodeIds: overlapNodeIds,
+                tier,
+                energy,
+                evidenceSpanIds:
+                    group.bestEvidenceSpanIds.length > 0
+                        ? group.bestEvidenceSpanIds
+                        : group.evidenceSpanIds.slice(0, 8),
+            });
+        }
+
+        if (extraBundles.length === 0) {
+            return baseBundles;
+        }
+
+        const merged = new Map<string, V8ActivatedBundle>();
+        for (const bundle of [...baseBundles, ...extraBundles]) {
+            const existing = merged.get(bundle.bundleId);
+            if (!existing || bundle.energy > existing.energy) {
+                merged.set(bundle.bundleId, bundle);
+            }
+        }
+
+        return Array.from(merged.values())
+            .sort((a, b) => b.energy - a.energy)
+            .slice(0, this.config.maxInjectedBundles);
     }
 
     private activate(nodeId: string, energy: number): void {
