@@ -584,6 +584,12 @@ export interface V8ActivatedBundle {
     evidenceSpanIds: string[];
     sourceRefs?: string[];
     wave?: 1 | 2;
+    diagnostics?: {
+        triggerScore?: number;
+        coverage?: number;
+        jaccard?: number;
+        irSimilarity?: number;
+    };
 }
 
 export interface V8ScanResult {

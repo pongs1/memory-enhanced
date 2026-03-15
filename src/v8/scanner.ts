@@ -804,6 +804,12 @@ export class V8GraphScanner {
                     group.bestEvidenceSpanIds.length > 0
                         ? group.bestEvidenceSpanIds
                         : group.evidenceSpanIds.slice(0, 8),
+                diagnostics: {
+                    triggerScore: Number(triggerScore.toFixed(4)),
+                    coverage: Number(coverage.toFixed(4)),
+                    jaccard: Number(jaccard.toFixed(4)),
+                    irSimilarity: Number(irSimilarity.toFixed(4)),
+                },
             });
         }
 
