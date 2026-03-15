@@ -103,6 +103,12 @@ const BATCH_CONFIG_BY_LAYER: Record<V8GraphLayer, LlmBatchConfig> = {
     macro: { maxUnits: 2, maxChars: 6000, maxEvidenceSpans: 12 },
 };
 
+const MAX_ITEMS_PER_UNIT: Record<V8GraphLayer, number> = {
+    micro: 18,
+    meso: 6,
+    macro: 3,
+};
+
 function edgeCatalogPath(): string {
     const here = path.dirname(fileURLToPath(import.meta.url));
     return path.resolve(here, "../../../schema/v8-edge-catalog.json");
@@ -392,10 +398,11 @@ export function loadLlmIrItems(
             ? parseMarkdownFile(mdPath, units, evidenceSpans)
             : [];
     if (fromMd.length > 0) {
+        const pruned = pruneLlmItems(fromMd);
         if (jsonlPath) {
-            writeJsonl(jsonlPath, fromMd);
+            writeJsonl(jsonlPath, pruned);
         }
-        return fromMd;
+        return pruned;
     }
     if (!jsonlPath) return [];
     const raw = readJsonl<any>(jsonlPath);
@@ -414,7 +421,7 @@ export function loadLlmIrItems(
             items.push(item);
         }
     }
-    return items;
+    return pruneLlmItems(items);
 }
 
 function parseMarkdownFile(
@@ -561,6 +568,12 @@ function buildPrompt(input: {
     const itemTypeLine = ITEM_TYPES_BY_LAYER[layer]?.length
         ? `Allowed item_type (${layer}): ${ITEM_TYPES_BY_LAYER[layer].join(", ")}`
         : "";
+    const layerBudgetHint =
+        layer === "macro"
+            ? "Extraction budget: usually 1-3 high-value relations per unit. Skip weak ones."
+            : layer === "meso"
+              ? "Extraction budget: usually 1-6 relations per unit. Do not force coverage."
+              : "Extraction budget: keep local object/fact relations only.";
     const unitBlocks = units.flatMap((unit) => {
         const evidenceLines = (spansByUnit.get(unit.id) || []).map(
             (span) => `- (${span.id}) ${sanitizeLine(span.text)}`
@@ -583,6 +596,7 @@ function buildPrompt(input: {
         "Rules:",
         "- Use only the relations listed under Allowed relations (by group).",
         "- Do not infer beyond the text; skip vague or speculative claims.",
+        "- Precision over coverage: if uncertain, skip.",
         "- `evidence_span_ids` must come from the provided evidence spans.",
         "- `unit_id` must be one of the listed Unit IDs.",
         "- Output Markdown only. No JSON. No extra commentary.",
@@ -608,6 +622,7 @@ function buildPrompt(input: {
         "",
         allowedLine,
         itemTypeLine,
+        layerBudgetHint,
         ...groupedLines,
         "",
         "### Batch",
@@ -719,4 +734,51 @@ function parseQualifiers(value: string): Record<string, string> {
         qualifiers[key] = rest.join("=");
     }
     return qualifiers;
+}
+
+function pruneLlmItems(items: V8MemoryItem[]): V8MemoryItem[] {
+    if (items.length <= 1) return items;
+    const sorted = items
+        .slice()
+        .sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+
+    const kept: V8MemoryItem[] = [];
+    const seenGlobal = new Set<string>();
+    const perUnitCount = new Map<string, number>();
+
+    for (const item of sorted) {
+        if (!item.unitIds || item.unitIds.length === 0) continue;
+        if (!item.evidenceSpanIds || item.evidenceSpanIds.length === 0) continue;
+        if (item.layer !== "micro" && item.confidence < 0.55) continue;
+
+        const unitId = item.unitIds[0]!;
+        const unitKey = `${item.layer}:${unitId}`;
+        const currentCount = perUnitCount.get(unitKey) || 0;
+        const cap = MAX_ITEMS_PER_UNIT[item.layer] || 6;
+        if (currentCount >= cap) continue;
+
+        const dedupeKey = [
+            item.layer,
+            item.narrativeRecordId,
+            unitId,
+            item.itemType,
+            normalizeDedupe(item.subject),
+            normalizeDedupe(item.predicate),
+            normalizeDedupe(item.object),
+        ].join("|");
+        if (seenGlobal.has(dedupeKey)) continue;
+        seenGlobal.add(dedupeKey);
+
+        kept.push(item);
+        perUnitCount.set(unitKey, currentCount + 1);
+    }
+
+    return kept;
+}
+
+function normalizeDedupe(text: string): string {
+    return (text || "")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
 }

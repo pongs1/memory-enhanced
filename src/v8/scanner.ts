@@ -376,7 +376,9 @@ export class V8GraphScanner {
             nodeDayKeys,
             edgeKinds,
             policyByKindMode,
-            groupBundles: recallBundles.filter((bundle) => bundle.nodeIds.length >= 2),
+            groupBundles: recallBundles.filter(
+                (bundle) => bundle.bundleId.startsWith("group_") && bundle.nodeIds.length >= 2
+            ),
             hypothesisEdges,
         };
     }

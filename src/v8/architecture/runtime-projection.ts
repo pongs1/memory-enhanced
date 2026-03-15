@@ -167,6 +167,7 @@ export function buildRuntimeProjections(input: {
         node: V8GraphNode;
         kind: "episodic" | "semantic" | "procedural";
         dayKey: string | null;
+        anchorUnitId: string | null;
         sourceRef: string | null;
         label: string;
         aliases: string[];
@@ -188,6 +189,7 @@ export function buildRuntimeProjections(input: {
         const spanIds = node.evidenceSpanIds || [];
         const bestSpanIds = node.bestEvidenceSpanIds || [];
         const { kind, dayKey } = classifyKind(spanIds, spanById);
+        const anchorUnitId = resolveAnchorUnitId(node, spanById);
         const sourceRef = resolveSourceRef(spanIds, spanById);
         const label = node.canonicalLabel || "";
         const aliases = node.aliases || [];
@@ -197,6 +199,7 @@ export function buildRuntimeProjections(input: {
             node,
             kind,
             dayKey: dayKey ?? null,
+            anchorUnitId,
             sourceRef,
             label,
             aliases,
@@ -206,22 +209,42 @@ export function buildRuntimeProjections(input: {
         });
     }
 
-    const groupedBundles = buildBundlesFromCandidates(candidates, input.edges, edgeKinds, spanById);
+    const microBundleIdByNodeId = new Map<string, string>();
+    const candidatesByMicroBundle = new Map<string, typeof candidates>();
     for (const candidate of candidates) {
-        const bestEvidenceSpanIds =
-            candidate.node.bestEvidenceSpanIds.length > 0
-                ? candidate.node.bestEvidenceSpanIds
-                : candidate.node.evidenceSpanIds.slice(0, 1);
+        const bundleId = candidate.anchorUnitId
+            ? `micro_${candidate.anchorUnitId}`
+            : `micro_${candidate.node.id}`;
+        microBundleIdByNodeId.set(candidate.node.id, bundleId);
+        const list = candidatesByMicroBundle.get(bundleId) || [];
+        list.push(candidate);
+        candidatesByMicroBundle.set(bundleId, list);
+    }
+
+    const groupedBundles = buildBundlesFromCandidates(candidates, input.edges, edgeKinds, spanById);
+    for (const [bundleId, bundleCandidates] of candidatesByMicroBundle.entries()) {
+        const sorted = bundleCandidates
+            .slice()
+            .sort((a, b) => b.node.state.confidence - a.node.state.confidence);
+        const nodeIds = sorted.map((item) => item.node.id);
+        const labelTop = sorted.map((item) => item.label).filter(Boolean).slice(0, 3);
+        const title = labelTop[0] || bundleId;
+        const summaryText = unique(labelTop).join(" | ") || title;
+        const sourceRefs = unique(sorted.map((item) => item.sourceRef || "").filter(Boolean));
+        const evidenceSpanIds = unique(
+            sorted.flatMap((item) => item.node.evidenceSpanIds || [])
+        ).slice(0, 80);
+        const bestEvidenceSpanIds = selectBestSpans(evidenceSpanIds, spanById, 8);
         recallBundles.push({
-            bundleId: candidate.node.id,
-            title: candidate.label,
-            kind: candidate.kind,
-            nodeIds: [candidate.node.id],
-            sourceRefs: candidate.sourceRef ? [candidate.sourceRef] : [],
-            evidenceSpanIds: candidate.node.evidenceSpanIds,
+            bundleId,
+            title,
+            kind: resolveBundleKind(sorted.map((item) => item.kind)),
+            nodeIds,
+            sourceRefs,
+            evidenceSpanIds,
             bestEvidenceSpanIds,
-            summaryText: candidate.label,
-            packType: candidate.packType,
+            summaryText,
+            packType: resolveBundlePackType(sorted.map((item) => item.packType)),
         });
     }
     for (const bundle of groupedBundles) {
@@ -241,7 +264,8 @@ export function buildRuntimeProjections(input: {
     for (const candidate of candidates) {
         ignitionNodes.push({
             nodeId: candidate.node.id,
-            bundleId: candidate.node.id,
+            bundleId:
+                microBundleIdByNodeId.get(candidate.node.id) || `micro_${candidate.node.id}`,
             kind: candidate.kind,
             names: {
                 zh: candidate.label,
@@ -284,6 +308,22 @@ export function buildRuntimeProjections(input: {
         ignitionEdges,
         recallBundles,
     };
+}
+
+function resolveAnchorUnitId(
+    node: V8GraphNode,
+    spanById: Map<string, V8EvidenceSpan>
+): string | null {
+    const spanOrder = [
+        ...(node.bestEvidenceSpanIds || []),
+        ...(node.evidenceSpanIds || []),
+    ];
+    for (const spanId of spanOrder) {
+        const span = spanById.get(spanId);
+        if (!span?.unitId) continue;
+        return span.unitId;
+    }
+    return null;
 }
 
 function buildBundlesFromCandidates(

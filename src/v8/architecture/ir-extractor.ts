@@ -66,6 +66,31 @@ export function extractMemoryItems(
                 })
             );
         }
+
+        // Keep one minimal micro IR anchor per span so micro never becomes empty.
+        const fallbackObject = truncateLabel(text);
+        if (fallbackObject) {
+            const fallbackKey = `${unit.narrativeRecordId}|${unit.id}|discourse|${fallbackObject}`;
+            if (!seen.has(fallbackKey)) {
+                seen.add(fallbackKey);
+                items.push(
+                    buildItem({
+                        itemType: "discourse_unit",
+                        originType: "asserted",
+                        layer: "micro",
+                        subject: speaker,
+                        predicate: "summarizes",
+                        object: fallbackObject,
+                        label: fallbackObject,
+                        narrativeRecordId: unit.narrativeRecordId,
+                        sourceRef: unit.narrativeRef,
+                        evidenceSpanIds: [span.id],
+                        unitIds: [unit.id],
+                        confidence: Math.max(0.35, confidence - 0.16),
+                    })
+                );
+            }
+        }
     }
 
     return items;
