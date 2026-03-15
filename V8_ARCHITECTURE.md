@@ -769,14 +769,18 @@ V8 therefore needs a separate cross-day discovery lane:
 1. compile local memory first
    - `stream` keeps recent `micro/meso` structure fresh
    - `final` closes a session with stable `macro/meso/micro` artifacts
-2. generate cross-day candidates from cached graph artifacts
-   - use repeated entities, methods, goals, decisions, constraints, state objects, and bundle-summary signatures
-   - compare across different day/session partitions
-   - candidate generation must stay deterministic and budgeted, not all-vs-all LLM
-3. review compact candidate packs with LLM
-   - each job should contain a few cached group summaries plus a small evidence pack from each side
+2. anchor candidate generation on stable extracted objects
+   - repeated entities, methods, goals, decisions, constraints, and state objects are the primary frontier
+   - candidate edge families should be selected by anchor class
+   - V8 should not brute-force all edge types for every anchor
+3. search evidence spans, not full narratives
+   - `stream` only searches local/active span indexes for cheap maintenance
+   - `final` / cross-day mining searches the full archive span corpus
+   - retrieval returns direct evidence candidates, not final judgments
+4. review compact candidate packs with LLM
+   - each job should contain the anchor, the candidate edge family, retrieved spans, and a small local window
    - the review question should be narrow: same line, state change, refinement, contradiction, analogy, delayed payoff
-4. persist outcomes in two lanes
+5. persist outcomes in two lanes
    - strong evidence-backed results become canonical inferred graph edges
    - weaker results remain `hypothesis` artifacts until later validated
 
@@ -790,8 +794,23 @@ This is the only scalable way to preserve deep relations such as:
 The core rule is:
 
 - do not repeatedly feed full old narratives back into LLM
+- use anchor class + edge-family scope to decide what deserves review
+- search the full archive as span/unit indexes when doing cross-day mining
 - reuse cached summaries and selected spans to form small review jobs
-- let graph/global indexes decide what deserves review
+
+Responsibility split:
+
+- BM25/vector search finds direct evidence spans
+- constrained LLM review decides whether an allowed edge is supported
+- graph/state lines assemble multi-hop history after direct edges are accepted
+
+V8 should not expect the search layer itself to solve multi-hop logic in one pass.
+
+Baseline operating choice:
+
+- `stream`: partial candidate edge families + local/active span search
+- `final` cross-day miner: partial candidate edge families + full archive span search
+- avoid `all edge types + recent-days-only search` as the default policy
 
 ### 10.9 Evidence-safe exploration lane
 

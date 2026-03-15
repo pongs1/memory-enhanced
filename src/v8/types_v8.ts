@@ -526,6 +526,74 @@ export interface V8PackCacheRecord {
     pinReason?: "user" | "llm" | "system";
 }
 
+export type V8RelationSearchScope = "local_active" | "global_archive";
+
+export type V8RelationSearchMode = "bm25" | "vector" | "hybrid";
+
+export interface V8GroupSummary {
+    id: string;
+    title: string;
+    summaryText: string;
+    nodeIds: string[];
+    bundleIds: string[];
+    evidenceSpanIds: string[];
+    updatedAt: string;
+}
+
+export interface V8RelationSearchPlan {
+    id: string;
+    anchorNodeIds: string[];
+    anchorLabels: string[];
+    anchorKinds: string[];
+    candidateEdgeTypes: string[];
+    recallMode: V8RecallMode;
+    searchScope: V8RelationSearchScope;
+    searchMode: V8RelationSearchMode;
+    queryTerms: string[];
+    hintBundleIds: string[];
+    hintSpanIds: string[];
+    createdAt: string;
+}
+
+export interface V8RelationCandidateHit {
+    id: string;
+    planId: string;
+    candidateEdgeType: string;
+    spanId: string;
+    unitId: string;
+    narrativeRef: string;
+    score: number;
+    spanText: string;
+    createdAt: string;
+}
+
+export interface V8RelationReviewJob {
+    id: string;
+    planId: string;
+    anchorNodeIds: string[];
+    candidateEdgeTypes: string[];
+    candidateHitIds: string[];
+    evidenceSpanIds: string[];
+    bundleIds: string[];
+    reviewQuestion: string;
+    modeHint: V8RecallMode;
+    status: "pending" | "completed" | "failed";
+    createdAt: string;
+}
+
+export interface V8ReviewedRelation {
+    id: string;
+    reviewJobId: string;
+    srcNodeId: string;
+    dstNodeId: string;
+    edgeType: string;
+    status: "accepted" | "hypothesis" | "rejected";
+    supportEvidenceSpanIds: string[];
+    confidence: number;
+    rationale: string;
+    createdAt: string;
+}
+
 export interface V8ControlAnchors {
     goal: string;
     activeTask: string;

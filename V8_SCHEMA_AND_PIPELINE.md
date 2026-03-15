@@ -1145,7 +1145,7 @@ Status: frozen/deferred until V8 core implementation is stable.
 V8 should expose an explicit archive search interface to complete multi-path retrieval:
 
 - `memory_search_archive(query, mode=hybrid|bm25|vector, top_k, hint_span_ids?, hint_bundle_ids?)`
-- step 1: retrieve candidate `evidence_span` ids via BM25 + vector
+- step 1: search the full archive span corpus via BM25 + vector
 - step 2: apply optional graph-guided rerank using hint spans, bundles, and active mode (`profile|trajectory|oblique|audit`)
 - step 3: resolve `span -> narrativeRef + charStart/charEnd`
 - step 4: read original narrative text slice by offsets, then return to LLM
@@ -1157,11 +1157,18 @@ This keeps online recall light while avoiding retrieval noise storms:
 - evidence always returns as span-backed raw text, not regenerated summaries
 - graph hints constrain lexical/vector search to the right semantic neighborhood
 
+Important scope rule:
+
+- archive search operates over full-history `span` / `unit` indexes
+- it does not re-feed full historical `narrative` documents into LLM as a first step
+
 ### 9.8.2 Graph-guided search planning contract
 
 To improve over plain Mem0/LanceDB-style top-k retrieval, V8 should add a light query planning layer before archive search:
 
 - build `search_hints` from activated memory:
+  - anchor entities / objects / methods / goals / decisions / constraints / state objects
+  - candidate edge families allowed for that anchor class
   - hot `micro` bundle ids
   - linked `group` summary ids
   - relation-direction hints (`horizontal`, `vertical`, `oblique`)
@@ -1176,6 +1183,7 @@ This contract should ensure:
 - if current recalled memory is incomplete, the model can still climb from injected span/unit anchors to the exact evidence it needs
 - same-attribute/same-semantic but cross-topic evidence is retrievable with much lower noise
 - vertical and oblique relationships can be searched deliberately instead of relying on random vector neighbors
+- the search space is reduced by anchor class and edge-family scope before LLM review, not by shrinking the archive to only recent days
 
 ### 9.8.3 Cross-day relation mining contract
 
@@ -1187,27 +1195,39 @@ The contract is:
 1. local compile first
    - `stream` compile keeps current-session `micro/meso` fresh
    - `final` compile closes a session narrative with `macro/meso/micro`
-2. build cross-day candidate frontiers from cached artifacts, not raw text
-   - use shared entities, methods, goals, constraints, decisions, state objects, and bundle-summary signatures
-   - generate candidate pairs/sets across different day/session partitions
-   - candidate generation must be deterministic and budgeted; no all-vs-all LLM pass
-3. review only compact candidate packs with LLM
-   - each pack should contain a small number of related bundle summaries plus selected support spans from each side
-   - the model should answer a narrow review question such as:
-     - continuation / same line
-     - state change / supersession
-     - refinement / decomposition
-     - analogy / oblique relation
-4. persist reviewed results separately
+2. choose anchors, not raw semantic similarity, as the primary frontier
+   - anchors should come from stable extracted objects: entity, concept, method, goal, decision, constraint, state object
+   - for each anchor, select only the candidate edge families allowed for that anchor class
+   - do not brute-force all edge types for every anchor
+3. search evidence globally
+   - `stream` should search only local/active spans for cheap maintenance
+   - `final` / cross-day mining should search the full archive span corpus
+   - search returns direct candidate spans, not final relation judgments
+4. review only compact candidate packs with LLM
+   - each pack should contain the anchor, the allowed edge family, retrieved support spans, and small local windows
+   - the model should answer a narrow verification question such as:
+     - does this direct edge exist
+     - is this a state change / supersession
+     - is this a refinement / decomposition
+     - is this an oblique analogy or side-line relation
+5. persist reviewed results separately
    - canonical inferred edges require `supportEvidenceSpanIds`
    - weak results stay as `hypothesis` artifacts
    - `profile` recall should ignore hypotheses by default
    - `trajectory` and `oblique` may use them with explicit grounding
 
+Baseline operating choice:
+
+- `stream`: partial candidate edge families + local/active span search
+- `final` cross-day miner: partial candidate edge families + full archive span search
+- do not use `all edge types + recent days only` as the baseline strategy
+
 Recommended persisted artifacts:
 
 - `group_summary`: cached summary/projection for a dense IR neighborhood or bundle cluster
+- `relation_search_plan`: anchor + allowed edge-family + search hints
 - `relation_candidate`: deterministic cross-day frontier hit before LLM review
+- `relation_candidate_hit`: span-level retrieval hit for a search plan
 - `relation_review_job`: compact summary + evidence pack to present to LLM
 - `reviewed_relation`: accepted inferred edge or rejected/shelved hypothesis result
 
@@ -1217,6 +1237,15 @@ This is the key reuse principle:
 - units and IR are cached once
 - bundle summaries become the reusable compression layer
 - cross-day relation jobs consume cached summaries plus a small evidence pack, not full historical narratives
+
+Responsibility split:
+
+- retrieval is responsible for finding direct evidence spans
+- LLM review is responsible for deciding whether a constrained edge claim is supported
+- graph composition is responsible for multi-hop lines, lifecycle assembly, and historical trajectory
+
+V8 should not expect BM25/vector search itself to solve multi-hop logic.
+Multi-hop structure should emerge after direct edges are accepted and stitched through graph/state lines.
 
 Without this lane, V8 can answer local questions but cannot reliably form long-horizon lines, relationship evolution, or delayed causal links.
 
