@@ -46,6 +46,8 @@ import type {
     V8MemoryItem,
     V8NarrativeRecord,
     V8RecallBundleProjection,
+    V8RelationCandidateHit,
+    V8RelationSearchPlan,
     V8RelationReviewJob,
     V8SearchFeedbackSignal,
     V8ReviewedRelation,
@@ -294,6 +296,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         relationShardSelections: 0,
         relationCandidateHits: 0,
         relationReviewJobs: 0,
+        relationAutoHypothesis: 0,
         relationReviewedAccepted: 0,
         relationReviewedHypothesis: 0,
         relationReviewedRejected: 0,
@@ -391,6 +394,9 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         buildStats.relationReviewedHypothesis = countReviewedRelationsByStatus(
             store.reviewedRelations,
             "hypothesis"
+        );
+        buildStats.relationAutoHypothesis = countAutoHypothesisReviewed(
+            store.reviewedRelations
         );
         buildStats.relationReviewedRejected = countReviewedRelationsByStatus(
             store.reviewedRelations,
@@ -723,9 +729,22 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
                   nodes,
               })
             : [];
+    const autoHypothesisReviewed = buildAutoHypothesisReviewedRelations({
+        plans: relationPlanning.relationSearchPlans,
+        candidateHits: relationPlanning.relationCandidateHits,
+        reviewJobs: relationPlanning.relationReviewJobs,
+        nodes,
+        edges: baseEdges,
+        existingReviewedRelations: [
+            ...reviewedRelationsInput,
+            ...reviewedFromOutputs,
+        ],
+    });
+    buildStats.relationAutoHypothesis = autoHypothesisReviewed.length;
     const mergedReviewedRelations = mergeRecordsById<V8ReviewedRelation>([
         ...reviewedRelationsInput,
         ...reviewedFromOutputs,
+        ...autoHypothesisReviewed,
     ]);
     const reviewedOverlayFinal = applyReviewedRelationsToGraph({
         nodes,
@@ -912,6 +931,7 @@ interface BuildReport {
         relationShardSelections: number;
         relationCandidateHits: number;
         relationReviewJobs: number;
+        relationAutoHypothesis: number;
         relationReviewedAccepted: number;
         relationReviewedHypothesis: number;
         relationReviewedRejected: number;
@@ -1260,6 +1280,178 @@ function countRelationReviewJobsByStatus(
     }
 }
 
+function countAutoHypothesisReviewed(filePath: string): number {
+    try {
+        return readJsonl<V8ReviewedRelation>(filePath).filter((item) => {
+            if (item.status !== "hypothesis") return false;
+            const rationale = (item.rationale || "").toLowerCase();
+            return rationale.startsWith("auto_hypothesis_from_relation_plan");
+        }).length;
+    } catch {
+        return 0;
+    }
+}
+
+function buildAutoHypothesisReviewedRelations(input: {
+    plans: V8RelationSearchPlan[];
+    candidateHits: V8RelationCandidateHit[];
+    reviewJobs: V8RelationReviewJob[];
+    nodes: V8GraphNode[];
+    edges: V8GraphEdge[];
+    existingReviewedRelations: V8ReviewedRelation[];
+}): V8ReviewedRelation[] {
+    if (input.plans.length === 0 || input.candidateHits.length === 0) return [];
+
+    const nodeById = new Map(input.nodes.map((node) => [node.id, node]));
+    const semanticNodesBySpanId = new Map<string, V8GraphNode[]>();
+    for (const node of input.nodes) {
+        if (!isAutoHypothesisSemanticNode(node)) continue;
+        for (const spanId of node.evidenceSpanIds || []) {
+            const list = semanticNodesBySpanId.get(spanId) || [];
+            list.push(node);
+            semanticNodesBySpanId.set(spanId, list);
+        }
+    }
+    for (const [spanId, nodes] of semanticNodesBySpanId.entries()) {
+        semanticNodesBySpanId.set(
+            spanId,
+            nodes
+                .slice()
+                .sort(
+                    (a, b) =>
+                        b.state.confidence - a.state.confidence ||
+                        b.state.supportCount - a.state.supportCount ||
+                        a.id.localeCompare(b.id)
+                )
+        );
+    }
+
+    const existingRelationKeys = new Set<string>();
+    for (const edge of input.edges) {
+        existingRelationKeys.add(
+            relationKey(edge.src, String(edge.type), edge.dst)
+        );
+    }
+    for (const relation of input.existingReviewedRelations) {
+        existingRelationKeys.add(
+            relationKey(relation.srcNodeId, relation.edgeType, relation.dstNodeId)
+        );
+    }
+
+    const reviewJobByPlan = new Map<string, string>();
+    for (const job of input.reviewJobs) {
+        if (!reviewJobByPlan.has(job.planId)) {
+            reviewJobByPlan.set(job.planId, job.id);
+        }
+    }
+
+    const candidateHitsByPlan = new Map<string, V8RelationCandidateHit[]>();
+    for (const hit of input.candidateHits) {
+        const list = candidateHitsByPlan.get(hit.planId) || [];
+        list.push(hit);
+        candidateHitsByPlan.set(hit.planId, list);
+    }
+    for (const hits of candidateHitsByPlan.values()) {
+        hits.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    }
+
+    const output: V8ReviewedRelation[] = [];
+    const nowIso = new Date().toISOString();
+    const globalCap = 480;
+
+    for (const plan of input.plans) {
+        const anchorNodeIds = (plan.anchorNodeIds || []).filter((nodeId) =>
+            nodeById.has(nodeId)
+        );
+        if (anchorNodeIds.length === 0) continue;
+        const laneTopHits =
+            plan.lane === "focused" ? 5 : plan.lane === "broadened" ? 7 : 9;
+        const planHits = (candidateHitsByPlan.get(plan.id) || []).slice(0, laneTopHits);
+        if (planHits.length === 0) continue;
+
+        const reviewJobId = reviewJobByPlan.get(plan.id) || `auto_plan_${plan.id}`;
+        const perPlanCap =
+            plan.lane === "focused" ? 6 : plan.lane === "broadened" ? 8 : 10;
+        let planAdded = 0;
+
+        for (const anchorNodeId of anchorNodeIds) {
+            const anchorLabelNorm = normalizeMemoryDedupe(
+                nodeById.get(anchorNodeId)?.canonicalLabel || ""
+            );
+            for (const hit of planHits) {
+                const dstCandidates = (semanticNodesBySpanId.get(hit.spanId) || []).filter(
+                    (node) =>
+                        node.id !== anchorNodeId &&
+                        normalizeMemoryDedupe(node.canonicalLabel) !== anchorLabelNorm
+                );
+                if (dstCandidates.length === 0) continue;
+                for (const dstNode of dstCandidates.slice(0, 3)) {
+                    const key = relationKey(
+                        anchorNodeId,
+                        hit.candidateEdgeType,
+                        dstNode.id
+                    );
+                    if (existingRelationKeys.has(key)) continue;
+                    existingRelationKeys.add(key);
+
+                    const confidence = autoHypothesisConfidence(hit.score);
+                    const id = `rr_auto_${createHash("sha1")
+                        .update(
+                            [
+                                plan.id,
+                                anchorNodeId,
+                                hit.candidateEdgeType,
+                                dstNode.id,
+                                hit.spanId,
+                            ].join("|")
+                        )
+                        .digest("hex")
+                        .slice(0, 12)}`;
+                    output.push({
+                        id,
+                        reviewJobId,
+                        srcNodeId: anchorNodeId,
+                        dstNodeId: dstNode.id,
+                        edgeType: hit.candidateEdgeType,
+                        status: "hypothesis",
+                        supportEvidenceSpanIds: [hit.spanId],
+                        confidence,
+                        rationale: `auto_hypothesis_from_relation_plan(lane=${plan.lane})`,
+                        createdAt: nowIso,
+                    });
+                    planAdded += 1;
+                    if (planAdded >= perPlanCap || output.length >= globalCap) break;
+                }
+                if (planAdded >= perPlanCap || output.length >= globalCap) break;
+            }
+            if (planAdded >= perPlanCap || output.length >= globalCap) break;
+        }
+        if (output.length >= globalCap) break;
+    }
+
+    return output.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function isAutoHypothesisSemanticNode(node: V8GraphNode): boolean {
+    if (node.id.startsWith("node_span_")) return false;
+    if (node.id.startsWith("node_unit_")) return false;
+    if (node.id.startsWith("node_edge_")) return false;
+    if (node.memoryType === "evidence" || node.memoryType === "discourse_unit") {
+        return false;
+    }
+    return true;
+}
+
+function relationKey(src: string, type: string, dst: string): string {
+    return `${src}|${type}|${dst}`;
+}
+
+function autoHypothesisConfidence(score: number): number {
+    if (!Number.isFinite(score)) return 0.4;
+    const value = 0.35 + score * 0.4;
+    return Math.max(0.35, Math.min(0.72, Math.round(value * 1000) / 1000));
+}
+
 function mergeRecordsById<T extends { id: string }>(records: T[]): T[] {
     const map = new Map<string, T>();
     for (const record of records) {
@@ -1325,7 +1517,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
         `- relationPlanning: entityPostings=${report.buildStats.relationEntityPostings}, scopeCards=${report.buildStats.relationScopeCards}, groupSummaries=${report.buildStats.relationGroupSummaries}, searchPlans=${report.buildStats.relationSearchPlans}, shardSelections=${report.buildStats.relationShardSelections}, candidateHits=${report.buildStats.relationCandidateHits}, reviewJobs=${report.buildStats.relationReviewJobs}`
     );
     lines.push(
-        `- relationReview: accepted=${report.buildStats.relationReviewedAccepted}, hypothesis=${report.buildStats.relationReviewedHypothesis}, rejected=${report.buildStats.relationReviewedRejected}, completedJobs=${report.buildStats.relationReviewJobsCompleted}, learningEvents=${report.buildStats.learningEvents}, searchFeedbackSignals=${report.buildStats.searchFeedbackSignals}`
+        `- relationReview: autoHypothesis=${report.buildStats.relationAutoHypothesis}, accepted=${report.buildStats.relationReviewedAccepted}, hypothesis=${report.buildStats.relationReviewedHypothesis}, rejected=${report.buildStats.relationReviewedRejected}, completedJobs=${report.buildStats.relationReviewJobsCompleted}, learningEvents=${report.buildStats.learningEvents}, searchFeedbackSignals=${report.buildStats.searchFeedbackSignals}`
     );
     lines.push(`- relationReviewLlmStatus: ${report.buildStats.relationReviewLlmStatus}`);
     lines.push(
