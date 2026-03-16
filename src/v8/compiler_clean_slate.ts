@@ -1222,7 +1222,7 @@ function buildMicroFallbackItems(input: {
         if (unit.layer !== "micro") continue;
         if (representedMicroUnitIds.has(unit.id)) continue;
         const text = unit.text.trim().replace(/\s+/g, " ");
-        if (!text) continue;
+        if (!text || isLowSignalFallbackText(text)) continue;
         const bestSpan = (spansByUnit.get(unit.id) || [])
             .slice()
             .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))[0];
@@ -1255,6 +1255,18 @@ function buildMicroFallbackItems(input: {
         });
     }
     return output;
+}
+
+function isLowSignalFallbackText(text: string): boolean {
+    const compact = text
+        .toLowerCase()
+        .replace(/[\s`*_~\-.,!?;:()[\]{}"'，。！？；：（）【】]/g, "")
+        .trim();
+    if (!compact) return true;
+    if (/^(hi|hello|hey|ok|okay|yo|hmm|lol|test|ping)+$/.test(compact)) return true;
+    if (/^(你好|您好|哈喽|嗯|啊|哦|好的|收到|测试)+$/.test(compact)) return true;
+    if (compact.length <= 2) return true;
+    return false;
 }
 
 function normalizeMemoryDedupe(text: string): string {
