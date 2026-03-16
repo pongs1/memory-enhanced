@@ -76,8 +76,11 @@ async function main() {
         relation_search_plan_count: relationSearchPlans.length,
         result_count: results.length,
         raw_hit_at_k: results.filter((item) => item.raw_hit).length,
+        raw_full_support_hit_at_k: results.filter((item) => item.raw_full_support_hit).length,
         static_guided_hit_at_k: results.filter((item) => item.static_guided_hit).length,
+        static_guided_full_support_hit_at_k: results.filter((item) => item.static_guided_full_support_hit).length,
         ignition_guided_hit_at_k: results.filter((item) => item.ignition_guided_hit).length,
+        ignition_guided_full_support_hit_at_k: results.filter((item) => item.ignition_guided_full_support_hit).length,
         results,
     };
 
@@ -89,8 +92,11 @@ async function main() {
     console.log(`workspace=${workspace}`);
     console.log(`summary=${summaryPath}`);
     console.log(`raw_hit_at_${topK}=${summary.raw_hit_at_k}/${summary.question_count}`);
+    console.log(`raw_full_support_hit_at_${topK}=${summary.raw_full_support_hit_at_k}/${summary.question_count}`);
     console.log(`static_guided_hit_at_${topK}=${summary.static_guided_hit_at_k}/${summary.question_count}`);
+    console.log(`static_guided_full_support_hit_at_${topK}=${summary.static_guided_full_support_hit_at_k}/${summary.question_count}`);
     console.log(`ignition_guided_hit_at_${topK}=${summary.ignition_guided_hit_at_k}/${summary.question_count}`);
+    console.log(`ignition_guided_full_support_hit_at_${topK}=${summary.ignition_guided_full_support_hit_at_k}/${summary.question_count}`);
 }
 
 function prepareWorkspace({ preparedSampleDir, workspace, sampleId }) {
@@ -179,6 +185,19 @@ function evaluateQuestion({
         turnMap,
         hits: ignitionGuided.hits,
     });
+    const rawSupport = scoreSupportCoverage({ benchmark, question, turnMap, hits: rawHits });
+    const staticGuidedSupport = scoreSupportCoverage({
+        benchmark,
+        question,
+        turnMap,
+        hits: staticGuidedHits,
+    });
+    const ignitionGuidedSupport = scoreSupportCoverage({
+        benchmark,
+        question,
+        turnMap,
+        hits: ignitionGuided.hits,
+    });
     return {
         question_id: question.question_id,
         question: question.question,
@@ -191,14 +210,23 @@ function evaluateQuestion({
         raw_hit: Boolean(rawMatch),
         raw_first_hit_rank: rawMatch ? rawMatch.rank : null,
         raw_matched_span_id: rawMatch ? rawMatch.spanId : null,
+        raw_support_coverage: round4(rawSupport.coverage),
+        raw_support_hits: rawSupport.hits,
+        raw_full_support_hit: rawSupport.fullHit,
         static_guided_hit: Boolean(staticGuidedMatch),
         static_guided_first_hit_rank: staticGuidedMatch ? staticGuidedMatch.rank : null,
         static_guided_matched_span_id: staticGuidedMatch ? staticGuidedMatch.spanId : null,
+        static_guided_support_coverage: round4(staticGuidedSupport.coverage),
+        static_guided_support_hits: staticGuidedSupport.hits,
+        static_guided_full_support_hit: staticGuidedSupport.fullHit,
         ignition_guided_bundle_ids: ignitionGuided.bundleIds,
         ignition_guided_anchor_labels: ignitionGuided.anchorLabels,
         ignition_guided_hit: Boolean(ignitionGuidedMatch),
         ignition_guided_first_hit_rank: ignitionGuidedMatch ? ignitionGuidedMatch.rank : null,
         ignition_guided_matched_span_id: ignitionGuidedMatch ? ignitionGuidedMatch.spanId : null,
+        ignition_guided_support_coverage: round4(ignitionGuidedSupport.coverage),
+        ignition_guided_support_hits: ignitionGuidedSupport.hits,
+        ignition_guided_full_support_hit: ignitionGuidedSupport.fullHit,
         raw_top_hits: rawHits.slice(0, topK).map((hit, index) => ({
             rank: index + 1,
             span_id: hit.spanId,
@@ -224,6 +252,11 @@ function evaluateQuestion({
 }
 
 function findFirstMatch({ benchmark, question, turnMap, hits }) {
+    const support = scoreSupportCoverage({ benchmark, question, turnMap, hits });
+    if (support.fullHit && support.firstRank !== null) {
+        return { rank: support.firstRank, spanId: support.firstSpanId };
+    }
+
     if (benchmark === "locomo") {
         const expectedTurns = new Set(
             turnMap
@@ -272,6 +305,86 @@ function findFirstMatch({ benchmark, question, turnMap, hits }) {
     return null;
 }
 
+function scoreSupportCoverage({ benchmark, question, turnMap, hits }) {
+    if (benchmark === "locomo") {
+        const expectedTurns = new Set(
+            turnMap
+                .filter((turn) => (question.evidence_refs || []).includes(turn.dialogue_id))
+                .map((turn) => turn.dialogue_id)
+        );
+        const matchedTurns = new Set();
+        let firstRank = null;
+        let firstSpanId = null;
+        for (let index = 0; index < hits.length; index += 1) {
+            const hit = hits[index];
+            const overlappingTurns = turnMap
+                .filter(
+                    (turn) =>
+                        expectedTurns.has(turn.dialogue_id) &&
+                        rangesOverlap(turn.char_start, turn.char_end, hit.charStart, hit.charEnd)
+                )
+                .map((turn) => turn.dialogue_id);
+            if (overlappingTurns.length > 0 && firstRank === null) {
+                firstRank = index + 1;
+                firstSpanId = hit.spanId;
+            }
+            for (const dialogueId of overlappingTurns) {
+                matchedTurns.add(dialogueId);
+            }
+        }
+
+        return {
+            coverage: expectedTurns.size > 0 ? matchedTurns.size / expectedTurns.size : 0,
+            hits: Array.from(matchedTurns),
+            fullHit: expectedTurns.size > 0 && matchedTurns.size === expectedTurns.size,
+            firstRank,
+            firstSpanId,
+        };
+    }
+
+    const evidenceTexts = (question.evidence_refs || [])
+        .map((item) => String(item || "").trim())
+        .filter(Boolean);
+    const answer = String(question.answer || "").trim();
+    const matchedEvidence = [];
+    let firstRank = null;
+    let firstSpanId = null;
+    for (const evidenceText of evidenceTexts) {
+        const match = findSupportingHit({ hits, needle: evidenceText, answer });
+        if (!match) continue;
+        matchedEvidence.push(evidenceText);
+        if (firstRank === null || match.rank < firstRank) {
+            firstRank = match.rank;
+            firstSpanId = match.spanId;
+        }
+    }
+
+    const answerMatch = answer ? findSupportingHit({ hits, needle: answer, answer }) : null;
+    if (firstRank === null && answerMatch) {
+        firstRank = answerMatch.rank;
+        firstSpanId = answerMatch.spanId;
+    }
+
+    return {
+        coverage: evidenceTexts.length > 0 ? matchedEvidence.length / evidenceTexts.length : answerMatch ? 1 : 0,
+        hits: matchedEvidence,
+        fullHit: evidenceTexts.length > 0 ? matchedEvidence.length === evidenceTexts.length : Boolean(answerMatch),
+        firstRank,
+        firstSpanId,
+    };
+}
+
+function findSupportingHit({ hits, needle, answer }) {
+    for (let index = 0; index < hits.length; index += 1) {
+        const hit = hits[index];
+        const hay = `${hit.spanText} ${hit.rawText}`.toLowerCase();
+        if (textEvidenceMatches({ haystack: hay, needle, answer })) {
+            return { rank: index + 1, spanId: hit.spanId };
+        }
+    }
+    return null;
+}
+
 function renderSummaryMarkdown(summary) {
     const lines = [];
     lines.push(`# Benchmark Eval`);
@@ -280,8 +393,11 @@ function renderSummaryMarkdown(summary) {
     lines.push(`- sample_id: ${summary.sample_id}`);
     lines.push(`- relation_search_plan_count: ${summary.relation_search_plan_count}`);
     lines.push(`- raw_hit_at_${summary.top_k}: ${summary.raw_hit_at_k}/${summary.question_count}`);
+    lines.push(`- raw_full_support_hit_at_${summary.top_k}: ${summary.raw_full_support_hit_at_k}/${summary.question_count}`);
     lines.push(`- static_guided_hit_at_${summary.top_k}: ${summary.static_guided_hit_at_k}/${summary.question_count}`);
+    lines.push(`- static_guided_full_support_hit_at_${summary.top_k}: ${summary.static_guided_full_support_hit_at_k}/${summary.question_count}`);
     lines.push(`- ignition_guided_hit_at_${summary.top_k}: ${summary.ignition_guided_hit_at_k}/${summary.question_count}`);
+    lines.push(`- ignition_guided_full_support_hit_at_${summary.top_k}: ${summary.ignition_guided_full_support_hit_at_k}/${summary.question_count}`);
     lines.push("");
     for (const item of summary.results) {
         lines.push(`## ${item.question_id}`);
@@ -295,14 +411,20 @@ function renderSummaryMarkdown(summary) {
         );
         lines.push(`- raw_hit: ${item.raw_hit ? "yes" : "no"}`);
         lines.push(`- raw_first_hit_rank: ${item.raw_first_hit_rank ?? "none"}`);
+        lines.push(`- raw_support_coverage: ${item.raw_support_coverage}`);
+        lines.push(`- raw_full_support_hit: ${item.raw_full_support_hit ? "yes" : "no"}`);
         lines.push(`- static_guided_hit: ${item.static_guided_hit ? "yes" : "no"}`);
         lines.push(`- static_guided_first_hit_rank: ${item.static_guided_first_hit_rank ?? "none"}`);
+        lines.push(`- static_guided_support_coverage: ${item.static_guided_support_coverage}`);
+        lines.push(`- static_guided_full_support_hit: ${item.static_guided_full_support_hit ? "yes" : "no"}`);
         lines.push(`- ignition_guided_bundle_ids: ${(item.ignition_guided_bundle_ids || []).join(", ") || "(none)"}`);
         lines.push(
             `- ignition_guided_anchor_labels: ${(item.ignition_guided_anchor_labels || []).join(", ") || "(none)"}`
         );
         lines.push(`- ignition_guided_hit: ${item.ignition_guided_hit ? "yes" : "no"}`);
         lines.push(`- ignition_guided_first_hit_rank: ${item.ignition_guided_first_hit_rank ?? "none"}`);
+        lines.push(`- ignition_guided_support_coverage: ${item.ignition_guided_support_coverage}`);
+        lines.push(`- ignition_guided_full_support_hit: ${item.ignition_guided_full_support_hit ? "yes" : "no"}`);
         lines.push(`- evidence_refs: ${(item.evidence_refs || []).join(", ") || "(none)"}`);
         lines.push("");
         lines.push("### Raw Hits");
