@@ -23,6 +23,7 @@ export interface BuildRelationPlanningArtifactsInput {
     edges: V8GraphEdge[];
     evidenceSpans: V8EvidenceSpan[];
     recallBundles?: V8RecallBundleProjection[];
+    anchorNarrativeRecordIds?: string[];
     searchFeedbackSignals?: V8SearchFeedbackSignal[];
     learningEvents?: V8LearningEvent[];
     compilePhase: "stream" | "final";
@@ -136,7 +137,17 @@ export function buildRelationPlanningArtifacts(
         input.learningEvents || []
     );
 
-    const anchorNodes = input.nodes.filter(isAnchorNode);
+    const allowedAnchorNarratives = new Set(input.anchorNarrativeRecordIds || []);
+    const anchorNodesAll = input.nodes.filter(isAnchorNode);
+    const anchorNodes =
+        input.compilePhase === "stream" && allowedAnchorNarratives.size > 0
+            ? filterAnchorNodesByNarratives({
+                  nodes: anchorNodesAll,
+                  spanById,
+                  allowedNarrativeIds: allowedAnchorNarratives,
+                  fallback: anchorNodesAll,
+              })
+            : anchorNodesAll;
     const entityPostings: V8EntityPosting[] = [];
     const entityScopeCards: V8EntityScopeCard[] = [];
 
@@ -188,6 +199,22 @@ function isAnchorNode(node: V8GraphNode): boolean {
     if (node.memoryType === "evidence" || node.memoryType === "discourse_unit") return false;
     if (ANCHOR_MEMORY_TYPES.has(node.memoryType)) return true;
     return node.id.startsWith("node_sem_");
+}
+
+function filterAnchorNodesByNarratives(input: {
+    nodes: V8GraphNode[];
+    spanById: Map<string, V8EvidenceSpan>;
+    allowedNarrativeIds: Set<string>;
+    fallback: V8GraphNode[];
+}): V8GraphNode[] {
+    const output = input.nodes.filter((node) =>
+        node.evidenceSpanIds.some((spanId) => {
+            const span = input.spanById.get(spanId);
+            return !!span && input.allowedNarrativeIds.has(span.narrativeRecordId);
+        })
+    );
+    // Keep stream relation planning usable even when hot narratives are sparse.
+    return output.length > 0 ? output : input.fallback;
 }
 
 function buildEntityPostingsForNode(

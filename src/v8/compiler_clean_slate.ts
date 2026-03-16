@@ -731,6 +731,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         nodes,
         edges: initialEdges,
         evidenceSpans,
+        anchorNarrativeRecordIds:
+            compilePhase === "stream" ? Array.from(scope.hotDocIds) : undefined,
         searchFeedbackSignals: existingSearchFeedbackSignals,
         learningEvents: existingLearningEvents,
         compilePhase,
