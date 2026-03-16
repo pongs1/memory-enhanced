@@ -46,6 +46,10 @@ import type { V8FeedbackConfig, V8ScannerConfig } from "./v8/types_v8.js";
 // @ts-ignore
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
+function scopedRecallSessionId(workspace: string, sessionId: string): string {
+    return `${workspace}::${sessionId}`;
+}
+
 export default function register(api: OpenClawPluginApi) {
     const pluginConfig = api.config as
         | {
@@ -197,7 +201,9 @@ export default function register(api: OpenClawPluginApi) {
         } catch (e) { }
 
         if (isExplicitMemoryCorrection(latestUserRequest)) {
-            const recallTraces = takeRecentRecallTraces(sessionId);
+            const recallTraces = takeRecentRecallTraces(
+                scopedRecallSessionId(workspace, sessionId)
+            );
             if (recallTraces.length === 0) {
                 const candidates = findMatchingNodes(
                     workspace,
@@ -271,7 +277,9 @@ export default function register(api: OpenClawPluginApi) {
                 );
             }
         } else if (isExplicitMemoryAffirmation(latestUserRequest)) {
-            const recallTraces = takeRecentRecallTraces(sessionId);
+            const recallTraces = takeRecentRecallTraces(
+                scopedRecallSessionId(workspace, sessionId)
+            );
             if (recallTraces.length === 0) {
                 const candidates = findMatchingNodes(
                     workspace,

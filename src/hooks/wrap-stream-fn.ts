@@ -515,11 +515,11 @@ function applyModelAdoptionFeedback(
     feedbackConfig?: Partial<V8FeedbackConfig>
 ) {
     if (!recentOutput) return;
-    const recallTraces = getRecentRecallTraces(sessionId, MODEL_FEEDBACK_WINDOW_MS);
+    const scopedId = scopedSessionKey(workspace, sessionId);
+    const recallTraces = getRecentRecallTraces(scopedId, MODEL_FEEDBACK_WINDOW_MS);
     if (recallTraces.length === 0) return;
     const threshold = resolveAdoptionThreshold(recentOutput, feedbackConfig, "model");
     const labelMap = loadNodeLabels(workspace);
-    const scopedId = scopedSessionKey(workspace, sessionId);
     for (const trace of recallTraces) {
         const cooldownKey = `${scopedId}:${trace.traceId}`;
         const lastApplied = modelFeedbackCooldowns.get(cooldownKey) || 0;
@@ -1142,7 +1142,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                                         evidenceSpanIds: bundle.evidenceSpanIds,
                                         tier: bundle.tier,
                                     }));
-                                    recordRecallTrace(sid, {
+                                    recordRecallTrace(scopedSessionKey(workspace, sid), {
                                         mode: v8Scanner.getMode(),
                                         bundles: recallBundles,
                                     });
@@ -1263,7 +1263,10 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                 now - lastFeedback > TOOL_FEEDBACK_COOLDOWN_MS &&
                 detectToolFailure(event)
             ) {
-                const recallTraces = getRecentRecallTraces(sid, TOOL_FEEDBACK_WINDOW_MS);
+                const recallTraces = getRecentRecallTraces(
+                    scopedSessionKey(workspace, sid),
+                    TOOL_FEEDBACK_WINDOW_MS
+                );
                 for (const trace of recallTraces) {
                     const nodeIds = collectTraceNodeIds(trace);
                     if (nodeIds.length === 0) continue;
@@ -1289,7 +1292,10 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                 now - lastSuccess > TOOL_SUCCESS_COOLDOWN_MS &&
                 !detectToolFailure(event)
             ) {
-                const recallTraces = getRecentRecallTraces(sid, TOOL_FEEDBACK_WINDOW_MS);
+                const recallTraces = getRecentRecallTraces(
+                    scopedSessionKey(workspace, sid),
+                    TOOL_FEEDBACK_WINDOW_MS
+                );
                 const observation = summarizeToolObservationForMatch(event);
                 const threshold = resolveAdoptionThreshold(
                     observation,
