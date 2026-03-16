@@ -527,7 +527,7 @@ function buildRelationCandidateHitsAndJobs(input: {
         spansByShard.set(shardId, list);
     }
 
-    const maxPlans = input.compilePhase === "stream" ? 24 : 72;
+    const maxPlans = input.compilePhase === "stream" ? 18 : 72;
     const planRanked = input.relationSearchPlans
         .slice()
         .sort((a, b) => planPriority(b) - planPriority(a) || a.id.localeCompare(b.id))
@@ -546,7 +546,7 @@ function buildRelationCandidateHitsAndJobs(input: {
             .filter(Boolean);
         if (allowedShardIds.length === 0) continue;
 
-        const laneTopK = plan.lane === "focused" ? 6 : plan.lane === "broadened" ? 9 : 12;
+        const laneTopK = plan.lane === "focused" ? 5 : plan.lane === "broadened" ? 8 : 11;
         const candidates: Array<{ span: V8EvidenceSpan; score: number }> = [];
         const terms = tokenizeTerms(plan.queryTerms);
         const anchorTerms = tokenizeTerms(plan.anchorLabels || []);
