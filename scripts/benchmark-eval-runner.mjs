@@ -48,10 +48,11 @@ async function main() {
     const graphNodes = readJsonl(store.graphNodes);
     const graphEdges = readJsonl(store.graphEdges);
     const evidenceSpans = readJsonl(store.evidenceSpans);
+    const recallBundles = readJsonl(store.recallBundles);
     const relationSearchPlans = readJsonl(store.relationSearchPlans);
+    const verticalTriggerCards = readJsonl(path.join(store.runtimeDir, "vertical_trigger_cards.jsonl"));
     const narrativeShardSelections = readJsonl(store.narrativeShardSelections);
     const buildReport = readJsonFile(store.buildReport);
-    const scanner = new V8GraphScanner(workspace, benchmarkScannerConfig(), "profile");
     const results = questions.map((question) =>
         evaluateQuestion({
             workspace,
@@ -61,9 +62,10 @@ async function main() {
             graphNodes,
             graphEdges,
             evidenceSpans,
+            recallBundles,
             relationSearchPlans,
+            verticalTriggerCards,
             narrativeShardSelections,
-            scanner,
             topK,
         })
     );
@@ -137,9 +139,10 @@ function evaluateQuestion({
     graphNodes,
     graphEdges,
     evidenceSpans,
+    recallBundles,
     relationSearchPlans,
+    verticalTriggerCards,
     narrativeShardSelections,
-    scanner,
     topK,
 }) {
     const rawHits = searchArchiveSpans({
@@ -173,12 +176,13 @@ function evaluateQuestion({
 
     const ignitionGuided = runIgnitionGuidedSearch({
         question,
-        scanner,
         turnMap,
         graphNodes,
         graphEdges,
         evidenceSpans,
+        recallBundles,
         relationSearchPlans,
+        verticalTriggerCards,
         workspace,
         topK,
     });
@@ -234,6 +238,7 @@ function evaluateQuestion({
         ignition_guided_anchor_labels: ignitionGuided.anchorLabels,
         ignition_guided_vertical_plan_ids: ignitionGuided.verticalPlanIds,
         ignition_guided_vertical_plan_anchor_labels: ignitionGuided.verticalPlanAnchorLabels,
+        ignition_guided_vertical_seed_bundle_ids: ignitionGuided.verticalSeedBundleIds,
         ignition_guided_modes: ignitionGuided.modes,
         ignition_guided_background_turns: ignitionGuided.backgroundTurns,
         ignition_guided_profile_bundle_ids: ignitionGuided.profileBundleIds,
@@ -577,30 +582,44 @@ function containsAnyLongToken(hayTokens, needleTokens) {
 
 function runIgnitionGuidedSearch({
     question,
-    scanner,
     turnMap,
     graphNodes,
     graphEdges,
     evidenceSpans,
+    recallBundles,
     relationSearchPlans,
+    verticalTriggerCards,
     workspace,
     topK,
 }) {
     const questionText = String(question.question || "");
     const warmupTurns = Array.isArray(turnMap) ? turnMap : [];
     const textSignals = buildIgnitionTextSignals(questionText, warmupTurns);
-    const verticalPlans = selectVerticalPlansFromSignals(textSignals, relationSearchPlans, 4);
+    const verticalCards = selectVerticalTriggerCardsFromSignals(
+        textSignals,
+        verticalTriggerCards,
+        relationSearchPlans,
+        4
+    );
+    const bundleById = new Map((recallBundles || []).map((bundle) => [bundle.bundleId, bundle]));
+    const verticalSeedBundles = uniqueById(
+        verticalCards
+            .flatMap((card) => card.hintBundleIds || [])
+            .map((bundleId) => bundleById.get(bundleId))
+            .filter(Boolean)
+    );
     const verticalPlanLabels = uniqueStrings(
-        verticalPlans.flatMap((plan) => plan.anchorLabels || [])
+        verticalCards.flatMap((card) => card.anchorLabels || [])
     );
     const verticalPlanSpanIds = uniqueStrings(
-        verticalPlans.flatMap((plan) => plan.hintSpanIds || [])
+        verticalCards.flatMap((card) => card.hintSpanIds || [])
     );
     const replayAnchors = {
         goal: "",
         activeTask: "benchmark_replay",
         latestUserRequest: "",
     };
+    const scanner = new V8GraphScanner(workspace, benchmarkScannerConfig(), "profile");
     scanner.setMode("profile");
     for (const turn of warmupTurns) {
         const turnText = String(turn.text || "").trim();
@@ -640,6 +659,17 @@ function runIgnitionGuidedSearch({
             if (!existing || (bundle.energy || 0) > (existing.energy || 0)) {
                 passBundles.set(bundle.bundleId, bundle);
             }
+        }
+    }
+
+    for (const bundle of verticalSeedBundles) {
+        const existing = passBundles.get(bundle.bundleId);
+        const seededBundle = {
+            ...bundle,
+            energy: Math.max(Number(bundle.energy || 0), 0.52),
+        };
+        if (!existing || Number(seededBundle.energy || 0) > Number(existing.energy || 0)) {
+            passBundles.set(bundle.bundleId, seededBundle);
         }
     }
 
@@ -684,8 +714,9 @@ function runIgnitionGuidedSearch({
         backgroundTurns: backgroundTurns.length,
         profileBundleIds: uniqueStrings(modeBundleIds.profile),
         trajectoryBundleIds: uniqueStrings(modeBundleIds.trajectory),
-        verticalPlanIds: verticalPlans.map((plan) => plan.id),
+        verticalPlanIds: verticalCards.map((card) => card.id),
         verticalPlanAnchorLabels: verticalPlanLabels,
+        verticalSeedBundleIds: verticalSeedBundles.map((bundle) => bundle.bundleId),
         verticalDiagnostics,
         hits,
     };
@@ -705,7 +736,7 @@ function buildIgnitionTextSignals(questionText, turnMap) {
     const signals = turns.map((turn, index) => ({
         source: String(turn.speaker || "turn"),
         text: String(turn.text || "").trim(),
-        weight: index >= turns.length - 2 ? 0.85 : 0.6,
+        weight: weightTextSignalSource(String(turn.speaker || "turn"), index, turns.length),
     }));
     signals.push({
         source: "question",
@@ -715,31 +746,88 @@ function buildIgnitionTextSignals(questionText, turnMap) {
     return signals.filter((item) => item.text);
 }
 
-function selectVerticalPlansFromSignals(textSignals, relationSearchPlans, limit) {
+function weightTextSignalSource(source, index, total) {
+    const normalized = String(source || "turn").trim().toLowerCase();
+    const recencyBoost = index >= total - 2 ? 0.18 : index >= total - 5 ? 0.08 : 0;
+    if (normalized.includes("user")) return 0.84 + recencyBoost;
+    if (normalized.includes("tool")) return 0.9 + recencyBoost;
+    if (normalized.includes("subagent")) return 0.88 + recencyBoost;
+    if (normalized.includes("assistant")) return 0.76 + recencyBoost;
+    if (normalized.includes("feedback")) return 0.92 + recencyBoost;
+    return 0.68 + recencyBoost;
+}
+
+function selectVerticalTriggerCardsFromSignals(textSignals, verticalTriggerCards, relationSearchPlans, limit) {
+    const cards =
+        Array.isArray(verticalTriggerCards) && verticalTriggerCards.length > 0
+            ? verticalTriggerCards
+            : deriveVerticalCardsFromPlans(relationSearchPlans || []);
     const signals = Array.isArray(textSignals) ? textSignals : [];
-    return (relationSearchPlans || [])
-        .map((plan) => {
-            const planTerms = uniqueStrings([
-                ...(plan.anchorLabels || []),
-                ...(plan.queryTerms || []),
-                ...((plan.edgeFamilyHints || []).map((hint) => hint.id) || []),
+    return cards
+        .map((card) => {
+            const cardTerms = uniqueStrings([
+                ...(card.anchorLabels || []),
+                ...(card.signalTerms || []),
+                ...((card.edgeFamilyHints || []).map((hint) => hint.id) || []),
             ]);
-            const planText = normalizeText(planTerms.join(" "));
-            const planTokens = new Set(tokenize(planText));
+            const cardText = normalizeText(cardTerms.join(" "));
+            const cardTokens = new Set(tokenize(cardText));
             let score = 0;
             for (const signal of signals) {
                 const signalText = normalizeText(signal.text);
                 const signalTokens = new Set(tokenize(signalText));
-                const overlap = overlapScore(signalTokens, planTokens);
+                const overlap = tokenOverlapRatio(
+                    Array.from(signalTokens),
+                    Array.from(cardTokens)
+                );
                 if (overlap <= 0) continue;
                 score += overlap * Number(signal.weight || 0.5);
             }
-            return { plan, score };
+            return { card, score };
         })
         .filter((entry) => entry.score >= 0.08)
         .sort((left, right) => right.score - left.score)
         .slice(0, limit)
-        .map((entry) => entry.plan);
+        .map((entry) => entry.card);
+}
+
+function deriveVerticalCardsFromPlans(relationSearchPlans) {
+    const verticalHintIds = new Set([
+        "state_supersedes_state",
+        "state_refines_state",
+        "state_changed_by_event",
+        "state_opened_by_block",
+        "state_closed_by_block",
+        "state_invalidated_under_regime",
+        "state_reactivated_under_regime",
+        "state_valid_in_phase",
+        "state_valid_in_timewindow",
+        "correction_propagates_to_line",
+        "evolves_to",
+        "supersedes",
+        "before",
+        "after",
+        "resolved_by",
+        "contradicts",
+        "conflicts_with",
+    ]);
+    return (relationSearchPlans || [])
+        .filter((plan) =>
+            (plan.edgeFamilyHints || []).some((hint) => verticalHintIds.has(hint.id))
+        )
+        .map((plan) => ({
+            id: `derived_${plan.id}`,
+            family: "generic_vertical",
+            anchorLabels: plan.anchorLabels || [],
+            signalTerms: uniqueStrings([
+                ...(plan.queryTerms || []),
+                ...((plan.edgeFamilyHints || []).map((hint) => hint.id) || []),
+            ]),
+            edgeFamilyHints: plan.edgeFamilyHints || [],
+            hintBundleIds: plan.hintBundleIds || [],
+            hintSpanIds: plan.hintSpanIds || [],
+            preferredSlices: ["trajectory"],
+        }));
 }
 
 function analyzeVerticalParticipation({ bundles, graphNodes, graphEdges }) {
@@ -825,6 +913,18 @@ function uniqueStrings(values) {
                 .filter(Boolean)
         )
     );
+}
+
+function uniqueById(items) {
+    const seen = new Set();
+    const output = [];
+    for (const item of items || []) {
+        const id = String(item?.bundleId || item?.id || "").trim();
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        output.push(item);
+    }
+    return output;
 }
 
 function termOverlapScore(question, label) {

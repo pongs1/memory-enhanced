@@ -144,6 +144,12 @@ This runner currently gives a first baseline:
 - run archive search per question
 - score whether top-k hits overlap expected evidence
 
+The runner now evaluates three retrieval paths:
+
+- `raw`: plain archive search from the question
+- `static-guided`: question + relation-search-plan hints
+- `ignition-guided`: replay the cleaned turn stream, project text signals into horizontal and vertical cues, then search with activated bundles plus vertical trigger hints
+
 It is intentionally a baseline, not the final full protocol. Its job is to tell us whether the current memory pipeline is moving in the right direction before we add relation-review and full answer-generation scoring.
 
 Important current limitation:

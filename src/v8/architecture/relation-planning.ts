@@ -10,12 +10,14 @@ import type {
     V8LearningEvent,
     V8NarrativeShardSelection,
     V8RecallBundleProjection,
+    V8RecallMode,
     V8RelationCandidateHit,
     V8RelationReviewJob,
     V8RelationSearchPlan,
     V8ScoredHint,
     V8SearchFeedbackSignal,
     V8SearchLane,
+    V8VerticalTriggerCard,
 } from "../types_v8.js";
 
 export interface BuildRelationPlanningArtifactsInput {
@@ -34,6 +36,7 @@ export interface RelationPlanningArtifacts {
     entityScopeCards: V8EntityScopeCard[];
     groupSummaries: V8GroupSummary[];
     relationSearchPlans: V8RelationSearchPlan[];
+    verticalTriggerCards: V8VerticalTriggerCard[];
     narrativeShardSelections: V8NarrativeShardSelection[];
     relationCandidateHits: V8RelationCandidateHit[];
     relationReviewJobs: V8RelationReviewJob[];
@@ -211,6 +214,11 @@ export function buildRelationPlanningArtifacts(
         hintPriors,
         compilePhase: input.compilePhase,
     });
+    const verticalTriggerCards = buildVerticalTriggerCards({
+        cards: entityScopeCards,
+        plans: relationSearchPlans,
+        bundlesByNodeId,
+    });
     const { relationCandidateHits, relationReviewJobs } = buildRelationCandidateHitsAndJobs({
         relationSearchPlans,
         narrativeShardSelections,
@@ -224,6 +232,7 @@ export function buildRelationPlanningArtifacts(
         entityScopeCards: sortById(entityScopeCards),
         groupSummaries: sortById(groupSummaries),
         relationSearchPlans: sortById(relationSearchPlans),
+        verticalTriggerCards: sortById(verticalTriggerCards),
         narrativeShardSelections: sortById(narrativeShardSelections),
         relationCandidateHits: sortById(relationCandidateHits),
         relationReviewJobs: sortById(relationReviewJobs),
@@ -541,6 +550,115 @@ function buildRelationSearchPlans(input: {
         relationSearchPlans: plans,
         narrativeShardSelections: shardSelections,
     };
+}
+
+const VERTICAL_EDGE_HINTS = new Set<string>([
+    "state_supersedes_state",
+    "state_refines_state",
+    "state_changed_by_event",
+    "state_opened_by_block",
+    "state_closed_by_block",
+    "state_invalidated_under_regime",
+    "state_reactivated_under_regime",
+    "state_valid_in_phase",
+    "state_valid_in_timewindow",
+    "correction_propagates_to_line",
+    "evolves_to",
+    "supersedes",
+    "before",
+    "after",
+    "resolved_by",
+    "contradicts",
+    "conflicts_with",
+]);
+
+function buildVerticalTriggerCards(input: {
+    cards: V8EntityScopeCard[];
+    plans: V8RelationSearchPlan[];
+    bundlesByNodeId: Map<string, V8RecallBundleProjection[]>;
+}): V8VerticalTriggerCard[] {
+    const plansByScopeCardId = new Map<string, V8RelationSearchPlan[]>();
+    for (const plan of input.plans) {
+        for (const scopeCardId of plan.scopeCardIds || []) {
+            const list = plansByScopeCardId.get(scopeCardId) || [];
+            list.push(plan);
+            plansByScopeCardId.set(scopeCardId, list);
+        }
+    }
+
+    const cards: V8VerticalTriggerCard[] = [];
+    for (const card of input.cards) {
+        const verticalHints = card.edgeFamilyHints.filter((hint) =>
+            VERTICAL_EDGE_HINTS.has(hint.id)
+        );
+        const stateHints = card.stateHints || [];
+        const isStateLike = STATE_MEMORY_TYPES.has(card.entityKind);
+        if (!isStateLike && verticalHints.length === 0 && stateHints.length === 0) {
+            continue;
+        }
+
+        const plans = plansByScopeCardId.get(card.id) || [];
+        const hintBundleIds = uniqueStrings([
+            ...plans.flatMap((plan) => plan.hintBundleIds || []),
+            ...(input.bundlesByNodeId.get(card.entityNodeId) || []).map((bundle) => bundle.bundleId),
+        ]).slice(0, 16);
+        const hintSpanIds = uniqueStrings(
+            plans.flatMap((plan) => plan.hintSpanIds || [])
+        ).slice(0, 24);
+        const signalTerms = uniqueStrings([
+            card.canonicalLabel,
+            ...(card.aliases || []),
+            ...verticalHints.flatMap((hint) => [hint.id, ...expandEdgeQueryCues(hint.id)]),
+            ...stateHints.map((hint) => hint.label || hint.id),
+            ...plans.flatMap((plan) => (plan.anchorLabels || []).slice(0, 2)),
+        ]).slice(0, 48);
+        const preferredSlices: V8RecallMode[] = isStateLike
+            ? ["profile", "trajectory"]
+            : ["trajectory"];
+        cards.push({
+            id: `vtc_${shortHash(card.id)}`,
+            family: inferVerticalFamily(card, verticalHints),
+            anchorNodeIds: [card.entityNodeId],
+            anchorLabels: [card.canonicalLabel, ...(card.aliases || [])]
+                .map((text) => text.trim())
+                .filter(Boolean)
+                .slice(0, 6),
+            signalTerms,
+            edgeFamilyHints: verticalHints.slice(0, 8),
+            preferredSlices,
+            hintBundleIds,
+            hintSpanIds,
+            scopeCardIds: [card.id],
+            createdAt: new Date().toISOString(),
+        });
+    }
+    return cards;
+}
+
+function inferVerticalFamily(
+    card: V8EntityScopeCard,
+    verticalHints: V8ScoredHint[]
+): V8VerticalTriggerCard["family"] {
+    const hintIds = new Set(verticalHints.map((hint) => hint.id));
+    if (card.entityKind === "relationship_state") return "relationship_arc";
+    if (card.entityKind === "decision") return "decision_line";
+    if (
+        card.entityKind === "workflow_validity_state" ||
+        card.entityKind === "compatibility_state"
+    ) {
+        return "validity_line";
+    }
+    if (hintIds.has("evolves_to")) return "evolution_line";
+    if (
+        hintIds.has("state_supersedes_state") ||
+        hintIds.has("supersedes") ||
+        hintIds.has("before") ||
+        hintIds.has("after")
+    ) {
+        return "supersession";
+    }
+    if (STATE_MEMORY_TYPES.has(card.entityKind)) return "state_line";
+    return "generic_vertical";
 }
 
 function buildRelationCandidateHitsAndJobs(input: {
@@ -883,6 +1001,16 @@ function addTerm(set: Set<string>, value: string): void {
     const normalized = (value || "").trim();
     if (!normalized) return;
     set.add(normalized);
+}
+
+function uniqueStrings(values: string[]): string[] {
+    return Array.from(
+        new Set(
+            values
+                .map((value) => String(value || "").trim())
+                .filter(Boolean)
+        )
+    );
 }
 
 function expandEdgeQueryCues(edgeType: string): string[] {

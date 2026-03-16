@@ -831,6 +831,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     writeJsonl(store.entityScopeCards, relationPlanning.entityScopeCards);
     writeJsonl(store.groupSummaries, relationPlanning.groupSummaries);
     writeJsonl(store.relationSearchPlans, relationPlanning.relationSearchPlans);
+    writeJsonl(store.verticalTriggerCards, relationPlanning.verticalTriggerCards);
     writeJsonl(
         store.narrativeShardSelections,
         relationPlanning.narrativeShardSelections

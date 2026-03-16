@@ -23,6 +23,7 @@ export interface V8StorePaths {
     entityScopeCards: string;
     groupSummaries: string;
     relationSearchPlans: string;
+    verticalTriggerCards: string;
     narrativeShardSelections: string;
     relationCandidateHits: string;
     relationReviewJobs: string;
@@ -71,6 +72,7 @@ export function v8StorePaths(workspace: string): V8StorePaths {
         entityScopeCards: path.join(rootDir, "entity_scope_cards.jsonl"),
         groupSummaries: path.join(rootDir, "group_summaries.jsonl"),
         relationSearchPlans: path.join(runtimeDir, "relation_search_plans.jsonl"),
+        verticalTriggerCards: path.join(runtimeDir, "vertical_trigger_cards.jsonl"),
         narrativeShardSelections: path.join(runtimeDir, "narrative_shard_selections.jsonl"),
         relationCandidateHits: path.join(runtimeDir, "relation_candidate_hits.jsonl"),
         relationReviewJobs: path.join(runtimeDir, "relation_review_jobs.jsonl"),

@@ -601,6 +601,27 @@ export interface V8RelationSearchPlan {
     createdAt: string;
 }
 
+export interface V8VerticalTriggerCard {
+    id: string;
+    family:
+        | "state_line"
+        | "supersession"
+        | "relationship_arc"
+        | "decision_line"
+        | "validity_line"
+        | "evolution_line"
+        | "generic_vertical";
+    anchorNodeIds: string[];
+    anchorLabels: string[];
+    signalTerms: string[];
+    edgeFamilyHints: V8ScoredHint[];
+    preferredSlices: V8RecallMode[];
+    hintBundleIds: string[];
+    hintSpanIds: string[];
+    scopeCardIds: string[];
+    createdAt: string;
+}
+
 export interface V8NarrativeShardSelection {
     id: string;
     planId: string;
