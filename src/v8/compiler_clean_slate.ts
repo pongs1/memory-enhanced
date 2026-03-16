@@ -249,6 +249,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         hotTailSkipUnits,
         llmLayers: llmLayers.join(","),
         hotTailDroppedUnits: 0,
+        phaseLayerDroppedUnits: 0,
         llmCacheHitUnits: 0,
         llmCacheMissUnits: 0,
         llmCacheEntries: 0,
@@ -409,15 +410,17 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             ? trimTrailingUnitsByNarrativeForCompile(hotUnitsAll, hotTailSkipUnits)
             : hotUnitsAll;
     buildStats.hotTailDroppedUnits = Math.max(0, hotUnitsAll.length - hotUnits.length);
-    const units = [...cached.units, ...hotUnits];
+    const hotUnitsPhaseFiltered = filterUnitsByCompilePhase(hotUnits, compilePhase);
+    buildStats.phaseLayerDroppedUnits = Math.max(0, hotUnits.length - hotUnitsPhaseFiltered.length);
+    const units = [...cached.units, ...hotUnitsPhaseFiltered];
     logStage(
-        `units built hot=${hotUnits.length} droppedTail=${buildStats.hotTailDroppedUnits} total=${units.length}`
+        `units built hot=${hotUnitsPhaseFiltered.length} droppedTail=${buildStats.hotTailDroppedUnits} droppedByPhase=${buildStats.phaseLayerDroppedUnits} total=${units.length}`
     );
     if (options?.emitUnitPreview !== false) {
         persistNarrativeUnitPreview(store.rawDir, units, allNarrativeDocs);
         logStage("unit preview written");
     }
-    const hotEvidenceSpans = extractEvidenceSpans(hotUnits, hotNarratives);
+    const hotEvidenceSpans = extractEvidenceSpans(hotUnitsPhaseFiltered, hotNarratives);
     const evidenceSpans = [...cached.evidenceSpans, ...hotEvidenceSpans];
     logStage(
         `evidence spans built hot=${hotEvidenceSpans.length} total=${evidenceSpans.length}`
@@ -483,7 +486,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     );
     const llmUnitsForExtraction: V8Unit[] = [];
     const cachedLlmItems: V8MemoryItem[] = [];
-    for (const unit of hotUnits) {
+    for (const unit of hotUnitsPhaseFiltered) {
         if (!llmLayers.includes(unit.layer)) continue;
         const cacheKey = buildLlmUnitCacheKey(unit);
         const cachedEntry = llmUnitCacheByKey.get(cacheKey);
@@ -537,7 +540,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const ruleIrMode = options?.ruleIrMode ?? "off";
     const ruleItems =
         ruleIrMode === "micro_light"
-            ? extractMemoryItems(hotUnits, hotEvidenceSpans)
+            ? extractMemoryItems(hotUnitsPhaseFiltered, hotEvidenceSpans)
             : [];
     const fallbackRuleItems: V8MemoryItem[] = [];
     buildStats.irRuleItems = ruleItems.length;
@@ -860,6 +863,7 @@ interface BuildReport {
         hotTailSkipUnits: number;
         llmLayers: string;
         hotTailDroppedUnits: number;
+        phaseLayerDroppedUnits: number;
         llmCacheHitUnits: number;
         llmCacheMissUnits: number;
         llmCacheEntries: number;
@@ -953,6 +957,14 @@ function trimTrailingUnitsByNarrativeForCompile(
         }
     }
     return units.filter((unit) => !dropIds.has(unit.id));
+}
+
+function filterUnitsByCompilePhase(
+    units: V8Unit[],
+    compilePhase: "stream" | "final"
+): V8Unit[] {
+    if (compilePhase === "final") return units;
+    return units.filter((unit) => unit.layer === "micro" || unit.layer === "meso");
 }
 
 function buildLlmUnitCacheKey(unit: V8Unit): string {
@@ -1267,7 +1279,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
         `- sourceNormalization: records=${report.buildStats.sourceNormalizationRecordCount}, touchedRecords=${report.buildStats.sourceNormalizationTouchedRecords}, rawChars=${report.buildStats.sourceNormalizationRawChars}, cleanChars=${report.buildStats.sourceNormalizationCleanChars}, removedChars=${report.buildStats.sourceNormalizationRemovedChars}, removedRatioPct=${report.buildStats.sourceNormalizationRemovedRatioPct.toFixed(2)}`
     );
     lines.push(
-        `- compilePhase: ${report.buildStats.compilePhase} (layers=${report.buildStats.llmLayers}, hotTailSkipUnits=${report.buildStats.hotTailSkipUnits}, hotTailDroppedUnits=${report.buildStats.hotTailDroppedUnits})`
+        `- compilePhase: ${report.buildStats.compilePhase} (layers=${report.buildStats.llmLayers}, hotTailSkipUnits=${report.buildStats.hotTailSkipUnits}, hotTailDroppedUnits=${report.buildStats.hotTailDroppedUnits}, phaseLayerDroppedUnits=${report.buildStats.phaseLayerDroppedUnits})`
     );
     lines.push(
         `- llmCache: hitUnits=${report.buildStats.llmCacheHitUnits}, missUnits=${report.buildStats.llmCacheMissUnits}, entries=${report.buildStats.llmCacheEntries}`
