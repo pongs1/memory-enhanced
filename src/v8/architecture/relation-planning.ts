@@ -536,6 +536,8 @@ function buildRelationCandidateHitsAndJobs(input: {
     const relationCandidateHits: V8RelationCandidateHit[] = [];
     const relationReviewJobs: V8RelationReviewJob[] = [];
     const hitIdSet = new Set<string>();
+    const spanUsage = new Map<string, number>();
+    const spanUsageCap = input.compilePhase === "stream" ? 4 : 8;
 
     for (const plan of planRanked) {
         const selection = selectionByPlanId.get(plan.id);
@@ -571,6 +573,10 @@ function buildRelationCandidateHitsAndJobs(input: {
         const evidenceSpanIds: string[] = [];
         const candidateEdgeTypes = plan.edgeFamilyHints.map((hint) => hint.id).slice(0, 5);
         for (const item of top) {
+            const used = spanUsage.get(item.span.id) || 0;
+            if (used >= spanUsageCap && !boostedSpanIds.has(item.span.id)) {
+                continue;
+            }
             const candidateEdgeType = pickCandidateEdgeType(
                 candidateEdgeTypes,
                 item.span.text
@@ -589,6 +595,7 @@ function buildRelationCandidateHitsAndJobs(input: {
                 spanText: item.span.text,
                 createdAt: new Date().toISOString(),
             });
+            spanUsage.set(item.span.id, used + 1);
             candidateHitIds.push(hitId);
             evidenceSpanIds.push(item.span.id);
         }
