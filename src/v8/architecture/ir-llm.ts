@@ -774,6 +774,7 @@ function pruneLlmItems(items: V8MemoryItem[]): V8MemoryItem[] {
 
     const kept: V8MemoryItem[] = [];
     const seenGlobal = new Set<string>();
+    const seenNarrativeRelation = new Set<string>();
     const perUnitCount = new Map<string, number>();
     const perNarrativeLayerCount = new Map<string, number>();
 
@@ -804,6 +805,19 @@ function pruneLlmItems(items: V8MemoryItem[]): V8MemoryItem[] {
         ].join("|");
         if (seenGlobal.has(dedupeKey)) continue;
         seenGlobal.add(dedupeKey);
+
+        if (item.layer !== "micro") {
+            const narrativeRelationKey = [
+                item.layer,
+                item.narrativeRecordId,
+                item.itemType,
+                normalizeDedupe(item.subject),
+                normalizeDedupe(item.predicate),
+                normalizeDedupe(item.object),
+            ].join("|");
+            if (seenNarrativeRelation.has(narrativeRelationKey)) continue;
+            seenNarrativeRelation.add(narrativeRelationKey);
+        }
 
         kept.push(item);
         perUnitCount.set(unitKey, currentCount + 1);
