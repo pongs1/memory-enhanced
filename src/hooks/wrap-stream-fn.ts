@@ -49,6 +49,21 @@ function scopedSessionKey(workspace: string, sessionId: string): string {
     return `${workspace}::${sessionId}`;
 }
 
+function clearScopedCooldowns(scopedSessionId: string): void {
+    toolFeedbackCooldowns.delete(scopedSessionId);
+    toolSuccessCooldowns.delete(scopedSessionId);
+    for (const key of modelFeedbackCooldowns.keys()) {
+        if (key.startsWith(`${scopedSessionId}:`)) {
+            modelFeedbackCooldowns.delete(key);
+        }
+    }
+    for (const key of modelNeutralCooldowns.keys()) {
+        if (key.startsWith(`${scopedSessionId}:`)) {
+            modelNeutralCooldowns.delete(key);
+        }
+    }
+}
+
 interface OutputWatchdogState {
     charsStreamed: number;
     lastCheckpointAt: number;
@@ -1390,5 +1405,6 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
         outputWatchdogs.delete(scopedId);
         scanners.delete(scopedId);
         v8Scanners.delete(scopedId);
+        clearScopedCooldowns(scopedId);
     });
 }
