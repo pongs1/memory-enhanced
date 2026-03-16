@@ -218,7 +218,7 @@ export async function executeMemoryConsolidate(
     });
 
     const summary = [
-        "Clean-slate V8 build completed.",
+        "Memory graph build completed.",
         `sessionTraceDir=${sessionTraceDir || "default"}`,
         maxSessionFiles ? `maxSessionFiles=${maxSessionFiles}` : null,
         maxNarrativeDocs ? `maxNarrativeDocs=${maxNarrativeDocs}` : null,
