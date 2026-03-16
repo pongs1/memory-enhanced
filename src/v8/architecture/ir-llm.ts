@@ -167,6 +167,13 @@ const LAYER_EXAMPLE_LINES: Record<V8GraphLayer, string[]> = {
     ],
 };
 
+const QUALIFIER_GUIDANCE_LINES: string[] = [
+    "When useful, use qualifiers to mark epistemic and operational role instead of inventing extra relations.",
+    "Preferred qualifiers: epistemic_status=observed|hypothesized|verified|applied; operation_role=observation|diagnosis|verification|fix|outcome; durability=transient|durable.",
+    "Use `diagnosis` for explanatory interpretation, `verification` for a test that confirms or rejects it, `fix` for an applied change, and `outcome` for the post-change result.",
+    "Do not mark a diagnosis as verified or durable unless the evidence directly shows confirmation or successful application.",
+];
+
 function edgeCatalogPath(): string {
     const here = path.dirname(fileURLToPath(import.meta.url));
     return path.resolve(here, "../../../schema/v8-edge-catalog.json");
@@ -598,6 +605,9 @@ function normalizeLlmItem(
     }
 
     const now = new Date().toISOString();
+    const qualifiers = normalizeQualifiers(
+        typeof raw.qualifiers === "object" && raw.qualifiers ? raw.qualifiers : {}
+    );
     return {
         id:
             (typeof raw.id === "string" && raw.id) ||
@@ -617,7 +627,7 @@ function normalizeLlmItem(
         label:
             (typeof raw.label === "string" && raw.label) ||
             truncateLabel(`${subject} ${normalizedPredicate} ${object}`),
-        qualifiers: typeof raw.qualifiers === "object" && raw.qualifiers ? raw.qualifiers : {},
+        qualifiers,
         evidenceSpanIds,
         unitIds: [unitId],
         confidence: typeof raw.confidence === "number" ? raw.confidence : 0.7,
@@ -707,10 +717,15 @@ function buildPrompt(input: {
         "- Do not infer beyond the text; skip vague or speculative claims.",
         "- Precision over coverage: if uncertain, skip.",
         "- If the unit is mostly greeting/retry/noise and has no durable fact, output no item for it.",
+        "- In noisy tool output, prefer the stable chain: observation -> diagnosis -> verification -> applied fix -> outcome.",
+        "- Preserve the source language for subject/object labels unless translation is explicitly required by the text.",
         `- Hard cap: output at most ${hardBatchCap} items for this batch.`,
         "- `evidence_span_ids` must come from the provided evidence spans.",
         "- `unit_id` must be one of the listed Unit IDs.",
         "- Output Markdown only. No JSON. No extra commentary.",
+        "",
+        "Qualifier guidance:",
+        ...QUALIFIER_GUIDANCE_LINES.map((line) => `- ${line}`),
         "",
         "Output format:",
         "### Item",
@@ -845,14 +860,30 @@ function parseQualifiers(value: string): Record<string, string> {
         if (!key || rest.length === 0) continue;
         qualifiers[key] = rest.join("=");
     }
-    return qualifiers;
+    return normalizeQualifiers(qualifiers);
+}
+
+function normalizeQualifiers(raw: Record<string, unknown>): Record<string, string> {
+    const normalized: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw || {})) {
+        const normalizedKey = String(key || "").trim().toLowerCase();
+        if (!normalizedKey) continue;
+        const normalizedValue = String(value ?? "").trim().toLowerCase();
+        if (!normalizedValue) continue;
+        normalized[normalizedKey] = normalizedValue;
+    }
+    return normalized;
 }
 
 function pruneLlmItems(items: V8MemoryItem[]): V8MemoryItem[] {
     if (items.length <= 1) return items;
     const sorted = items
         .slice()
-        .sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+        .sort((a, b) => {
+            const stabilityDelta = itemStabilityRank(b) - itemStabilityRank(a);
+            if (stabilityDelta !== 0) return stabilityDelta;
+            return (b.confidence || 0) - (a.confidence || 0);
+        });
 
     const kept: V8MemoryItem[] = [];
     const seenGlobal = new Set<string>();
@@ -914,4 +945,23 @@ function normalizeDedupe(text: string): string {
         .toLowerCase()
         .replace(/\s+/g, " ")
         .trim();
+}
+
+function itemStabilityRank(item: V8MemoryItem): number {
+    const qualifiers = item.qualifiers || {};
+    const epistemic = String(qualifiers.epistemic_status || "").toLowerCase();
+    const role = String(qualifiers.operation_role || "").toLowerCase();
+    const durability = String(qualifiers.durability || "").toLowerCase();
+    let score = 0;
+    if (durability === "durable") score += 3;
+    if (epistemic === "applied") score += 4;
+    else if (epistemic === "verified") score += 3;
+    else if (epistemic === "observed") score += 2;
+    else if (epistemic === "hypothesized") score -= 1;
+
+    if (role === "fix" || role === "outcome") score += 2;
+    else if (role === "verification") score += 1;
+    else if (role === "observation") score += 1;
+
+    return score;
 }
