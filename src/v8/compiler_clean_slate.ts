@@ -206,6 +206,14 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         mode: rebuildMode,
         requestedPhase: compilePhase,
     });
+    const artifactsReusable = hasReusableArtifacts(store);
+    if (scope.coldDocIds.size > 0 && !artifactsReusable) {
+        for (const docId of scope.coldDocIds) {
+            scope.hotDocIds.add(docId);
+        }
+        scope.coldDocIds.clear();
+        logStage("cache artifacts missing: promoted cold docs to hot rebuild");
+    }
     const scopePreview = buildScopePreview(scope, allNarrativeDocs);
     logStage(
         `build scope mode=${rebuildMode} hot=${scope.hotDocIds.size} cold=${scope.coldDocIds.size} removed=${scope.removedDocIds.size}`
@@ -214,13 +222,13 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
     const canReuseCache =
         rebuildMode !== "full" &&
-        hasReusableArtifacts(store) &&
+        artifactsReusable &&
         scope.coldDocIds.size > 0;
     const cached = canReuseCache
         ? loadCachedArtifactsForDocs(store, scope.coldDocIds, scope.activeDocIds)
         : emptyCachedArtifacts();
     const streamMacroCarry =
-        compilePhase === "stream" && hasReusableArtifacts(store)
+        compilePhase === "stream" && artifactsReusable
             ? loadCachedArtifactsForDocs(
                   store,
                   scope.hotDocIds,
@@ -234,7 +242,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const hotBuildIsNoop =
         hotNarratives.length === 0 &&
         scope.removedDocIds.size === 0 &&
-        hasReusableArtifacts(store) &&
+        artifactsReusable &&
         !reviewOverlayDirty;
     const buildStats = {
         rebuildMode,
