@@ -1,6 +1,7 @@
 import { resolveWorkspace } from "../utils.js";
 import { ensureV8StoreDirs } from "./paths_v8.js";
 import {
+    countSessionTraceMessagesFast,
     listSessionTraceFiles,
     readSessionTraceMessages,
     resolveSessionTraceDir,
@@ -133,12 +134,6 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             sessionTraceDir: options?.sessionTraceDir,
             maxFiles: options?.maxSessionFiles,
         });
-        const traceGroups = traceFiles
-            .map((entry) => ({
-                sourceRefPrefix: entry.filePath,
-                messages: readSessionTraceMessages(entry.filePath),
-            }))
-            .filter((entry) => entry.messages.length > 0);
         const sessionTraceDir =
             resolveSessionTraceDir(workspace, options?.sessionTraceDir) ||
             (traceFiles.length > 0
@@ -147,22 +142,31 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
         const traceNarrativeRecords: V8NarrativeRecord[] = [];
         const linkedNarrativeRecords: V8NarrativeRecord[] = [];
-        for (const group of traceGroups) {
-            const parentSessionId = deriveSessionIdFromSourceRef(group.sourceRefPrefix);
+        for (const traceFile of traceFiles) {
+            const sourceRefPrefix = traceFile.filePath;
+            const parentSessionId = deriveSessionIdFromSourceRef(sourceRefPrefix);
             const minSourceIndexExclusive = resolveSourceCursorMinIndex({
                 state: sourceSyncState,
                 sessionId: parentSessionId,
-                sourceRefPrefix: group.sourceRefPrefix,
+                sourceRefPrefix,
             });
-            const baseRecords = normalizeSessionMessages(group.messages, {
-                sourceRefPrefix: group.sourceRefPrefix,
+            if (minSourceIndexExclusive > 0) {
+                const fastCount = countSessionTraceMessagesFast(sourceRefPrefix);
+                if (fastCount !== null && fastCount <= minSourceIndexExclusive) {
+                    continue;
+                }
+            }
+            const messages = readSessionTraceMessages(sourceRefPrefix);
+            if (messages.length === 0) continue;
+            const baseRecords = normalizeSessionMessages(messages, {
+                sourceRefPrefix,
                 workspace,
                 toolCleaningProfiles,
                 minSourceIndexExclusive,
             });
             traceNarrativeRecords.push(...baseRecords);
 
-            const links = extractSessionLinksFromMessages(group.messages);
+            const links = extractSessionLinksFromMessages(messages);
             if (links.length && sessionTraceDir) {
                 linkedNarrativeRecords.push(
                     ...loadLinkedSessionRecords({
@@ -2034,13 +2038,19 @@ function loadLinkedSessionRecords(input: {
         if (!sessionId) continue;
         const filePath = resolveSessionTracePath(sessionsDir, sessionId);
         if (!filePath) continue;
-        const messages = readSessionTraceFile(filePath);
-        if (!messages.length) continue;
         const minSourceIndexExclusive = resolveSourceCursorMinIndex({
             state: input.sourceSyncState,
             sessionId: input.parentSessionId,
             sourceRefPrefix: filePath,
         });
+        if (minSourceIndexExclusive > 0) {
+            const fastCount = countSessionTraceMessagesFast(filePath);
+            if (fastCount !== null && fastCount <= minSourceIndexExclusive) {
+                continue;
+            }
+        }
+        const messages = readSessionTraceFile(filePath);
+        if (!messages.length) continue;
         const linkedRecords = normalizeSessionMessages(messages, {
             sourceRefPrefix: filePath,
             sessionId: input.parentSessionId,

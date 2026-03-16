@@ -84,6 +84,19 @@ export function readSessionTraceMessages(filePath: string): RawSessionMessage[] 
     return readSessionFile(filePath).filter(isMessageRecord);
 }
 
+export function countSessionTraceMessagesFast(filePath: string): number | null {
+    if (!filePath.endsWith(".jsonl")) return null;
+    try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        if (!raw.trim()) return 0;
+        return raw
+            .split(/\r?\n/)
+            .filter((line) => line.trim().length > 0).length;
+    } catch {
+        return null;
+    }
+}
+
 function safeReadMtimeMs(filePath: string): number {
     try {
         return fs.statSync(filePath).mtimeMs;
