@@ -49,6 +49,7 @@ async function main() {
     const evidenceSpans = readJsonl(store.evidenceSpans);
     const relationSearchPlans = readJsonl(store.relationSearchPlans);
     const narrativeShardSelections = readJsonl(store.narrativeShardSelections);
+    const buildReport = readJsonFile(store.buildReport);
     const scanner = new V8GraphScanner(workspace, {}, "trajectory");
     const results = questions.map((question) =>
         evaluateQuestion({
@@ -73,6 +74,10 @@ async function main() {
         question_count: questions.length,
         top_k: topK,
         evidence_spans_path: store.evidenceSpans,
+        build_llm_status: buildReport?.llmStatus || null,
+        build_ir_llm_items: buildReport?.buildStats?.irLlmItems ?? null,
+        build_ir_fallback_items: buildReport?.buildStats?.irFallbackItems ?? null,
+        build_relation_scope_cards: buildReport?.buildStats?.relationScopeCards ?? null,
         relation_search_plan_count: relationSearchPlans.length,
         result_count: results.length,
         raw_hit_at_k: results.filter((item) => item.raw_hit).length,
@@ -391,6 +396,10 @@ function renderSummaryMarkdown(summary) {
     lines.push("");
     lines.push(`- benchmark: ${summary.benchmark}`);
     lines.push(`- sample_id: ${summary.sample_id}`);
+    lines.push(`- build_llm_status: ${summary.build_llm_status ?? "unknown"}`);
+    lines.push(`- build_ir_llm_items: ${summary.build_ir_llm_items ?? "unknown"}`);
+    lines.push(`- build_ir_fallback_items: ${summary.build_ir_fallback_items ?? "unknown"}`);
+    lines.push(`- build_relation_scope_cards: ${summary.build_relation_scope_cards ?? "unknown"}`);
     lines.push(`- relation_search_plan_count: ${summary.relation_search_plan_count}`);
     lines.push(`- raw_hit_at_${summary.top_k}: ${summary.raw_hit_at_k}/${summary.question_count}`);
     lines.push(`- raw_full_support_hit_at_${summary.top_k}: ${summary.raw_full_support_hit_at_k}/${summary.question_count}`);
@@ -469,6 +478,15 @@ function readJsonl(filePath) {
         .split(/\r?\n/)
         .filter(Boolean)
         .map((line) => JSON.parse(line));
+}
+
+function readJsonFile(filePath) {
+    if (!fs.existsSync(filePath)) return null;
+    try {
+        return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    } catch {
+        return null;
+    }
 }
 
 function rangesOverlap(aStart, aEnd, bStart, bEnd) {
