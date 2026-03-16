@@ -155,7 +155,20 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
                 sessionId: parentSessionId,
                 sourceRefPrefix,
             });
+            const sourceCursorUpdatedAtMs = resolveSourceCursorLastUpdatedAtMs({
+                state: sourceSyncState,
+                sessionId: parentSessionId,
+                sourceRefPrefix,
+            });
             if (minSourceIndexExclusive > 0) {
+                if (
+                    sourceCursorUpdatedAtMs !== null &&
+                    traceFile.mtimeMs > 0 &&
+                    traceFile.mtimeMs <= sourceCursorUpdatedAtMs
+                ) {
+                    fastSkippedFiles += 1;
+                    continue;
+                }
                 const fastCount = countSessionTraceMessagesFast(sourceRefPrefix);
                 if (fastCount !== null && fastCount <= minSourceIndexExclusive) {
                     fastSkippedFiles += 1;
@@ -2119,7 +2132,21 @@ function loadLinkedSessionRecords(input: {
             sessionId: input.parentSessionId,
             sourceRefPrefix: filePath,
         });
+        const sourceCursorUpdatedAtMs = resolveSourceCursorLastUpdatedAtMs({
+            state: input.sourceSyncState,
+            sessionId: input.parentSessionId,
+            sourceRefPrefix: filePath,
+        });
         if (minSourceIndexExclusive > 0) {
+            const traceMtime = safeStatMtime(filePath) || 0;
+            if (
+                sourceCursorUpdatedAtMs !== null &&
+                traceMtime > 0 &&
+                traceMtime <= sourceCursorUpdatedAtMs
+            ) {
+                input.onFastSkip?.();
+                continue;
+            }
             const fastCount = countSessionTraceMessagesFast(filePath);
             if (fastCount !== null && fastCount <= minSourceIndexExclusive) {
                 input.onFastSkip?.();
@@ -2295,6 +2322,25 @@ function resolveSourceCursorMinIndex(input: {
         if (value > maxSortKey) maxSortKey = value;
     }
     return Math.max(0, Math.floor(maxSortKey));
+}
+
+function resolveSourceCursorLastUpdatedAtMs(input: {
+    state: SourceSyncState;
+    sessionId: string;
+    sourceRefPrefix: string;
+}): number | null {
+    const sessionState = input.state.sessions[input.sessionId];
+    if (!sessionState) return null;
+    const prefix = `${input.sourceRefPrefix}::`;
+    let maxTs = 0;
+    for (const [bucketKey, cursor] of Object.entries(sessionState.cursors || {})) {
+        if (!bucketKey.startsWith(prefix)) continue;
+        const ts = Date.parse(cursor?.updatedAt || "");
+        if (Number.isFinite(ts) && ts > maxTs) {
+            maxTs = ts;
+        }
+    }
+    return maxTs > 0 ? maxTs : null;
 }
 
 function persistSessionNarratives(
