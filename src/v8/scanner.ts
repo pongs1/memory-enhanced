@@ -212,9 +212,9 @@ export const DEFAULT_V8_SCANNER_CONFIG: V8ScannerConfig = {
     sceneDecayLambda: 0.985,
     sceneTopKNodes: 10,
     sceneOverlapThreshold: 0.12,
-    groupTriggerScoreThreshold: 0.24,
+    groupTriggerScoreThreshold: 0.27,
     groupAllowSemanticFallback: true,
-    groupEnergyGain: 0.92,
+    groupEnergyGain: 0.88,
 };
 
 const GRAPH_REFRESH_INTERVAL_MS = 2000;
@@ -838,7 +838,11 @@ export class V8GraphScanner {
             const hasSemanticFallback =
                 this.config.groupAllowSemanticFallback &&
                 baseBundles.length >= 2 &&
-                irSimilarity >= this.config.groupTriggerScoreThreshold;
+                irSimilarity >= this.config.groupTriggerScoreThreshold + 0.08;
+            const hasNodeOverlap = overlapCount > 0;
+            if (!hasNodeOverlap && !hasSemanticFallback) {
+                continue;
+            }
             if (triggerScore < this.config.groupTriggerScoreThreshold && !hasSemanticFallback) {
                 continue;
             }
