@@ -45,6 +45,10 @@ const TOOL_FEEDBACK_WINDOW_MS = 2 * 60 * 1000;
 const DEFAULT_MODEL_ADOPTION_THRESHOLD = 0.22;
 const DEFAULT_TOOL_ADOPTION_THRESHOLD = 0.22;
 
+function scopedSessionKey(workspace: string, sessionId: string): string {
+    return `${workspace}::${sessionId}`;
+}
+
 interface OutputWatchdogState {
     charsStreamed: number;
     lastCheckpointAt: number;
@@ -248,10 +252,11 @@ function summarizeToolObservationForMatch(event: any): string {
 }
 
 function getLegacyScanner(sessionId: string, workspace: string): AssociativeScanner {
-    if (!scanners.has(sessionId)) {
-        scanners.set(sessionId, new AssociativeScanner(workspace));
+    const key = scopedSessionKey(workspace, sessionId);
+    if (!scanners.has(key)) {
+        scanners.set(key, new AssociativeScanner(workspace));
     }
-    return scanners.get(sessionId)!;
+    return scanners.get(key)!;
 }
 
 function getV8Scanner(
@@ -259,10 +264,11 @@ function getV8Scanner(
     workspace: string,
     config?: Partial<V8ScannerConfig>
 ): V8GraphScanner {
-    if (!v8Scanners.has(sessionId)) {
-        v8Scanners.set(sessionId, new V8GraphScanner(workspace, config));
+    const key = scopedSessionKey(workspace, sessionId);
+    if (!v8Scanners.has(key)) {
+        v8Scanners.set(key, new V8GraphScanner(workspace, config));
     }
-    return v8Scanners.get(sessionId)!;
+    return v8Scanners.get(key)!;
 }
 
 function combineRecallPrompts(prompts: Array<{ prompt: string }>): string {
@@ -308,9 +314,10 @@ function getCheckpointConfig(pluginConfig: any): StreamCheckpointConfig {
     };
 }
 
-function getOutputWatchdog(sessionId: string): OutputWatchdogState {
-    if (!outputWatchdogs.has(sessionId)) {
-        outputWatchdogs.set(sessionId, {
+function getOutputWatchdog(sessionId: string, workspace: string): OutputWatchdogState {
+    const key = scopedSessionKey(workspace, sessionId);
+    if (!outputWatchdogs.has(key)) {
+        outputWatchdogs.set(key, {
             charsStreamed: 0,
             lastCheckpointAt: 0,
             interruptsUsed: 0,
@@ -321,7 +328,7 @@ function getOutputWatchdog(sessionId: string): OutputWatchdogState {
             liveInterruptWarned: false,
         });
     }
-    return outputWatchdogs.get(sessionId)!;
+    return outputWatchdogs.get(key)!;
 }
 
 function isCheckpointBoundary(delta: string): boolean {
@@ -512,8 +519,9 @@ function applyModelAdoptionFeedback(
     if (recallTraces.length === 0) return;
     const threshold = resolveAdoptionThreshold(recentOutput, feedbackConfig, "model");
     const labelMap = loadNodeLabels(workspace);
+    const scopedId = scopedSessionKey(workspace, sessionId);
     for (const trace of recallTraces) {
-        const cooldownKey = `${sessionId}:${trace.traceId}`;
+        const cooldownKey = `${scopedId}:${trace.traceId}`;
         const lastApplied = modelFeedbackCooldowns.get(cooldownKey) || 0;
         if (Date.now() - lastApplied < MODEL_FEEDBACK_COOLDOWN_MS) {
             continue;
@@ -527,7 +535,7 @@ function applyModelAdoptionFeedback(
             threshold
         );
         if (matched.length === 0) {
-            const neutralKey = `${sessionId}:${trace.traceId}:neutral`;
+            const neutralKey = `${scopedId}:${trace.traceId}:neutral`;
             const lastNeutral = modelNeutralCooldowns.get(neutralKey) || 0;
             if (Date.now() - lastNeutral < MODEL_NEUTRAL_COOLDOWN_MS) {
                 continue;
@@ -1030,7 +1038,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
         const sid = ctx?.sessionId || "default";
         const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
         const checkpointConfig = getCheckpointConfig(pluginConfig);
-        const watchdog = getOutputWatchdog(sid);
+        const watchdog = getOutputWatchdog(sid, workspace);
         const useV8GraphRecall = isV8GraphRecallEnabled(pluginConfig, workspace);
         const legacyScanner = useV8GraphRecall ? null : getLegacyScanner(sid, workspace);
             const v8Scanner = useV8GraphRecall
@@ -1242,6 +1250,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
     api.on("after_tool_call", async (event: any, ctx: any) => {
         const sid = ctx?.sessionId || "default";
         const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
+        const scopedId = scopedSessionKey(workspace, sid);
         if (!isV8GraphRecallEnabled(pluginConfig, workspace)) {
             return;
         }
@@ -1249,7 +1258,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
         const toolName = typeof event?.toolName === "string" ? event.toolName : "";
         if (toolName && !toolName.startsWith("memory_")) {
             const now = Date.now();
-            const lastFeedback = toolFeedbackCooldowns.get(sid) || 0;
+            const lastFeedback = toolFeedbackCooldowns.get(scopedId) || 0;
             if (
                 now - lastFeedback > TOOL_FEEDBACK_COOLDOWN_MS &&
                 detectToolFailure(event)
@@ -1273,9 +1282,9 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                         }))
                     );
                 }
-                toolFeedbackCooldowns.set(sid, now);
+                toolFeedbackCooldowns.set(scopedId, now);
             }
-            const lastSuccess = toolSuccessCooldowns.get(sid) || 0;
+            const lastSuccess = toolSuccessCooldowns.get(scopedId) || 0;
             if (
                 now - lastSuccess > TOOL_SUCCESS_COOLDOWN_MS &&
                 !detectToolFailure(event)
@@ -1342,7 +1351,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                         },
                     ]);
                 }
-                toolSuccessCooldowns.set(sid, now);
+                toolSuccessCooldowns.set(scopedId, now);
             }
         }
 
@@ -1362,7 +1371,8 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
     api.on("agent_end", async (_event: any, ctx: any) => {
         const sid = ctx?.sessionId || "default";
         const workspace = ctx.workspaceDir || (pluginConfig as any)?.workspace || process.cwd();
-        const watchdog = outputWatchdogs.get(sid);
+        const scopedId = scopedSessionKey(workspace, sid);
+        const watchdog = outputWatchdogs.get(scopedId);
         if (watchdog?.recentOutput) {
             applyModelAdoptionFeedback(
                 workspace,
@@ -1371,8 +1381,8 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                 v8FeedbackConfig
             );
         }
-        outputWatchdogs.delete(sid);
-        scanners.delete(sid);
-        v8Scanners.delete(sid);
+        outputWatchdogs.delete(scopedId);
+        scanners.delete(scopedId);
+        v8Scanners.delete(scopedId);
     });
 }
