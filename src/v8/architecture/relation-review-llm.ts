@@ -47,6 +47,7 @@ export function writeRelationReviewJobsMarkdown(
     lines.push("- If the spans do not support the edge, use `rejected`.");
     lines.push("- Prefer direct span evidence over abstract guessing.");
     lines.push("- Do not invent node ids, edge types, or evidence ids.");
+    lines.push("- Use anchor nodes plus the listed candidate nodes only.");
     lines.push("- One reviewed relation should describe one concrete relation judgment.");
     lines.push("");
     lines.push("Output format:");
@@ -86,6 +87,22 @@ export function writeRelationReviewJobsMarkdown(
         }
         if (plan?.queryTerms?.length) {
             lines.push(`- query_terms: ${plan.queryTerms.slice(0, 12).join(", ")}`);
+        }
+        lines.push("");
+
+        lines.push("### Candidate Nodes");
+        const candidateNodes = (job.candidateNodeIds || [])
+            .map((nodeId) => nodeById.get(nodeId))
+            .filter((node): node is V8GraphNode => Boolean(node))
+            .sort((a, b) => a.id.localeCompare(b.id));
+        if (candidateNodes.length === 0) {
+            lines.push("- (none)");
+        } else {
+            for (const node of candidateNodes) {
+                lines.push(
+                    `- node_id=${node.id}; label=${singleLine(node.canonicalLabel || node.id, 80)}; type=${node.memoryType}; confidence=${node.state.confidence.toFixed(3)}`
+                );
+            }
         }
         lines.push("");
 
@@ -182,6 +199,7 @@ function normalizeOneRelation(
     if (!reviewJobId) return null;
     const job = jobs.find((entry) => entry.id === reviewJobId);
     if (!job) return null;
+    const allowedNodeIds = new Set([...(job.anchorNodeIds || []), ...(job.candidateNodeIds || [])]);
 
     const srcNodeId = String(
         (raw as any).srcNodeId ?? (raw as any).src_node_id ?? ""
@@ -191,6 +209,9 @@ function normalizeOneRelation(
     ).trim();
     if (!srcNodeId || !dstNodeId) return null;
     if (!nodeIds.has(srcNodeId) || !nodeIds.has(dstNodeId)) return null;
+    if (!allowedNodeIds.has(srcNodeId) || !allowedNodeIds.has(dstNodeId)) return null;
+    const anchorNodeSet = new Set(job.anchorNodeIds || []);
+    if (!anchorNodeSet.has(srcNodeId) && !anchorNodeSet.has(dstNodeId)) return null;
 
     const edgeType = String(
         (raw as any).edgeType ?? (raw as any).edge_type ?? ""

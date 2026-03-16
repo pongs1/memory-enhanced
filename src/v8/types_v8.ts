@@ -626,6 +626,7 @@ export interface V8RelationReviewJob {
     id: string;
     planId: string;
     anchorNodeIds: string[];
+    candidateNodeIds: string[];
     candidateEdgeTypes: string[];
     candidateHitIds: string[];
     evidenceSpanIds: string[];

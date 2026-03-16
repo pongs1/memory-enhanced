@@ -209,6 +209,7 @@ export function buildRelationPlanningArtifacts(
         relationSearchPlans,
         narrativeShardSelections,
         evidenceSpans: input.evidenceSpans,
+        nodes: input.nodes,
         compilePhase: input.compilePhase,
     });
 
@@ -540,6 +541,7 @@ function buildRelationCandidateHitsAndJobs(input: {
     relationSearchPlans: V8RelationSearchPlan[];
     narrativeShardSelections: V8NarrativeShardSelection[];
     evidenceSpans: V8EvidenceSpan[];
+    nodes: V8GraphNode[];
     compilePhase: "stream" | "final";
 }): {
     relationCandidateHits: V8RelationCandidateHit[];
@@ -555,6 +557,7 @@ function buildRelationCandidateHitsAndJobs(input: {
         list.push(span);
         spansByShard.set(shardId, list);
     }
+    const reviewNodesBySpan = buildReviewNodesBySpan(input.nodes);
 
     const maxPlans = input.compilePhase === "stream" ? 18 : 72;
     const planRanked = input.relationSearchPlans
@@ -631,10 +634,17 @@ function buildRelationCandidateHitsAndJobs(input: {
         if (candidateHitIds.length === 0) continue;
 
         const jobId = `rrj_${shortHash(plan.id)}`;
+        const candidateNodeIds = collectReviewCandidateNodeIds({
+            anchorNodeIds: plan.anchorNodeIds,
+            hits: top,
+            reviewNodesBySpan,
+            cap: input.compilePhase === "stream" ? 12 : 20,
+        });
         relationReviewJobs.push({
             id: jobId,
             planId: plan.id,
             anchorNodeIds: [...plan.anchorNodeIds],
+            candidateNodeIds,
             candidateEdgeTypes,
             candidateHitIds,
             evidenceSpanIds: uniqueList(evidenceSpanIds).slice(0, 40),
@@ -650,6 +660,59 @@ function buildRelationCandidateHitsAndJobs(input: {
         relationCandidateHits,
         relationReviewJobs,
     };
+}
+
+function buildReviewNodesBySpan(nodes: V8GraphNode[]): Map<string, V8GraphNode[]> {
+    const out = new Map<string, V8GraphNode[]>();
+    for (const node of nodes) {
+        if (!isReviewCandidateNode(node)) continue;
+        for (const spanId of node.evidenceSpanIds || []) {
+            const list = out.get(spanId) || [];
+            list.push(node);
+            out.set(spanId, list);
+        }
+    }
+    for (const [spanId, list] of out.entries()) {
+        out.set(
+            spanId,
+            list
+                .slice()
+                .sort(
+                    (a, b) =>
+                        b.state.confidence - a.state.confidence ||
+                        b.state.supportCount - a.state.supportCount ||
+                        a.id.localeCompare(b.id)
+                )
+        );
+    }
+    return out;
+}
+
+function isReviewCandidateNode(node: V8GraphNode): boolean {
+    if (node.primaryLayer !== "micro") return false;
+    if (node.memoryType === "evidence" || node.memoryType === "discourse_unit") return false;
+    return true;
+}
+
+function collectReviewCandidateNodeIds(input: {
+    anchorNodeIds: string[];
+    hits: Array<{ span: V8EvidenceSpan; score: number }>;
+    reviewNodesBySpan: Map<string, V8GraphNode[]>;
+    cap: number;
+}): string[] {
+    const anchors = new Set(input.anchorNodeIds || []);
+    const out = new Set<string>();
+    for (const hit of input.hits) {
+        const nodes = input.reviewNodesBySpan.get(hit.span.id) || [];
+        for (const node of nodes) {
+            if (anchors.has(node.id)) continue;
+            out.add(node.id);
+            if (out.size >= input.cap) {
+                return Array.from(out);
+            }
+        }
+    }
+    return Array.from(out);
 }
 
 function pickCandidateEdgeType(
