@@ -848,7 +848,10 @@ function buildMesoDescriptors(
             currentChars >= Math.max(280, cfg.mesoMaxChars * 0.65) &&
             currentChars + turnChars > cfg.mesoMaxChars;
         const turnCountLimit = turn.sourceCategory === "operation" ? 10 : 12;
-        const hitsTurnCountLimit = currentTurns.length > 0 && currentTurns.length >= turnCountLimit;
+        const hitsTurnCountLimit =
+            currentTurns.length > 0 &&
+            currentTurns.length >= turnCountLimit &&
+            currentChars >= Math.floor(minStableMesoChars * 0.55);
         const timeBoundary =
             currentTurns.length > 0 &&
             currentTurns.length >= 3 &&
