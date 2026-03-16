@@ -241,11 +241,16 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
     const hotNarratives = allNarrativeDocs.filter((doc) => scope.hotDocIds.has(doc.id));
     const reviewOverlayDirty = hasReviewOverlayUpdates(store);
+    const relationLearningDirty = hasRelationLearningUpdates(store);
+    if (relationLearningDirty) {
+        logStage("relation learning updates detected: skip no-op reuse");
+    }
     const hotBuildIsNoop =
         hotNarratives.length === 0 &&
         scope.removedDocIds.size === 0 &&
         artifactsReusable &&
-        !reviewOverlayDirty;
+        !reviewOverlayDirty &&
+        !relationLearningDirty;
     const buildStats = {
         rebuildMode,
         hotWindowHours,
@@ -1516,6 +1521,26 @@ function hasReviewOverlayUpdates(
     const feedbackMtime = safeStatMtime(store.searchFeedbackSignals) || 0;
     const baseline = Math.max(graphMtime, reviewJobMtime, learningMtime, feedbackMtime);
     return Math.max(reviewedMtime, hypothesisMtime) > baseline;
+}
+
+function hasRelationLearningUpdates(
+    store: ReturnType<typeof ensureV8StoreDirs>
+): boolean {
+    const learningMtime = safeStatMtime(store.learningEvents) || 0;
+    const feedbackMtime = safeStatMtime(store.searchFeedbackSignals) || 0;
+    const inputLatest = Math.max(learningMtime, feedbackMtime);
+    if (inputLatest <= 0) return false;
+    const relationPlanMtime = safeStatMtime(store.relationSearchPlans) || 0;
+    const shardSelectionMtime = safeStatMtime(store.narrativeShardSelections) || 0;
+    const candidateHitMtime = safeStatMtime(store.relationCandidateHits) || 0;
+    const reviewJobMtime = safeStatMtime(store.relationReviewJobs) || 0;
+    const outputLatest = Math.max(
+        relationPlanMtime,
+        shardSelectionMtime,
+        candidateHitMtime,
+        reviewJobMtime
+    );
+    return inputLatest > outputLatest;
 }
 
 function loadCachedArtifactsForDocs(
