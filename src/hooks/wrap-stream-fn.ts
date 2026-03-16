@@ -1346,7 +1346,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
             }
         }
 
-        const scanner = getV8Scanner(sid, workspace);
+        const scanner = getV8Scanner(sid, workspace, v8ScannerConfig);
         const workingState = maybeRefreshWorkingState(workspace);
         const toolSignals = extractToolSceneSignals(event);
         if (toolSignals.length === 0) {
