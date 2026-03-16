@@ -75,6 +75,7 @@ function tokenize(text: string): string[] {
     const englishWords = text.toLowerCase().match(/[a-z0-9_-]{3,}/g) || [];
     const cjkChunks = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
     const cjkNgrams: string[] = [];
+    const MAX_CJK_NGRAMS = 320;
 
     for (const chunk of cjkChunks) {
         const trimmed = chunk.trim();
@@ -84,10 +85,20 @@ function tokenize(text: string): string[] {
             continue;
         }
 
+        const stride = trimmed.length > 40 ? 2 : 1;
         for (let size = 2; size <= Math.min(4, trimmed.length); size++) {
-            for (let i = 0; i <= trimmed.length - size; i++) {
+            for (let i = 0; i <= trimmed.length - size; i += stride) {
                 cjkNgrams.push(trimmed.slice(i, i + size));
+                if (cjkNgrams.length >= MAX_CJK_NGRAMS) {
+                    break;
+                }
             }
+            if (cjkNgrams.length >= MAX_CJK_NGRAMS) {
+                break;
+            }
+        }
+        if (cjkNgrams.length >= MAX_CJK_NGRAMS) {
+            break;
         }
     }
 
