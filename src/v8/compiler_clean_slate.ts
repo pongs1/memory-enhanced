@@ -161,7 +161,11 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         }
         const traceRecords = [...traceNarrativeRecords, ...linkedNarrativeRecords];
         sourceNormalizationStats = summarizeSourceNormalization(traceRecords);
-        const persistResult = persistAssembledObservationMarkdown(store.rawDir, traceRecords);
+        const persistResult = persistAssembledObservationMarkdown(
+            store.rawDir,
+            traceRecords,
+            store.sourceSyncState
+        );
         sourcePersistStats = {
             writtenFiles: persistResult.writtenFiles,
             skippedFiles: persistResult.skippedFiles,
@@ -670,17 +674,10 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         `reviewed relations applied (accepted=${reviewedOverlayInitial.stats.accepted} hypothesis=${reviewedOverlayInitial.stats.hypothesis} rejected=${reviewedOverlayInitial.stats.rejected})`
     );
     const initialEdges = reviewedOverlayInitial.edges;
-    const initialProjections = buildRuntimeProjections({
-        nodes,
-        edges: initialEdges,
-        evidenceSpans,
-    });
-    logStage("runtime projections built");
     const relationPlanning = buildRelationPlanningArtifacts({
         nodes,
         edges: initialEdges,
         evidenceSpans,
-        recallBundles: initialProjections.recallBundles,
         searchFeedbackSignals: existingSearchFeedbackSignals,
         learningEvents: existingLearningEvents,
         compilePhase,
@@ -742,6 +739,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         edges,
         evidenceSpans,
     });
+    logStage("runtime projections built");
     buildStats.relationReviewedAccepted = reviewedOverlayFinal.stats.accepted;
     buildStats.relationReviewedHypothesis = reviewedOverlayFinal.stats.hypothesis;
     buildStats.relationReviewedRejected = reviewedOverlayFinal.stats.rejected;
@@ -1623,14 +1621,15 @@ function summarizeSourceNormalization(records: V8NarrativeRecord[]): {
 
 function persistAssembledObservationMarkdown(
     rawDir: string,
-    records: V8NarrativeRecord[]
+    records: V8NarrativeRecord[],
+    sourceSyncStatePath: string
 ): { writtenFiles: number; skippedFiles: number } {
     if (!records.length) {
         return { writtenFiles: 0, skippedFiles: 0 };
     }
     const outDir = path.join(rawDir, "observations", "assembled");
     fs.mkdirSync(outDir, { recursive: true });
-    return persistSessionNarratives(outDir, records);
+    return persistSessionNarratives(outDir, records, sourceSyncStatePath);
 }
 
 interface SessionLinkRef {
@@ -1955,11 +1954,33 @@ interface NarrativeEntry {
     originLabel?: string;
 }
 
+interface SourceSyncCursor {
+    lastSortKey: number | null;
+    lastTimestampMs: number | null;
+    updatedAt: string;
+}
+
+interface SourceSyncSessionState {
+    cursors: Record<string, SourceSyncCursor>;
+    updatedAt: string;
+}
+
+interface SourceSyncState {
+    version: number;
+    updatedAt: string;
+    sessions: Record<string, SourceSyncSessionState>;
+}
+
+const SOURCE_SYNC_STATE_VERSION = 1;
+
 function persistSessionNarratives(
     outDir: string,
-    records: V8NarrativeRecord[]
+    records: V8NarrativeRecord[],
+    sourceSyncStatePath: string
 ): { writtenFiles: number; skippedFiles: number } {
     const sessions = new Map<string, NarrativeEntry[]>();
+    const sourceSyncState = loadSourceSyncState(sourceSyncStatePath);
+    let syncStateDirty = false;
     let writtenFiles = 0;
     let skippedFiles = 0;
     for (const record of records) {
@@ -1995,14 +2016,78 @@ function persistSessionNarratives(
 
     for (const [sessionId, entries] of sessions.entries()) {
         entries.sort(compareNarrativeEntries);
-        const markdown = renderSessionNarrative(sessionId, entries);
-        if (!markdown.trim()) continue;
         const fileName =
             sanitizeFileName(`session_${sessionId}_narrative`) + ".md";
         const fullPath = path.join(outDir, fileName);
-        const wrote = appendNarrativeIfExtended(fullPath, markdown);
-        if (wrote) writtenFiles += 1;
-        else skippedFiles += 1;
+        const nowIso = new Date().toISOString();
+        const existing = sourceSyncState.sessions[sessionId];
+        const fileExists = fs.existsSync(fullPath);
+
+        if (!fileExists) {
+            const markdown = renderSessionNarrative(sessionId, entries);
+            if (!markdown.trim()) {
+                skippedFiles += 1;
+                continue;
+            }
+            try {
+                fs.writeFileSync(fullPath, markdown, "utf-8");
+                writtenFiles += 1;
+                sourceSyncState.sessions[sessionId] = {
+                    cursors: buildSourceSyncCursorSnapshot(entries, nowIso),
+                    updatedAt: nowIso,
+                };
+                syncStateDirty = true;
+            } catch {
+                skippedFiles += 1;
+            }
+            continue;
+        }
+
+        if (!existing) {
+            const existingCount = countNarrativeTimelineEntries(fullPath);
+            const bootstrapNewEntries =
+                existingCount < entries.length ? entries.slice(existingCount) : [];
+            if (bootstrapNewEntries.length > 0) {
+                const appended = appendNarrativeEntries(
+                    fullPath,
+                    renderNarrativeTimelineEntries(bootstrapNewEntries)
+                );
+                if (appended) writtenFiles += 1;
+                else skippedFiles += 1;
+            } else {
+                skippedFiles += 1;
+            }
+            sourceSyncState.sessions[sessionId] = {
+                cursors: buildSourceSyncCursorSnapshot(entries, nowIso),
+                updatedAt: nowIso,
+            };
+            syncStateDirty = true;
+            continue;
+        }
+
+        const newEntries = entries.filter((entry) =>
+            isEntryBeyondSourceCursor(entry, existing.cursors)
+        );
+        if (newEntries.length === 0) {
+            skippedFiles += 1;
+            continue;
+        }
+        const appended = appendNarrativeEntries(
+            fullPath,
+            renderNarrativeTimelineEntries(newEntries)
+        );
+        if (!appended) {
+            skippedFiles += 1;
+            continue;
+        }
+        writtenFiles += 1;
+        applyEntriesToSourceCursor(existing.cursors, newEntries, nowIso);
+        existing.updatedAt = nowIso;
+        syncStateDirty = true;
+    }
+    if (syncStateDirty) {
+        sourceSyncState.updatedAt = new Date().toISOString();
+        persistSourceSyncState(sourceSyncStatePath, sourceSyncState);
     }
     return {
         writtenFiles,
@@ -2010,39 +2095,131 @@ function persistSessionNarratives(
     };
 }
 
-function appendNarrativeIfExtended(filePath: string, content: string): boolean {
+function appendNarrativeEntries(filePath: string, content: string): boolean {
+    const normalized = ensureTrailingLf(content.trim());
+    if (!normalized.trim()) return false;
     try {
-        if (!fs.existsSync(filePath)) {
-            fs.writeFileSync(filePath, content, "utf-8");
-            return true;
-        }
-        const existingRaw = fs.readFileSync(filePath, "utf-8");
-        const existing = normalizeLf(existingRaw);
-        const incoming = normalizeLf(content);
-        if (incoming === existing) return false;
-
-        const existingPrefix = ensureTrailingLf(existing);
-        const incomingNormalized = ensureTrailingLf(incoming);
-        if (!incomingNormalized.startsWith(existingPrefix)) {
-            return false;
-        }
-
-        const suffix = incomingNormalized.slice(existingPrefix.length);
-        if (!suffix.trim()) return false;
-        fs.appendFileSync(filePath, suffix, "utf-8");
+        const needsLf =
+            fs.existsSync(filePath) &&
+            (() => {
+                const existing = fs.readFileSync(filePath, "utf-8");
+                return existing.length > 0 && !existing.endsWith("\n");
+            })();
+        const prefix = needsLf ? "\n" : "";
+        fs.appendFileSync(filePath, `${prefix}${normalized}`, "utf-8");
         return true;
     } catch {
         return false;
     }
 }
 
-function normalizeLf(text: string): string {
-    return (text || "").replace(/\r\n/g, "\n");
+function countNarrativeTimelineEntries(filePath: string): number {
+    try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const matches = raw.match(/^###\s+/gm);
+        return matches ? matches.length : 0;
+    } catch {
+        return 0;
+    }
 }
 
 function ensureTrailingLf(text: string): string {
     if (!text) return "\n";
     return text.endsWith("\n") ? text : `${text}\n`;
+}
+
+function loadSourceSyncState(filePath: string): SourceSyncState {
+    try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(raw) as SourceSyncState;
+        if (!parsed || typeof parsed !== "object") throw new Error("invalid");
+        if (parsed.version !== SOURCE_SYNC_STATE_VERSION) throw new Error("invalid");
+        if (!parsed.sessions || typeof parsed.sessions !== "object") throw new Error("invalid");
+        return parsed;
+    } catch {
+        return {
+            version: SOURCE_SYNC_STATE_VERSION,
+            updatedAt: new Date().toISOString(),
+            sessions: {},
+        };
+    }
+}
+
+function persistSourceSyncState(filePath: string, state: SourceSyncState): void {
+    try {
+        fs.writeFileSync(filePath, JSON.stringify(state, null, 2), "utf-8");
+    } catch {
+        // ignore source-sync persistence failure
+    }
+}
+
+function toSourceCursorBucketKey(entry: NarrativeEntry): string {
+    const sourcePrefix = entry.sourceRef.split("#")[0] || entry.sourceRef;
+    const category = entry.sourceCategory || "conversation";
+    return `${sourcePrefix}::${category}`;
+}
+
+function buildSourceSyncCursorSnapshot(
+    entries: NarrativeEntry[],
+    updatedAt: string
+): Record<string, SourceSyncCursor> {
+    const cursors: Record<string, SourceSyncCursor> = {};
+    applyEntriesToSourceCursor(cursors, entries, updatedAt);
+    return cursors;
+}
+
+function applyEntriesToSourceCursor(
+    cursors: Record<string, SourceSyncCursor>,
+    entries: NarrativeEntry[],
+    updatedAt: string
+): void {
+    for (const entry of entries) {
+        const bucketKey = toSourceCursorBucketKey(entry);
+        const sortKey = computeSortKey(entry);
+        const timestampMs = parseTimestampMs(entry.timestamp);
+        const current = cursors[bucketKey];
+        if (!current) {
+            cursors[bucketKey] = {
+                lastSortKey: sortKey,
+                lastTimestampMs: timestampMs,
+                updatedAt,
+            };
+            continue;
+        }
+        if (
+            sortKey !== null &&
+            (current.lastSortKey === null || sortKey > current.lastSortKey)
+        ) {
+            current.lastSortKey = sortKey;
+        }
+        if (
+            timestampMs !== null &&
+            (current.lastTimestampMs === null || timestampMs > current.lastTimestampMs)
+        ) {
+            current.lastTimestampMs = timestampMs;
+        }
+        current.updatedAt = updatedAt;
+    }
+}
+
+function isEntryBeyondSourceCursor(
+    entry: NarrativeEntry,
+    cursors: Record<string, SourceSyncCursor>
+): boolean {
+    const cursor = cursors[toSourceCursorBucketKey(entry)];
+    if (!cursor) return true;
+    const entrySortKey = computeSortKey(entry);
+    if (entrySortKey !== null) {
+        if (cursor.lastSortKey === null) return true;
+        if (entrySortKey > cursor.lastSortKey) return true;
+        if (entrySortKey < cursor.lastSortKey) return false;
+    }
+    const entryTimestampMs = parseTimestampMs(entry.timestamp);
+    if (entryTimestampMs !== null) {
+        if (cursor.lastTimestampMs === null) return true;
+        if (entryTimestampMs > cursor.lastTimestampMs) return true;
+    }
+    return false;
 }
 
 function compareNarrativeEntries(a: NarrativeEntry, b: NarrativeEntry): number {
@@ -2099,6 +2276,12 @@ function renderSessionNarrative(
     lines.push("");
     lines.push("## Timeline");
     lines.push("");
+    lines.push(renderNarrativeTimelineEntries(entries).trimEnd());
+    return lines.join("\n").trim() + "\n";
+}
+
+function renderNarrativeTimelineEntries(entries: NarrativeEntry[]): string {
+    const lines: string[] = [];
     for (const entry of entries) {
         const speakerLabel = formatSpeakerLabel(entry);
         const metaParts = buildEntryMeta(entry);

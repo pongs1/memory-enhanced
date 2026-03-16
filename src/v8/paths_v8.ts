@@ -36,6 +36,7 @@ export interface V8StorePaths {
     feedbackOverrides: string;
     buildManifest: string;
     narrativeCompileState: string;
+    sourceSyncState: string;
     learningEvents: string;
     searchFeedbackSignals: string;
     buildReport: string;
@@ -83,6 +84,7 @@ export function v8StorePaths(workspace: string): V8StorePaths {
         feedbackOverrides: path.join(runtimeDir, "feedback_overrides.jsonl"),
         buildManifest: path.join(runtimeDir, "build_manifest.json"),
         narrativeCompileState: path.join(runtimeDir, "narrative_compile_state.json"),
+        sourceSyncState: path.join(runtimeDir, "source_sync_state.json"),
         learningEvents: path.join(runtimeDir, "learning_events.jsonl"),
         searchFeedbackSignals: path.join(runtimeDir, "search_feedback_signals.jsonl"),
         buildReport: path.join(runtimeDir, "build_report.json"),

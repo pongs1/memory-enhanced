@@ -22,7 +22,7 @@ export interface BuildRelationPlanningArtifactsInput {
     nodes: V8GraphNode[];
     edges: V8GraphEdge[];
     evidenceSpans: V8EvidenceSpan[];
-    recallBundles: V8RecallBundleProjection[];
+    recallBundles?: V8RecallBundleProjection[];
     searchFeedbackSignals?: V8SearchFeedbackSignal[];
     learningEvents?: V8LearningEvent[];
     compilePhase: "stream" | "final";
@@ -82,12 +82,54 @@ const EDGE_PRIOR_BY_TYPE: Record<string, string[]> = {
     topic_state: ["state_supersedes_state", "state_refines_state", "valid_during"],
 };
 
+const CONTROL_MEMORY_TYPES = new Set([
+    "preference",
+    "goal",
+    "constraint",
+    "decision",
+    "open_question",
+    "conversation_act",
+    "session_state",
+    "topic_state",
+]);
+
+function buildSeedRecallBundles(nodes: V8GraphNode[]): V8RecallBundleProjection[] {
+    return nodes
+        .filter((node) => node.primaryLayer === "micro")
+        .map((node) => {
+            const title = (node.canonicalLabel || node.id).trim();
+            const packType = node.memoryType.endsWith("_state")
+                ? "state"
+                : CONTROL_MEMORY_TYPES.has(node.memoryType)
+                  ? "summary"
+                  : "raw_evidence";
+            return {
+                bundleId: `seed_${node.id}`,
+                title: title || node.id,
+                kind: "semantic",
+                nodeIds: [node.id],
+                sourceRefs: [],
+                evidenceSpanIds: [...(node.evidenceSpanIds || [])],
+                bestEvidenceSpanIds:
+                    node.bestEvidenceSpanIds && node.bestEvidenceSpanIds.length > 0
+                        ? [...node.bestEvidenceSpanIds]
+                        : (node.evidenceSpanIds || []).slice(0, 8),
+                summaryText: title || node.id,
+                packType,
+            };
+        });
+}
+
 export function buildRelationPlanningArtifacts(
     input: BuildRelationPlanningArtifactsInput
 ): RelationPlanningArtifacts {
+    const recallBundles =
+        input.recallBundles && input.recallBundles.length > 0
+            ? input.recallBundles
+            : buildSeedRecallBundles(input.nodes);
     const nodeById = new Map(input.nodes.map((node) => [node.id, node]));
     const spanById = new Map(input.evidenceSpans.map((span) => [span.id, span]));
-    const bundlesByNodeId = indexBundlesByNode(input.recallBundles);
+    const bundlesByNodeId = indexBundlesByNode(recallBundles);
     const allShardHints = buildGlobalShardHints(input.evidenceSpans);
     const hintPriors = buildSearchHintPriors(
         input.searchFeedbackSignals || [],
@@ -114,7 +156,7 @@ export function buildRelationPlanningArtifacts(
         );
     }
 
-    const groupSummaries = buildGroupSummaries(input.recallBundles);
+    const groupSummaries = buildGroupSummaries(recallBundles);
     const { relationSearchPlans, narrativeShardSelections } = buildRelationSearchPlans({
         cards: entityScopeCards,
         nodes: anchorNodes,

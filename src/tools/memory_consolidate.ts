@@ -37,7 +37,7 @@ export const MemoryConsolidateParams = Type.Object({
     start_at: Type.Optional(
         Type.Union([Type.Literal("source"), Type.Literal("narrative")], {
             description:
-                "Pipeline start stage. source rebuilds/updates narrative files from raw session traces; narrative starts directly from existing *_narrative.md files.",
+                "Pipeline start stage. source performs append-only session->narrative sync first (silent no-op when no new turns), then continues; narrative starts directly from existing *_narrative.md files.",
         })
     ),
     stop_after: Type.Optional(
