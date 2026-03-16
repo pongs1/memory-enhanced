@@ -60,6 +60,7 @@ export interface NarrativeNormalizationOptions {
     sessionId?: string;
     cleanPatterns?: RegExp[];
     includeOperations?: boolean;
+    minSourceIndexExclusive?: number;
     workspace?: string;
     toolCleaningProfiles?: Map<string, ToolCleaningProfile>;
 }
@@ -91,6 +92,10 @@ export function normalizeSessionMessages(
     const cleaner = compileCleanPatterns(cleanPatterns);
     const sessionId =
         options.sessionId || deriveSessionId(sourceRefPrefix) || "default";
+    const minSourceIndexExclusive = Math.max(
+        0,
+        Number(options.minSourceIndexExclusive || 0)
+    );
     const toolCleaningProfiles =
         options.toolCleaningProfiles ||
         loadResolvedToolCleaningProfiles(options.workspace);
@@ -100,6 +105,7 @@ export function normalizeSessionMessages(
     const pendingResults: ToolResultInfo[] = [];
 
     messages.forEach((msg, index) => {
+        const sourceIndex = index + 1;
         const rawRole = resolveMessageRole(msg);
         if (rawRole === "assistant") {
             for (const call of extractToolCalls(msg, index)) {
@@ -107,6 +113,9 @@ export function normalizeSessionMessages(
                     toolCallMap.set(call.toolCallId, call);
                 }
             }
+        }
+        if (sourceIndex <= minSourceIndexExclusive) {
+            return;
         }
         if (rawRole === "tool" || rawRole === "toolResult") {
             const toolResult = extractToolResult(msg, index);
@@ -123,8 +132,8 @@ export function normalizeSessionMessages(
         const timestamp = normalizeTimestamp(
             msg.timestamp ?? msg.createdAt ?? msg.created_at
         );
-        const sourceRef = `${sourceRefPrefix}#${index + 1}`;
-        const id = buildNarrativeRecordId(sessionId, index + 1);
+        const sourceRef = `${sourceRefPrefix}#${sourceIndex}`;
+        const id = buildNarrativeRecordId(sessionId, sourceIndex);
 
         conversationRecords.push({
             id,
@@ -141,22 +150,23 @@ export function normalizeSessionMessages(
                 sessionId,
                 sourceRef,
                 sourceCategory: "conversation",
-                sourceIndex: String(index + 1),
+                sourceIndex: String(sourceIndex),
             },
         });
     });
 
     const operationRecords =
         options.includeOperations === false
-            ? []
-            : buildOperationNarrativeRecordsFromCollected({
-                  sourceRefPrefix,
-                  sessionId,
-                  cleaner,
-                  toolCleaningProfiles,
-                  toolCallMap,
-                  pendingResults,
-              });
+              ? []
+              : buildOperationNarrativeRecordsFromCollected({
+                    sourceRefPrefix,
+                    sessionId,
+                    cleaner,
+                    minSourceIndexExclusive,
+                    toolCleaningProfiles,
+                    toolCallMap,
+                    pendingResults,
+                });
 
     return [...conversationRecords, ...operationRecords];
 }
@@ -311,6 +321,7 @@ function buildOperationNarrativeRecordsFromCollected(input: {
     sourceRefPrefix: string;
     sessionId: string;
     cleaner: CompiledCleanPatterns;
+    minSourceIndexExclusive: number;
     toolCleaningProfiles?: Map<string, ToolCleaningProfile>;
     toolCallMap: Map<string, ToolCallInfo>;
     pendingResults: ToolResultInfo[];
@@ -319,6 +330,7 @@ function buildOperationNarrativeRecordsFromCollected(input: {
         sourceRefPrefix,
         sessionId,
         cleaner,
+        minSourceIndexExclusive,
         toolCleaningProfiles,
         toolCallMap,
         pendingResults,
@@ -353,6 +365,7 @@ function buildOperationNarrativeRecordsFromCollected(input: {
     }
 
     for (const call of toolCallMap.values()) {
+        if (call.sourceIndex <= minSourceIndexExclusive) continue;
         if (isIgnoredLegacyOperation(call, null)) continue;
         opIndex += 1;
         const record = buildOperationRecord(

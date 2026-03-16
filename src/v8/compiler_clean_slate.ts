@@ -127,6 +127,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         removedRatioPct: number;
     } | null = null;
     if (startAt === "source") {
+        const sourceSyncState = loadSourceSyncState(store.sourceSyncState);
         const traceGroups = loadSessionTraces(workspace, {
             sessionTraceDir: options?.sessionTraceDir,
             maxFiles: options?.maxSessionFiles,
@@ -141,10 +142,16 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         const linkedNarrativeRecords: V8NarrativeRecord[] = [];
         for (const group of traceGroups) {
             const parentSessionId = deriveSessionIdFromSourceRef(group.sourceRefPrefix);
+            const minSourceIndexExclusive = resolveSourceCursorMinIndex({
+                state: sourceSyncState,
+                sessionId: parentSessionId,
+                sourceRefPrefix: group.sourceRefPrefix,
+            });
             const baseRecords = normalizeSessionMessages(group.messages, {
                 sourceRefPrefix: group.sourceRefPrefix,
                 workspace,
                 toolCleaningProfiles,
+                minSourceIndexExclusive,
             });
             traceNarrativeRecords.push(...baseRecords);
 
@@ -157,6 +164,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
                         sessionTraceDir,
                         toolCleaningProfiles,
                         workspace,
+                        sourceSyncState,
                     })
                 );
             }
@@ -1995,6 +2003,7 @@ function loadLinkedSessionRecords(input: {
     sessionTraceDir: string;
     toolCleaningProfiles: ReturnType<typeof loadResolvedToolCleaningProfiles>;
     workspace: string;
+    sourceSyncState: SourceSyncState;
 }): V8NarrativeRecord[] {
     const agentsRoot = resolveAgentsRoot(input.sessionTraceDir);
     if (!agentsRoot) return [];
@@ -2016,11 +2025,17 @@ function loadLinkedSessionRecords(input: {
         if (!filePath) continue;
         const messages = readSessionTraceFile(filePath);
         if (!messages.length) continue;
+        const minSourceIndexExclusive = resolveSourceCursorMinIndex({
+            state: input.sourceSyncState,
+            sessionId: input.parentSessionId,
+            sourceRefPrefix: filePath,
+        });
         const linkedRecords = normalizeSessionMessages(messages, {
             sourceRefPrefix: filePath,
             sessionId: input.parentSessionId,
             workspace: input.workspace,
             toolCleaningProfiles: input.toolCleaningProfiles,
+            minSourceIndexExclusive,
         });
         const originKind = link.runtime || inferOriginKind(link.childSessionKey) || "subagent";
         for (const record of linkedRecords) {
@@ -2164,6 +2179,25 @@ interface SourceSyncState {
 }
 
 const SOURCE_SYNC_STATE_VERSION = 1;
+
+function resolveSourceCursorMinIndex(input: {
+    state: SourceSyncState;
+    sessionId: string;
+    sourceRefPrefix: string;
+}): number {
+    const sessionState = input.state.sessions[input.sessionId];
+    if (!sessionState) return 0;
+    const prefix = `${input.sourceRefPrefix}::`;
+    let maxSortKey = 0;
+    for (const [bucketKey, cursor] of Object.entries(sessionState.cursors || {})) {
+        if (!bucketKey.startsWith(prefix)) continue;
+        const value =
+            cursor && typeof cursor.lastSortKey === "number" ? cursor.lastSortKey : null;
+        if (value === null || !Number.isFinite(value)) continue;
+        if (value > maxSortKey) maxSortKey = value;
+    }
+    return Math.max(0, Math.floor(maxSortKey));
+}
 
 function persistSessionNarratives(
     outDir: string,
