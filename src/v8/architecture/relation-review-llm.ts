@@ -176,11 +176,12 @@ function normalizeOneRelation(
     nodes: V8GraphNode[]
 ): V8ReviewedRelation | null {
     const nodeIds = new Set(nodes.map((node) => node.id));
-    const jobIds = new Set(jobs.map((job) => job.id));
     const reviewJobId = String(
         (raw as any).reviewJobId ?? (raw as any).review_job_id ?? ""
     ).trim();
-    if (!reviewJobId || !jobIds.has(reviewJobId)) return null;
+    if (!reviewJobId) return null;
+    const job = jobs.find((entry) => entry.id === reviewJobId);
+    if (!job) return null;
 
     const srcNodeId = String(
         (raw as any).srcNodeId ?? (raw as any).src_node_id ?? ""
@@ -195,6 +196,13 @@ function normalizeOneRelation(
         (raw as any).edgeType ?? (raw as any).edge_type ?? ""
     ).trim();
     if (!edgeType) return null;
+    if (
+        Array.isArray(job.candidateEdgeTypes) &&
+        job.candidateEdgeTypes.length > 0 &&
+        !job.candidateEdgeTypes.includes(edgeType)
+    ) {
+        return null;
+    }
     const statusRaw = String((raw as any).status || "").trim();
     const status: V8ReviewedRelation["status"] =
         statusRaw === "accepted" || statusRaw === "hypothesis" || statusRaw === "rejected"
@@ -205,7 +213,12 @@ function normalizeOneRelation(
     const confidence = clamp01(Number.isFinite(confidenceRaw) ? confidenceRaw : 0.5);
     const supportRaw =
         (raw as any).supportEvidenceSpanIds ?? (raw as any).support_evidence_span_ids ?? "";
-    const supportEvidenceSpanIds = normalizeStringList(supportRaw);
+    const supportEvidenceSpanIds = normalizeStringList(supportRaw).filter((spanId) =>
+        (job.evidenceSpanIds || []).includes(spanId)
+    );
+    if (status !== "rejected" && supportEvidenceSpanIds.length === 0) {
+        return null;
+    }
     const rationale = String((raw as any).rationale || "").trim().slice(0, 1200);
     const createdAt = normalizeTimestamp(String((raw as any).createdAt || ""));
     const explicitId = String((raw as any).id || "").trim();

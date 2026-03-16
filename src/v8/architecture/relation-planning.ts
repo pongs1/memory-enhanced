@@ -83,6 +83,35 @@ const EDGE_PRIOR_BY_TYPE: Record<string, string[]> = {
     topic_state: ["state_supersedes_state", "state_refines_state", "valid_during"],
 };
 
+const EDGE_QUERY_CUES_BY_TYPE: Record<string, string[]> = {
+    supports: ["支持", "依据", "证据", "证明", "support", "evidence", "confirm"],
+    evidenced_by: ["证据", "依据", "evidence", "backed by", "grounded by"],
+    grounded_by: ["依据", "基础", "grounded by", "based on"],
+    contradicts: ["矛盾", "冲突", "否定", "推翻", "contradict", "refute", "reject"],
+    conflicts_with: ["冲突", "互斥", "不兼容", "conflict", "incompatible"],
+    before: ["之前", "先", "earlier", "before"],
+    after: ["之后", "后", "later", "after"],
+    evolves_to: ["演变", "变成", "发展为", "evolve", "become"],
+    supersedes: ["替代", "取代", "废弃", "升级为", "supersede", "replace", "deprecate"],
+    state_supersedes_state: ["改为", "改成", "从...到...", "切换", "replaced", "switched"],
+    state_refines_state: ["细化", "限定", "refine", "scope"],
+    valid_during: ["期间", "阶段", "当时", "during", "in phase"],
+    uses: ["使用", "采用", "基于", "use", "using"],
+    produces: ["产生", "生成", "输出", "produce", "output"],
+    enables: ["使得", "可以", " enable", "allows", "enables"],
+    prevents: ["阻止", "避免", "防止", "prevent", "avoid", "block"],
+    conditioned_on: ["条件", "前提", "依赖", "condition", "depends on"],
+    requires: ["需要", "要求", "必须", "require", "needs"],
+    targets: ["目标", "面向", "针对", "target", "objective"],
+    decides: ["决定", "选定", "采用", "decide", "choose"],
+    refines: ["细化", "补充", "收紧", "refine", "tighten"],
+    is_a: ["是", "属于", "类型", "kind of"],
+    part_of: ["组成部分", "属于", "part of", "component of"],
+    better_than: ["更好", "优于", "better than"],
+    worse_than: ["更差", "不如", "worse than"],
+    causes: ["导致", "引起", "因为", "cause", "lead to", "result in"],
+};
+
 const CONTROL_MEMORY_TYPES = new Set([
     "preference",
     "goal",
@@ -746,17 +775,33 @@ function buildQueryTerms(card: V8EntityScopeCard, node: V8GraphNode): string[] {
     const terms = new Set<string>();
     addTerm(terms, card.canonicalLabel);
     for (const alias of card.aliases || []) addTerm(terms, alias);
-    for (const hint of card.edgeFamilyHints.slice(0, 5)) addTerm(terms, hint.id);
+    for (const hint of card.edgeFamilyHints.slice(0, 5)) {
+        addTerm(terms, hint.id);
+        for (const cue of expandEdgeQueryCues(hint.id)) {
+            addTerm(terms, cue);
+        }
+    }
     for (const hint of card.stateHints.slice(0, 3)) addTerm(terms, hint.label || hint.id);
     for (const hint of card.topicHints.slice(0, 3)) addTerm(terms, hint.label || hint.id);
     addTerm(terms, node.memoryType);
-    return Array.from(terms).slice(0, 24);
+    return Array.from(terms).slice(0, 36);
 }
 
 function addTerm(set: Set<string>, value: string): void {
     const normalized = (value || "").trim();
     if (!normalized) return;
     set.add(normalized);
+}
+
+function expandEdgeQueryCues(edgeType: string): string[] {
+    const normalized = (edgeType || "").trim();
+    if (!normalized) return [];
+    const direct = EDGE_QUERY_CUES_BY_TYPE[normalized] || [];
+    const fallback = normalized
+        .split(/[_\-]+/g)
+        .map((part) => part.trim())
+        .filter((part) => part.length >= 3);
+    return Array.from(new Set([...direct, ...fallback]));
 }
 
 function scoreSpanAgainstTerms(
