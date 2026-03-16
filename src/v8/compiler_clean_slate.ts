@@ -119,7 +119,11 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             ? "tool catalog loaded"
             : "tool catalog check skipped(start_at=narrative)"
     );
-    let sourcePersistStats: { writtenFiles: number; skippedFiles: number } | null = null;
+    let sourcePersistStats: {
+        writtenFiles: number;
+        skippedFiles: number;
+        fastSkippedFiles: number;
+    } | null = null;
     let sourceNormalizationStats: {
         recordCount: number;
         rawChars: number;
@@ -142,6 +146,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
         const traceNarrativeRecords: V8NarrativeRecord[] = [];
         const linkedNarrativeRecords: V8NarrativeRecord[] = [];
+        let fastSkippedFiles = 0;
         for (const traceFile of traceFiles) {
             const sourceRefPrefix = traceFile.filePath;
             const parentSessionId = deriveSessionIdFromSourceRef(sourceRefPrefix);
@@ -153,6 +158,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             if (minSourceIndexExclusive > 0) {
                 const fastCount = countSessionTraceMessagesFast(sourceRefPrefix);
                 if (fastCount !== null && fastCount <= minSourceIndexExclusive) {
+                    fastSkippedFiles += 1;
                     continue;
                 }
             }
@@ -176,6 +182,9 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
                         toolCleaningProfiles,
                         workspace,
                         sourceSyncState,
+                        onFastSkip: () => {
+                            fastSkippedFiles += 1;
+                        },
                     })
                 );
             }
@@ -190,6 +199,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         sourcePersistStats = {
             writtenFiles: persistResult.writtenFiles,
             skippedFiles: persistResult.skippedFiles,
+            fastSkippedFiles,
         };
         logStage("source normalization persisted");
     }
@@ -289,6 +299,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         noopReuse: hotBuildIsNoop,
         sourceNarrativeWrittenFiles: sourcePersistStats?.writtenFiles ?? 0,
         sourceNarrativeSkippedFiles: sourcePersistStats?.skippedFiles ?? 0,
+        sourceFastSkippedFiles: sourcePersistStats?.fastSkippedFiles ?? 0,
         sourceNormalizationRecordCount: sourceNormalizationStats?.recordCount ?? 0,
         sourceNormalizationRawChars: sourceNormalizationStats?.rawChars ?? 0,
         sourceNormalizationCleanChars: sourceNormalizationStats?.cleanChars ?? 0,
@@ -928,6 +939,7 @@ interface BuildReport {
         noopReuse: boolean;
         sourceNarrativeWrittenFiles: number;
         sourceNarrativeSkippedFiles: number;
+        sourceFastSkippedFiles: number;
         sourceNormalizationRecordCount: number;
         sourceNormalizationRawChars: number;
         sourceNormalizationCleanChars: number;
@@ -1585,7 +1597,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
         `- cache: reused=${String(report.buildStats.reusedCache)}, coldPromoted=${String(report.buildStats.coldDocsPromotedToHot)}, noop=${String(report.buildStats.noopReuse)}`
     );
     lines.push(
-        `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedExisting=${report.buildStats.sourceNarrativeSkippedFiles}`
+        `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedExisting=${report.buildStats.sourceNarrativeSkippedFiles}, fastSkipped=${report.buildStats.sourceFastSkippedFiles}`
     );
     lines.push(
         `- sourceNormalization: records=${report.buildStats.sourceNormalizationRecordCount}, touchedRecords=${report.buildStats.sourceNormalizationTouchedRecords}, rawChars=${report.buildStats.sourceNormalizationRawChars}, cleanChars=${report.buildStats.sourceNormalizationCleanChars}, removedChars=${report.buildStats.sourceNormalizationRemovedChars}, removedRatioPct=${report.buildStats.sourceNormalizationRemovedRatioPct.toFixed(2)}`
@@ -2082,6 +2094,7 @@ function loadLinkedSessionRecords(input: {
     toolCleaningProfiles: ReturnType<typeof loadResolvedToolCleaningProfiles>;
     workspace: string;
     sourceSyncState: SourceSyncState;
+    onFastSkip?: () => void;
 }): V8NarrativeRecord[] {
     const agentsRoot = resolveAgentsRoot(input.sessionTraceDir);
     if (!agentsRoot) return [];
@@ -2109,6 +2122,7 @@ function loadLinkedSessionRecords(input: {
         if (minSourceIndexExclusive > 0) {
             const fastCount = countSessionTraceMessagesFast(filePath);
             if (fastCount !== null && fastCount <= minSourceIndexExclusive) {
+                input.onFastSkip?.();
                 continue;
             }
         }
