@@ -542,16 +542,26 @@ function normalizeLlmItem(
         (typeof raw.item_type === "string" && raw.item_type) ||
         "";
     if (!itemType) return null;
+    const normalizedItemType = itemType.trim().toLowerCase() as V8MemoryItemType;
+    const allowedItemTypes = new Set(ITEM_TYPES_BY_LAYER[unit.layer] || []);
+    if (
+        !CONTROL_ITEM_TYPES.has(normalizedItemType) &&
+        !allowedItemTypes.has(normalizedItemType)
+    ) {
+        return null;
+    }
 
     const predicate =
         (typeof raw.predicate === "string" && raw.predicate) ||
         (typeof raw.relation === "string" && raw.relation) ||
         "";
     if (!predicate) return null;
+    const normalizedPredicate = predicate.trim().toLowerCase();
+    if (!normalizedPredicate) return null;
 
-    if (!CONTROL_ITEM_TYPES.has(itemType as V8MemoryItemType)) {
+    if (!CONTROL_ITEM_TYPES.has(normalizedItemType)) {
         const allowed = ALLOWED_PREDICATES[unit.layer] || new Set();
-        if (!allowed.has(predicate)) return null;
+        if (!allowed.has(normalizedPredicate)) return null;
     }
 
     const subject =
@@ -569,10 +579,17 @@ function normalizeLlmItem(
         raw.evidence_span_ids ||
         raw.evidence_refs ||
         raw.evidenceRefs;
-    const evidenceSpanIds = Array.isArray(rawEvidence)
-        ? rawEvidence.filter((id: any) => typeof id === "string" && id)
+    const unitSpanIds = new Set((spansByUnit.get(unitId) || []).map((span) => span.id));
+    const explicitEvidence = Array.isArray(rawEvidence);
+    const evidenceSpanIds = explicitEvidence
+        ? rawEvidence.filter(
+              (id: any) => typeof id === "string" && id && unitSpanIds.has(id)
+          )
         : [];
-    if (evidenceSpanIds.length === 0) {
+    if (explicitEvidence && evidenceSpanIds.length === 0) {
+        return null;
+    }
+    if (!explicitEvidence && evidenceSpanIds.length === 0) {
         const spans = (spansByUnit.get(unitId) || []).slice(0, 3);
         if (spans.length === 0) return null;
         for (const span of spans) {
@@ -588,18 +605,18 @@ function normalizeLlmItem(
             `mi_llm_${now}_${Math.random().toString(36).slice(2, 8)}`,
         narrativeRecordId: unit.narrativeRecordId,
         sourceRef: unit.narrativeRef,
-        itemType: itemType as V8MemoryItemType,
+        itemType: normalizedItemType,
         originType:
             (typeof raw.originType === "string" && raw.originType) ||
             (typeof raw.origin_type === "string" && raw.origin_type) ||
             "asserted",
         layer: unit.layer,
         subject,
-        predicate,
+        predicate: normalizedPredicate,
         object,
         label:
             (typeof raw.label === "string" && raw.label) ||
-            truncateLabel(`${subject} ${predicate} ${object}`),
+            truncateLabel(`${subject} ${normalizedPredicate} ${object}`),
         qualifiers: typeof raw.qualifiers === "object" && raw.qualifiers ? raw.qualifiers : {},
         evidenceSpanIds,
         unitIds: [unitId],
