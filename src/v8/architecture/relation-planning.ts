@@ -81,6 +81,12 @@ const EDGE_PRIOR_BY_TYPE: Record<string, string[]> = {
     constraint: ["requires", "prevents", "conditioned_on", "conflicts_with", "refines"],
     session_state: ["state_supersedes_state", "state_refines_state", "valid_during"],
     topic_state: ["state_supersedes_state", "state_refines_state", "valid_during"],
+    relationship_state: ["state_supersedes_state", "state_refines_state", "valid_during", "conflicts_with"],
+    workflow_validity_state: ["state_supersedes_state", "state_refines_state", "valid_during", "conditioned_on"],
+    compatibility_state: ["state_supersedes_state", "conflicts_with", "supports", "valid_during"],
+    preference_state: ["state_supersedes_state", "state_refines_state", "valid_during", "supports"],
+    belief_state: ["state_supersedes_state", "state_refines_state", "supports", "contradicts"],
+    risk_state: ["state_supersedes_state", "state_refines_state", "causes", "prevents", "valid_during"],
 };
 
 const EDGE_QUERY_CUES_BY_TYPE: Record<string, string[]> = {
