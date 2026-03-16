@@ -776,17 +776,20 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
                   nodes,
               })
             : [];
-    const autoHypothesisReviewed = buildAutoHypothesisReviewedRelations({
-        plans: relationPlanning.relationSearchPlans,
-        candidateHits: relationPlanning.relationCandidateHits,
-        reviewJobs: relationPlanning.relationReviewJobs,
-        nodes,
-        edges: baseEdges,
-        existingReviewedRelations: [
-            ...reviewedRelationsInput,
-            ...reviewedFromOutputs,
-        ],
-    });
+    const autoHypothesisReviewed =
+        compilePhase === "final"
+            ? buildAutoHypothesisReviewedRelations({
+                  plans: relationPlanning.relationSearchPlans,
+                  candidateHits: relationPlanning.relationCandidateHits,
+                  reviewJobs: relationPlanning.relationReviewJobs,
+                  nodes,
+                  edges: baseEdges,
+                  existingReviewedRelations: [
+                      ...reviewedRelationsInput,
+                      ...reviewedFromOutputs,
+                  ],
+              })
+            : [];
     buildStats.relationAutoHypothesis = autoHypothesisReviewed.length;
     const mergedReviewedRelations = mergeRecordsById<V8ReviewedRelation>([
         ...reviewedRelationsInput,
