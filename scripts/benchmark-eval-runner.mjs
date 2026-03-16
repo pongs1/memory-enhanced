@@ -46,11 +46,12 @@ async function main() {
     const questions = readJsonl(path.join(preparedSampleDir, "questions.jsonl"));
     const turnMap = readJsonl(path.join(preparedSampleDir, "turn_map.jsonl"));
     const graphNodes = readJsonl(store.graphNodes);
+    const graphEdges = readJsonl(store.graphEdges);
     const evidenceSpans = readJsonl(store.evidenceSpans);
     const relationSearchPlans = readJsonl(store.relationSearchPlans);
     const narrativeShardSelections = readJsonl(store.narrativeShardSelections);
     const buildReport = readJsonFile(store.buildReport);
-    const scanner = new V8GraphScanner(workspace, {}, "trajectory");
+    const scanner = new V8GraphScanner(workspace, benchmarkScannerConfig(), "profile");
     const results = questions.map((question) =>
         evaluateQuestion({
             workspace,
@@ -58,6 +59,7 @@ async function main() {
             question,
             turnMap,
             graphNodes,
+            graphEdges,
             evidenceSpans,
             relationSearchPlans,
             narrativeShardSelections,
@@ -133,6 +135,7 @@ function evaluateQuestion({
     question,
     turnMap,
     graphNodes,
+    graphEdges,
     evidenceSpans,
     relationSearchPlans,
     narrativeShardSelections,
@@ -171,7 +174,9 @@ function evaluateQuestion({
     const ignitionGuided = runIgnitionGuidedSearch({
         question,
         scanner,
+        turnMap,
         graphNodes,
+        graphEdges,
         evidenceSpans,
         workspace,
         topK,
@@ -226,6 +231,13 @@ function evaluateQuestion({
         static_guided_full_support_hit: staticGuidedSupport.fullHit,
         ignition_guided_bundle_ids: ignitionGuided.bundleIds,
         ignition_guided_anchor_labels: ignitionGuided.anchorLabels,
+        ignition_guided_modes: ignitionGuided.modes,
+        ignition_guided_background_turns: ignitionGuided.backgroundTurns,
+        ignition_guided_profile_bundle_ids: ignitionGuided.profileBundleIds,
+        ignition_guided_trajectory_bundle_ids: ignitionGuided.trajectoryBundleIds,
+        ignition_guided_vertical_state_nodes: ignitionGuided.verticalDiagnostics.stateNodeCount,
+        ignition_guided_vertical_edge_hits: ignitionGuided.verticalDiagnostics.verticalEdgeCount,
+        ignition_guided_vertical_edge_types: ignitionGuided.verticalDiagnostics.verticalEdgeTypes,
         ignition_guided_hit: Boolean(ignitionGuidedMatch),
         ignition_guided_first_hit_rank: ignitionGuidedMatch ? ignitionGuidedMatch.rank : null,
         ignition_guided_matched_span_id: ignitionGuidedMatch ? ignitionGuidedMatch.spanId : null,
@@ -430,6 +442,15 @@ function renderSummaryMarkdown(summary) {
         lines.push(
             `- ignition_guided_anchor_labels: ${(item.ignition_guided_anchor_labels || []).join(", ") || "(none)"}`
         );
+        lines.push(`- ignition_guided_modes: ${(item.ignition_guided_modes || []).join(", ") || "(none)"}`);
+        lines.push(`- ignition_guided_background_turns: ${item.ignition_guided_background_turns ?? 0}`);
+        lines.push(`- ignition_guided_profile_bundle_ids: ${(item.ignition_guided_profile_bundle_ids || []).join(", ") || "(none)"}`);
+        lines.push(`- ignition_guided_trajectory_bundle_ids: ${(item.ignition_guided_trajectory_bundle_ids || []).join(", ") || "(none)"}`);
+        lines.push(`- ignition_guided_vertical_state_nodes: ${item.ignition_guided_vertical_state_nodes ?? 0}`);
+        lines.push(`- ignition_guided_vertical_edge_hits: ${item.ignition_guided_vertical_edge_hits ?? 0}`);
+        lines.push(
+            `- ignition_guided_vertical_edge_types: ${(item.ignition_guided_vertical_edge_types || []).join(", ") || "(none)"}`
+        );
         lines.push(`- ignition_guided_hit: ${item.ignition_guided_hit ? "yes" : "no"}`);
         lines.push(`- ignition_guided_first_hit_rank: ${item.ignition_guided_first_hit_rank ?? "none"}`);
         lines.push(`- ignition_guided_support_coverage: ${item.ignition_guided_support_coverage}`);
@@ -548,22 +569,68 @@ function containsAnyLongToken(hayTokens, needleTokens) {
 function runIgnitionGuidedSearch({
     question,
     scanner,
+    turnMap,
     graphNodes,
+    graphEdges,
     evidenceSpans,
     workspace,
     topK,
 }) {
-    const anchors = {
-        goal: String(question.question || ""),
-        activeTask: "benchmark_recall_eval",
-        latestUserRequest: String(question.question || ""),
+    const questionText = String(question.question || "");
+    const plan = inferIgnitionPlan(questionText);
+    const warmupTurns = Array.isArray(turnMap) ? turnMap : [];
+    const replayAnchors = {
+        goal: "",
+        activeTask: "benchmark_replay",
+        latestUserRequest: "",
     };
-    scanner.refreshScene([{ source: "task", text: String(question.question || ""), weight: 1 }], anchors);
-    scanner.preExcite(String(question.question || ""), anchors);
-    const scan = scanner.processChunk(`${String(question.question || "")} `.repeat(2), anchors);
-    const bundles = scan.activatedBundles || [];
+    scanner.setMode("profile");
+    for (const turn of warmupTurns) {
+        const turnText = String(turn.text || "").trim();
+        if (!turnText) continue;
+        scanner.processChunk(`${turnText}\n`, replayAnchors);
+    }
+
+    const backgroundTurns = warmupTurns.slice(-Math.min(3, warmupTurns.length));
+    const backgroundText = backgroundTurns.map((turn) => String(turn.text || "").trim()).filter(Boolean).join("\n");
+    const modes = plan.modes;
+    const passBundles = new Map();
+    const modeBundleIds = {
+        profile: [],
+        trajectory: [],
+    };
+
+    for (const mode of modes) {
+        scanner.setMode(mode);
+        const anchors = {
+            goal: questionText,
+            activeTask: backgroundText || "benchmark_recall_eval",
+            latestUserRequest: questionText,
+        };
+        const signals = [
+            { source: "task", text: questionText, weight: 1 },
+            { source: "background", text: backgroundText, weight: 0.7 },
+        ].filter((item) => item.text);
+        scanner.refreshScene(signals, anchors);
+        scanner.preExcite(questionText, anchors);
+        const scan = scanner.processChunk(`${questionText}\n`, anchors);
+        for (const bundle of scan.activatedBundles || []) {
+            modeBundleIds[mode].push(bundle.bundleId);
+            const existing = passBundles.get(bundle.bundleId);
+            if (!existing || (bundle.energy || 0) > (existing.energy || 0)) {
+                passBundles.set(bundle.bundleId, bundle);
+            }
+        }
+    }
+
+    const bundles = Array.from(passBundles.values());
     const nodeById = new Map((graphNodes || []).map((node) => [node.id, node]));
     const spanById = new Map((evidenceSpans || []).map((span) => [span.id, span]));
+    const verticalDiagnostics = analyzeVerticalParticipation({
+        bundles,
+        graphNodes,
+        graphEdges,
+    });
     const anchorLabels = uniqueStrings(
         bundles.flatMap((bundle) =>
             (bundle.nodeIds || [])
@@ -592,7 +659,79 @@ function runIgnitionGuidedSearch({
     return {
         bundleIds: bundles.map((bundle) => bundle.bundleId),
         anchorLabels,
+        modes,
+        backgroundTurns: backgroundTurns.length,
+        profileBundleIds: uniqueStrings(modeBundleIds.profile),
+        trajectoryBundleIds: uniqueStrings(modeBundleIds.trajectory),
+        verticalDiagnostics,
         hits,
+    };
+}
+
+function benchmarkScannerConfig() {
+    return {
+        nodeCooldownMs: 0,
+        bundleCooldownMs: 0,
+        scanIntervalChars: 1,
+        maxInjectedBundles: 4,
+    };
+}
+
+function inferIgnitionPlan(question) {
+    const q = normalizeText(question);
+    const historyCue =
+        /\b(before|earlier|later|previous|used to|history|timeline|evolv|change|changed|supersed|fallout|originally|original)\b/.test(q) ||
+        /之前|前面| earlier |后来|变成|变化|完整脉络|演化|历史|以前|原来|最初|取代/.test(question);
+    const currentCue =
+        /\b(now|current|currently|latest|present)\b/.test(q) ||
+        /现在|当前|最新|目前/.test(question);
+    const modes = [];
+    if (currentCue || !historyCue) {
+        modes.push("profile");
+    }
+    if (historyCue) {
+        modes.push("trajectory");
+    }
+    return { modes: uniqueStrings(modes.length > 0 ? modes : ["profile"]) };
+}
+
+function analyzeVerticalParticipation({ bundles, graphNodes, graphEdges }) {
+    const selectedNodeIds = new Set(
+        bundles.flatMap((bundle) => bundle.nodeIds || [])
+    );
+    const nodesById = new Map((graphNodes || []).map((node) => [node.id, node]));
+    const verticalEdgeTypes = new Set([
+        "state_supersedes_state",
+        "state_refines_state",
+        "state_changed_by_event",
+        "state_opened_by_block",
+        "state_closed_by_block",
+        "state_invalidated_under_regime",
+        "state_reactivated_under_regime",
+        "state_valid_in_phase",
+        "state_valid_in_timewindow",
+        "correction_propagates_to_line",
+    ]);
+    const stateNodeIds = Array.from(selectedNodeIds).filter((nodeId) => {
+        const memoryType = String(nodesById.get(nodeId)?.memoryType || "");
+        return memoryType.endsWith("_state") || memoryType === "session_state" || memoryType === "topic_state";
+    });
+    const touchedVerticalTypes = new Set();
+    let verticalEdgeCount = 0;
+    for (const edge of graphEdges || []) {
+        if (!selectedNodeIds.has(edge.src) && !selectedNodeIds.has(edge.dst)) {
+            continue;
+        }
+        if (!verticalEdgeTypes.has(edge.type)) {
+            continue;
+        }
+        verticalEdgeCount += 1;
+        touchedVerticalTypes.add(edge.type);
+    }
+    return {
+        stateNodeCount: stateNodeIds.length,
+        verticalEdgeCount,
+        verticalEdgeTypes: Array.from(touchedVerticalTypes).sort(),
     };
 }
 
