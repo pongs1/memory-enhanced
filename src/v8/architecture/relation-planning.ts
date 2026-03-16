@@ -547,11 +547,18 @@ function buildRelationCandidateHitsAndJobs(input: {
         const laneTopK = plan.lane === "focused" ? 6 : plan.lane === "broadened" ? 9 : 12;
         const candidates: Array<{ span: V8EvidenceSpan; score: number }> = [];
         const terms = tokenizeTerms(plan.queryTerms);
+        const anchorTerms = tokenizeTerms(plan.anchorLabels || []);
         const boostedSpanIds = new Set(plan.hintSpanIds || []);
         for (const shardId of allowedShardIds) {
             for (const span of spansByShard.get(shardId) || []) {
-                const base = scoreSpanAgainstTerms(span.text, terms);
+                const base = scoreSpanAgainstTerms(span.text, terms, anchorTerms);
                 if (base <= 0) continue;
+                const hasAnchorHit = anchorTerms.length
+                    ? hasTermHit(span.text, anchorTerms)
+                    : false;
+                if (anchorTerms.length > 0 && !hasAnchorHit && base < 0.22) {
+                    continue;
+                }
                 const score = boostedSpanIds.has(span.id) ? base + 0.08 : base;
                 candidates.push({ span, score });
             }
@@ -745,27 +752,69 @@ function addTerm(set: Set<string>, value: string): void {
     set.add(normalized);
 }
 
-function scoreSpanAgainstTerms(spanText: string, terms: string[]): number {
+function scoreSpanAgainstTerms(
+    spanText: string,
+    terms: string[],
+    anchorTerms: string[] = []
+): number {
     if (terms.length === 0) return 0;
     const text = (spanText || "").toLowerCase();
     if (!text) return 0;
-    let hit = 0;
+    let weightedHits = 0;
     for (const term of terms) {
-        if (text.includes(term)) hit += 1;
+        if (!hasTermHit(text, [term])) continue;
+        weightedHits += term.length >= 8 ? 1.2 : term.length >= 5 ? 1.05 : 1;
     }
-    if (hit === 0) return 0;
-    return hit / terms.length;
+    if (weightedHits <= 0) return 0;
+    const denominator = Math.max(4, Math.min(16, terms.length));
+    let score = weightedHits / denominator;
+    if (anchorTerms.length > 0 && hasTermHit(text, anchorTerms)) {
+        score += 0.12;
+    }
+    return round3(clamp01(score));
+}
+
+function hasTermHit(textOrSpan: string, terms: string[]): boolean {
+    const text = (textOrSpan || "").toLowerCase();
+    if (!text) return false;
+    for (const term of terms) {
+        if (!term) continue;
+        if (text.includes(term)) return true;
+    }
+    return false;
 }
 
 function tokenizeTerms(terms: string[]): string[] {
-    const output: string[] = [];
+    const output = new Set<string>();
     for (const raw of terms || []) {
         const normalized = (raw || "").trim().toLowerCase();
         if (!normalized) continue;
-        if (normalized.length < 2) continue;
-        output.push(normalized);
+        const expanded = expandTermVariants(normalized);
+        for (const token of expanded) {
+            if (token.length < 2) continue;
+            output.add(token);
+        }
     }
-    return uniqueList(output).slice(0, 24);
+    return Array.from(output).slice(0, 48);
+}
+
+function expandTermVariants(term: string): string[] {
+    const output = new Set<string>();
+    output.add(term);
+    for (const part of term.split(/[_\s\-/:|]+/g)) {
+        const cleaned = part.trim();
+        if (cleaned) output.add(cleaned);
+    }
+    const camelSplit = term
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .toLowerCase()
+        .split(/\s+/g)
+        .map((part) => part.trim())
+        .filter(Boolean);
+    for (const part of camelSplit) {
+        output.add(part);
+    }
+    return Array.from(output);
 }
 
 function indexBundlesByNode(
