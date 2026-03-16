@@ -270,6 +270,9 @@ export async function executeMemoryConsolidate(
             ? `irExtraction=rule:${output.buildStats.irRuleItems} llm:${output.buildStats.irLlmItems} fallback:${output.buildStats.irFallbackItems} fallbackApplied:${output.buildStats.irFallbackApplied}`
             : null,
         output.buildStats
+            ? `compileLayerFilter=phaseLayerDroppedUnits:${output.buildStats.phaseLayerDroppedUnits} streamMacroCarryUnits:${output.buildStats.streamMacroCarryUnits}`
+            : null,
+        output.buildStats
             ? `relationPlanning=entityPostings:${output.buildStats.relationEntityPostings} scopeCards:${output.buildStats.relationScopeCards} groupSummaries:${output.buildStats.relationGroupSummaries} searchPlans:${output.buildStats.relationSearchPlans} shardSelections:${output.buildStats.relationShardSelections} candidateHits:${output.buildStats.relationCandidateHits} reviewJobs:${output.buildStats.relationReviewJobs}`
             : null,
         output.buildStats

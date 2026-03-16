@@ -219,6 +219,15 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const cached = canReuseCache
         ? loadCachedArtifactsForDocs(store, scope.coldDocIds, scope.activeDocIds)
         : emptyCachedArtifacts();
+    const streamMacroCarry =
+        compilePhase === "stream" && hasReusableArtifacts(store)
+            ? loadCachedArtifactsForDocs(
+                  store,
+                  scope.hotDocIds,
+                  scope.activeDocIds,
+                  new Set<V8GraphLayer>(["macro"])
+              )
+            : emptyCachedArtifacts();
 
     const hotNarratives = allNarrativeDocs.filter((doc) => scope.hotDocIds.has(doc.id));
     const reviewOverlayDirty = hasReviewOverlayUpdates(store);
@@ -250,6 +259,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         llmLayers: llmLayers.join(","),
         hotTailDroppedUnits: 0,
         phaseLayerDroppedUnits: 0,
+        streamMacroCarryUnits: streamMacroCarry.units.length,
         llmCacheHitUnits: 0,
         llmCacheMissUnits: 0,
         llmCacheEntries: 0,
@@ -412,7 +422,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     buildStats.hotTailDroppedUnits = Math.max(0, hotUnitsAll.length - hotUnits.length);
     const hotUnitsPhaseFiltered = filterUnitsByCompilePhase(hotUnits, compilePhase);
     buildStats.phaseLayerDroppedUnits = Math.max(0, hotUnits.length - hotUnitsPhaseFiltered.length);
-    const units = [...cached.units, ...hotUnitsPhaseFiltered];
+    const units = [...cached.units, ...streamMacroCarry.units, ...hotUnitsPhaseFiltered];
     logStage(
         `units built hot=${hotUnitsPhaseFiltered.length} droppedTail=${buildStats.hotTailDroppedUnits} droppedByPhase=${buildStats.phaseLayerDroppedUnits} total=${units.length}`
     );
@@ -421,7 +431,11 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         logStage("unit preview written");
     }
     const hotEvidenceSpans = extractEvidenceSpans(hotUnitsPhaseFiltered, hotNarratives);
-    const evidenceSpans = [...cached.evidenceSpans, ...hotEvidenceSpans];
+    const evidenceSpans = [
+        ...cached.evidenceSpans,
+        ...streamMacroCarry.evidenceSpans,
+        ...hotEvidenceSpans,
+    ];
     logStage(
         `evidence spans built hot=${hotEvidenceSpans.length} total=${evidenceSpans.length}`
     );
@@ -549,7 +563,11 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     buildStats.irFallbackApplied = false;
     const resolvedLlmStatus = llmStatus;
     const hotMemoryItems = [...ruleItems, ...llmItems];
-    const memoryItems = [...cached.memoryItems, ...hotMemoryItems];
+    const memoryItems = [
+        ...cached.memoryItems,
+        ...streamMacroCarry.memoryItems,
+        ...hotMemoryItems,
+    ];
     logStage(
         `memory items extracted hot(rule=${ruleItems.length}, llm=${llmItems.length}, fallback=${fallbackRuleItems.length}) total=${memoryItems.length}`
     );
@@ -864,6 +882,7 @@ interface BuildReport {
         llmLayers: string;
         hotTailDroppedUnits: number;
         phaseLayerDroppedUnits: number;
+        streamMacroCarryUnits: number;
         llmCacheHitUnits: number;
         llmCacheMissUnits: number;
         llmCacheEntries: number;
@@ -1279,7 +1298,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
         `- sourceNormalization: records=${report.buildStats.sourceNormalizationRecordCount}, touchedRecords=${report.buildStats.sourceNormalizationTouchedRecords}, rawChars=${report.buildStats.sourceNormalizationRawChars}, cleanChars=${report.buildStats.sourceNormalizationCleanChars}, removedChars=${report.buildStats.sourceNormalizationRemovedChars}, removedRatioPct=${report.buildStats.sourceNormalizationRemovedRatioPct.toFixed(2)}`
     );
     lines.push(
-        `- compilePhase: ${report.buildStats.compilePhase} (layers=${report.buildStats.llmLayers}, hotTailSkipUnits=${report.buildStats.hotTailSkipUnits}, hotTailDroppedUnits=${report.buildStats.hotTailDroppedUnits}, phaseLayerDroppedUnits=${report.buildStats.phaseLayerDroppedUnits})`
+        `- compilePhase: ${report.buildStats.compilePhase} (layers=${report.buildStats.llmLayers}, hotTailSkipUnits=${report.buildStats.hotTailSkipUnits}, hotTailDroppedUnits=${report.buildStats.hotTailDroppedUnits}, phaseLayerDroppedUnits=${report.buildStats.phaseLayerDroppedUnits}, streamMacroCarryUnits=${report.buildStats.streamMacroCarryUnits})`
     );
     lines.push(
         `- llmCache: hitUnits=${report.buildStats.llmCacheHitUnits}, missUnits=${report.buildStats.llmCacheMissUnits}, entries=${report.buildStats.llmCacheEntries}`
@@ -1489,24 +1508,30 @@ function hasReviewOverlayUpdates(
 
 function loadCachedArtifactsForDocs(
     store: ReturnType<typeof ensureV8StoreDirs>,
-    coldDocIds: Set<string>,
-    activeDocIds: Set<string>
+    selectedDocIds: Set<string>,
+    activeDocIds: Set<string>,
+    allowedLayers?: Set<V8GraphLayer>
 ): Pick<ArtifactSnapshot, "units" | "evidenceSpans" | "memoryItems"> {
-    if (coldDocIds.size === 0) return emptyCachedArtifacts();
+    if (selectedDocIds.size === 0) return emptyCachedArtifacts();
     const units = readJsonl<V8Unit>(store.units).filter(
-        (unit) => coldDocIds.has(unit.narrativeRecordId) && activeDocIds.has(unit.narrativeRecordId)
+        (unit) =>
+            selectedDocIds.has(unit.narrativeRecordId) &&
+            activeDocIds.has(unit.narrativeRecordId) &&
+            (!allowedLayers || allowedLayers.has(unit.layer))
     );
-    const coldUnitIds = new Set(units.map((unit) => unit.id));
+    const selectedUnitIds = new Set(units.map((unit) => unit.id));
     const evidenceSpans = readJsonl<V8EvidenceSpan>(store.evidenceSpans).filter(
-        (span) => coldUnitIds.has(span.unitId) && activeDocIds.has(span.narrativeRecordId)
+        (span) => selectedUnitIds.has(span.unitId) && activeDocIds.has(span.narrativeRecordId)
     );
-    const coldSpanIds = new Set(evidenceSpans.map((span) => span.id));
+    const selectedSpanIds = new Set(evidenceSpans.map((span) => span.id));
     const memoryItems = readJsonl<V8MemoryItem>(store.memoryItems).filter((item) => {
         if (!activeDocIds.has(item.narrativeRecordId)) return false;
-        if (!coldDocIds.has(item.narrativeRecordId)) return false;
-        const hasHotEvidence = item.evidenceSpanIds.some((spanId) => !coldSpanIds.has(spanId));
-        const hasHotUnit = item.unitIds.some((unitId) => !coldUnitIds.has(unitId));
-        return !hasHotEvidence && !hasHotUnit;
+        if (!selectedDocIds.has(item.narrativeRecordId)) return false;
+        const hasOutOfSliceEvidence = item.evidenceSpanIds.some(
+            (spanId) => !selectedSpanIds.has(spanId)
+        );
+        const hasOutOfSliceUnit = item.unitIds.some((unitId) => !selectedUnitIds.has(unitId));
+        return !hasOutOfSliceEvidence && !hasOutOfSliceUnit;
     });
     return {
         units,
