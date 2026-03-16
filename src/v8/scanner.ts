@@ -827,6 +827,7 @@ export class V8GraphScanner {
 
             const overlapNodeIds = group.nodeIds.filter((nodeId) => activeNodeIds.has(nodeId));
             const overlapCount = overlapNodeIds.length;
+            const minOverlapCount = group.nodeIds.length >= 5 ? 2 : 1;
             const coverage = overlapCount / Math.max(1, group.nodeIds.length);
             const jaccard =
                 overlapCount /
@@ -843,6 +844,9 @@ export class V8GraphScanner {
             if (!hasNodeOverlap && !hasSemanticFallback) {
                 continue;
             }
+            if (overlapCount < minOverlapCount && !hasSemanticFallback) {
+                continue;
+            }
             if (triggerScore < this.config.groupTriggerScoreThreshold && !hasSemanticFallback) {
                 continue;
             }
@@ -853,10 +857,16 @@ export class V8GraphScanner {
             }
             const meanActivation =
                 overlapCount > 0 ? activationSum / overlapCount : baseEnergyAvg * 0.8;
+            const semanticOnlyActivation = overlapCount === 0 && hasSemanticFallback;
+            const relationStrength = semanticOnlyActivation
+                ? irSimilarity
+                : Math.max(triggerScore, coverage);
+            const semanticPenalty = semanticOnlyActivation ? 0.72 : 1;
             const energy = clamp01(
                 meanActivation *
                     this.config.groupEnergyGain *
-                    (0.7 + 0.3 * Math.max(triggerScore, irSimilarity))
+                    semanticPenalty *
+                    (0.65 + 0.35 * relationStrength)
             );
 
             const tier = scoreTier(energy, this.config);
