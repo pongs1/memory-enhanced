@@ -83,6 +83,7 @@ if (outJsonlPath) {
 }
 
 let completed = 0;
+let failed = 0;
 for (const job of jobs) {
   const prompt = String(job.prompt || "").trim();
   if (!prompt) continue;
@@ -111,9 +112,15 @@ for (const job of jobs) {
     completed += 1;
     console.error(`[ir-llm] ${completed}/${jobs.length} ${job.jobId}`);
   } catch (error) {
+    failed += 1;
     console.error(`[ir-llm] failed ${job.jobId}: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (sleepMs > 0) sleep(sleepMs);
+}
+
+console.error(`[ir-llm] summary completed=${completed} failed=${failed} jobs=${jobs.length}`);
+if (jobs.length > 0 && completed === 0) {
+  process.exit(2);
 }
 
 function callLlm(
