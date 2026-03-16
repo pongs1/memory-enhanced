@@ -659,40 +659,63 @@ function pickCandidateEdgeType(
     if (candidateEdgeTypes.length === 0) return "supports";
     const normalized = (spanText || "").toLowerCase();
     const includes = (pattern: RegExp) => pattern.test(normalized);
-    const choose = (preferred: string[]): string | null => {
-        for (const edgeType of preferred) {
-            if (candidateEdgeTypes.includes(edgeType)) return edgeType;
+    const scoreByEdgeType = new Map<string, number>();
+    for (const edgeType of candidateEdgeTypes) {
+        const cueScore = scoreEdgeTypeCueMatch(edgeType, normalized);
+        if (cueScore > 0) {
+            scoreByEdgeType.set(edgeType, cueScore);
         }
-        return null;
+    }
+    const boost = (preferred: string[], delta: number): void => {
+        for (const edgeType of preferred) {
+            if (!candidateEdgeTypes.includes(edgeType)) continue;
+            scoreByEdgeType.set(edgeType, (scoreByEdgeType.get(edgeType) || 0) + delta);
+        }
     };
 
     if (includes(/改为|改成|切换|替换|废弃|取代|从.*到|switch|replace|deprecat|migrat/)) {
-        const edge =
-            choose(["state_supersedes_state", "supersedes", "evolves_to"]) || null;
-        if (edge) return edge;
+        boost(["state_supersedes_state", "supersedes", "evolves_to"], 1.4);
     }
     if (includes(/冲突|矛盾|互斥|不兼容|conflict|incompatib|mutually exclusive/)) {
-        const edge = choose(["conflicts_with", "contradicts"]);
-        if (edge) return edge;
+        boost(["conflicts_with", "contradicts"], 1.2);
     }
     if (includes(/因为|导致|因此|所以|从而|cause|lead to|result in|due to/)) {
-        const edge = choose(["causes", "enables", "prevents", "conditioned_on"]);
-        if (edge) return edge;
+        boost(["causes", "enables", "prevents", "conditioned_on"], 1.1);
     }
     if (includes(/支持|证明|依据|evidence|support|validate|confirm/)) {
-        const edge = choose(["supports", "evidenced_by", "grounded_by"]);
-        if (edge) return edge;
+        boost(["supports", "evidenced_by", "grounded_by"], 1.1);
     }
     if (includes(/反对|否定|推翻|reject|deny|refute|disprove/)) {
-        const edge = choose(["contradicts", "conflicts_with"]);
-        if (edge) return edge;
+        boost(["contradicts", "conflicts_with"], 1.1);
     }
     if (includes(/先|后|之前|之后|before|after|earlier|later/)) {
-        const edge = choose(["before", "after", "valid_during"]);
-        if (edge) return edge;
+        boost(["before", "after", "valid_during"], 1.0);
     }
 
+    const ranked = candidateEdgeTypes
+        .map((edgeType) => ({
+            edgeType,
+            score: scoreByEdgeType.get(edgeType) || 0,
+        }))
+        .sort((a, b) => b.score - a.score || a.edgeType.localeCompare(b.edgeType));
+    if (ranked[0] && ranked[0].score > 0) {
+        return ranked[0].edgeType;
+    }
     return candidateEdgeTypes[0]!;
+}
+
+function scoreEdgeTypeCueMatch(edgeType: string, text: string): number {
+    if (!text) return 0;
+    const cues = expandEdgeQueryCues(edgeType);
+    if (cues.length === 0) return 0;
+    let hits = 0;
+    for (const cue of cues) {
+        const normalizedCue = cue.trim().toLowerCase();
+        if (!normalizedCue || normalizedCue.length < 2) continue;
+        if (!text.includes(normalizedCue)) continue;
+        hits += normalizedCue.length >= 8 ? 1.2 : normalizedCue.length >= 4 ? 1 : 0.8;
+    }
+    return round3(hits);
 }
 
 function selectShardHintsByLane(
