@@ -273,11 +273,21 @@ function buildMicroDescriptors(
     const micros: MicroDescriptor[] = [];
 
     for (const turn of turns) {
+        const fullTurn = trimRange(text, turn.bodyStart, turn.bodyEnd);
+        const fullTurnLength = fullTurn.end - fullTurn.start;
+        const turnDirectLimit =
+            turn.sourceCategory === "operation"
+                ? cfg.microMaxChars * 2
+                : Math.floor(cfg.microMaxChars * 1.15);
+        if (fullTurnLength > 0 && fullTurnLength <= turnDirectLimit) {
+            micros.push(describeMicro(fullTurn.start, fullTurn.end, turn));
+            continue;
+        }
+
         const blocks = buildDiscourseBlocks(lines, turn);
         if (blocks.length === 0) {
-            const trimmed = trimRange(text, turn.bodyStart, turn.bodyEnd);
-            if (trimmed.end > trimmed.start) {
-                micros.push(describeMicro(trimmed.start, trimmed.end, turn));
+            if (fullTurn.end > fullTurn.start) {
+                micros.push(describeMicro(fullTurn.start, fullTurn.end, turn));
             }
             continue;
         }
@@ -679,9 +689,9 @@ function smoothMicroDescriptorsForTurn(
 ): MicroDescriptor[] {
     if (input.length <= 1) return input;
     const output = input.slice();
-    const minUsefulLength = turn.sourceCategory === "operation" ? 28 : 18;
+    const minUsefulLength = turn.sourceCategory === "operation" ? 64 : 28;
     const limit = turn.sourceCategory === "operation" ? cfg.microMaxChars * 2 : cfg.microMaxChars;
-    const hardTinyLength = turn.sourceCategory === "operation" ? 12 : 8;
+    const hardTinyLength = turn.sourceCategory === "operation" ? 20 : 12;
 
     let idx = 0;
     while (idx < output.length) {
@@ -798,7 +808,7 @@ function buildMesoDescriptors(
     let currentChars = 0;
     let hasUser = false;
     let hasResponseAfterUser = false;
-    const minStableMesoChars = Math.max(700, Math.floor(cfg.mesoMaxChars * 0.22));
+    const minStableMesoChars = Math.max(1100, Math.floor(cfg.mesoMaxChars * 0.34));
 
     const flush = () => {
         if (currentTurns.length === 0) return;
@@ -830,6 +840,9 @@ function buildMesoDescriptors(
             hasResponseAfterUser &&
             currentTurns.length >= 4 &&
             currentChars >= minStableMesoChars;
+        const hardOverflow =
+            currentTurns.length > 0 &&
+            currentChars + turnChars > Math.floor(cfg.mesoMaxChars * 1.35);
         const exceedsMesoLimit =
             currentTurns.length > 0 &&
             currentChars >= Math.max(280, cfg.mesoMaxChars * 0.65) &&
@@ -840,9 +853,19 @@ function buildMesoDescriptors(
             currentTurns.length > 0 &&
             currentTurns.length >= 3 &&
             currentChars >= minStableMesoChars &&
-            isLargeTimeGap(currentTurns[currentTurns.length - 1]!.timestamp, turn.timestamp, 15 * 60 * 1000);
+            isLargeTimeGap(
+                currentTurns[currentTurns.length - 1]!.timestamp,
+                turn.timestamp,
+                45 * 60 * 1000
+            );
 
-        if (shouldStartNewUserEpisode || exceedsMesoLimit || hitsTurnCountLimit || timeBoundary) {
+        if (
+            shouldStartNewUserEpisode ||
+            hardOverflow ||
+            exceedsMesoLimit ||
+            hitsTurnCountLimit ||
+            timeBoundary
+        ) {
             flush();
         }
 
@@ -890,17 +913,21 @@ function buildMacroDescriptors(
         const currentChars = current[current.length - 1]!.end - first.start;
         const nextChars = item.end - first.start;
         const hitsHardLimit = nextChars > cfg.macroMaxChars;
+        const reachesTargetChars = currentChars >= cfg.macroTargetChars;
         const hitsTargetWithCue =
             currentChars >= cfg.macroTargetChars &&
             beginsWithMacroShiftCue(text.slice(item.start, Math.min(item.end, item.start + 120)));
         const timeBoundary = isLargeTimeGap(
             current[current.length - 1]!.timestamp,
             item.timestamp,
-            30 * 60 * 1000
+            90 * 60 * 1000
         );
-        const hasEnoughMeso = current.length >= Math.max(2, cfg.macroTargetMesoUnits);
+        const hasEnoughMeso = current.length >= Math.max(3, cfg.macroTargetMesoUnits);
 
-        if (hitsHardLimit || (hasEnoughMeso && (hitsTargetWithCue || timeBoundary))) {
+        if (
+            hitsHardLimit ||
+            (hasEnoughMeso && (reachesTargetChars || hitsTargetWithCue || timeBoundary))
+        ) {
             flush();
         }
         current.push(item);
@@ -916,7 +943,8 @@ function smoothMesoDescriptors(
 ): MesoDescriptor[] {
     if (meso.length <= 1) return meso;
     const output = meso.slice();
-    const minChars = Math.max(450, Math.floor(cfg.mesoMaxChars * 0.14));
+    const minChars = Math.max(900, Math.floor(cfg.mesoMaxChars * 0.28));
+    const softMaxChars = Math.floor(cfg.mesoMaxChars * 1.35);
     let idx = 0;
     while (idx < output.length) {
         const current = output[idx]!;
@@ -927,8 +955,8 @@ function smoothMesoDescriptors(
         }
         const prev = idx > 0 ? output[idx - 1] : null;
         const next = idx + 1 < output.length ? output[idx + 1] : null;
-        const canMergePrev = prev && current.end - prev.start <= cfg.mesoMaxChars;
-        const canMergeNext = next && next.end - current.start <= cfg.mesoMaxChars;
+        const canMergePrev = prev && current.end - prev.start <= softMaxChars;
+        const canMergeNext = next && next.end - current.start <= softMaxChars;
         if (canMergePrev && (!canMergeNext || prev!.turnEndOrdinal - prev!.turnStartOrdinal >= next!.turnEndOrdinal - next!.turnStartOrdinal)) {
             prev!.end = current.end;
             prev!.turnEndOrdinal = current.turnEndOrdinal;
@@ -962,7 +990,8 @@ function smoothMacroDescriptors(
 ): MacroDescriptor[] {
     if (macro.length <= 1) return macro;
     const output = macro.slice();
-    const minChars = Math.max(2500, Math.floor(cfg.macroTargetChars * 0.25));
+    const minChars = Math.max(5000, Math.floor(cfg.macroTargetChars * 0.42));
+    const softMaxChars = Math.floor(cfg.macroMaxChars * 1.35);
     let idx = 0;
     while (idx < output.length) {
         const current = output[idx]!;
@@ -972,8 +1001,8 @@ function smoothMacroDescriptors(
         }
         const prev = idx > 0 ? output[idx - 1] : null;
         const next = idx + 1 < output.length ? output[idx + 1] : null;
-        const canMergePrev = prev && current.end - prev.start <= cfg.macroMaxChars;
-        const canMergeNext = next && next.end - current.start <= cfg.macroMaxChars;
+        const canMergePrev = prev && current.end - prev.start <= softMaxChars;
+        const canMergeNext = next && next.end - current.start <= softMaxChars;
         if (canMergePrev) {
             prev!.end = current.end;
             prev!.sourceCategory = resolveAggregateCategory([
