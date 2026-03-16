@@ -108,15 +108,15 @@ const BATCH_CONFIG_BY_LAYER: Record<V8GraphLayer, LlmBatchConfig> = {
 };
 
 const MAX_ITEMS_PER_UNIT: Record<V8GraphLayer, number> = {
-    micro: 18,
-    meso: 6,
+    micro: 12,
+    meso: 5,
     macro: 3,
 };
 
 const MAX_ITEMS_PER_NARRATIVE_LAYER: Record<V8GraphLayer, number> = {
-    micro: 220,
-    meso: 60,
-    macro: 12,
+    micro: 180,
+    meso: 48,
+    macro: 10,
 };
 
 function edgeCatalogPath(): string {
@@ -598,6 +598,12 @@ function buildPrompt(input: {
             : layer === "meso"
               ? `Suggested total items for this batch: 4-${Math.min(24, units.length * 6)}`
               : `Suggested total items for this batch: ${Math.min(80, units.length * 18)} max`;
+    const hardBatchCap =
+        layer === "macro"
+            ? Math.min(8, units.length * 3)
+            : layer === "meso"
+              ? Math.min(16, units.length * 5)
+              : Math.min(48, units.length * 12);
     const unitBlocks = units.flatMap((unit) => {
         const evidenceLines = (spansByUnit.get(unit.id) || []).map(
             (span) => `- (${span.id}) ${sanitizeLine(span.text)}`
@@ -626,6 +632,7 @@ function buildPrompt(input: {
         "- Do not infer beyond the text; skip vague or speculative claims.",
         "- Precision over coverage: if uncertain, skip.",
         "- If the unit is mostly greeting/retry/noise and has no durable fact, output no item for it.",
+        `- Hard cap: output at most ${hardBatchCap} items for this batch.`,
         "- `evidence_span_ids` must come from the provided evidence spans.",
         "- `unit_id` must be one of the listed Unit IDs.",
         "- Output Markdown only. No JSON. No extra commentary.",

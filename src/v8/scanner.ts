@@ -841,10 +841,21 @@ export class V8GraphScanner {
                 baseBundles.length >= 2 &&
                 irSimilarity >= this.config.groupTriggerScoreThreshold + 0.08;
             const hasNodeOverlap = overlapCount > 0;
+            const hasActiveDayOverlap = this.groupHasActiveDayOverlap(group.nodeIds);
             if (!hasNodeOverlap && !hasSemanticFallback) {
                 continue;
             }
             if (overlapCount < minOverlapCount && !hasSemanticFallback) {
+                continue;
+            }
+            if (
+                group.kind === "episodic" &&
+                this.mode === "profile" &&
+                !hasNodeOverlap &&
+                this.activeDayKeys &&
+                this.activeDayKeys.size > 0 &&
+                !hasActiveDayOverlap
+            ) {
                 continue;
             }
             if (triggerScore < this.config.groupTriggerScoreThreshold && !hasSemanticFallback) {
@@ -861,7 +872,11 @@ export class V8GraphScanner {
             const relationStrength = semanticOnlyActivation
                 ? irSimilarity
                 : Math.max(triggerScore, coverage);
-            const semanticPenalty = semanticOnlyActivation ? 0.72 : 1;
+            const semanticPenalty = semanticOnlyActivation
+                ? hasActiveDayOverlap
+                    ? 0.72
+                    : 0.58
+                : 1;
             const energy = clamp01(
                 meanActivation *
                     this.config.groupEnergyGain *
@@ -1168,5 +1183,17 @@ export class V8GraphScanner {
             }
         }
         this.activeDayKeys = active.size > 0 ? active : null;
+    }
+
+    private groupHasActiveDayOverlap(nodeIds: string[]): boolean {
+        if (!this.activeDayKeys || this.activeDayKeys.size === 0) return true;
+        for (const nodeId of nodeIds) {
+            const dayKeys = this.graph.nodeDayKeys.get(nodeId);
+            if (!dayKeys || dayKeys.size === 0) continue;
+            for (const dayKey of dayKeys) {
+                if (this.activeDayKeys.has(dayKey)) return true;
+            }
+        }
+        return false;
     }
 }
