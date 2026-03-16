@@ -119,11 +119,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             ? "tool catalog loaded"
             : "tool catalog check skipped(start_at=narrative)"
     );
-    let sourcePersistStats: {
-        writtenFiles: number;
-        skippedFiles: number;
-        fastSkippedFiles: number;
-    } | null = null;
+    let sourcePersistStats: { writtenFiles: number; skippedFiles: number } | null = null;
     let sourceNormalizationStats: {
         recordCount: number;
         rawChars: number;
@@ -146,7 +142,6 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
         const traceNarrativeRecords: V8NarrativeRecord[] = [];
         const linkedNarrativeRecords: V8NarrativeRecord[] = [];
-        let fastSkippedFiles = 0;
         for (const traceFile of traceFiles) {
             const sourceRefPrefix = traceFile.filePath;
             const parentSessionId = deriveSessionIdFromSourceRef(sourceRefPrefix);
@@ -166,12 +161,10 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
                     traceFile.mtimeMs > 0 &&
                     traceFile.mtimeMs <= sourceCursorUpdatedAtMs
                 ) {
-                    fastSkippedFiles += 1;
                     continue;
                 }
                 const fastCount = countSessionTraceMessagesFast(sourceRefPrefix);
                 if (fastCount !== null && fastCount <= minSourceIndexExclusive) {
-                    fastSkippedFiles += 1;
                     continue;
                 }
             }
@@ -195,9 +188,6 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
                         toolCleaningProfiles,
                         workspace,
                         sourceSyncState,
-                        onFastSkip: () => {
-                            fastSkippedFiles += 1;
-                        },
                     })
                 );
             }
@@ -212,7 +202,6 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         sourcePersistStats = {
             writtenFiles: persistResult.writtenFiles,
             skippedFiles: persistResult.skippedFiles,
-            fastSkippedFiles,
         };
         logStage("source normalization persisted");
     }
@@ -312,7 +301,6 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         noopReuse: hotBuildIsNoop,
         sourceNarrativeWrittenFiles: sourcePersistStats?.writtenFiles ?? 0,
         sourceNarrativeSkippedFiles: sourcePersistStats?.skippedFiles ?? 0,
-        sourceFastSkippedFiles: sourcePersistStats?.fastSkippedFiles ?? 0,
         sourceNormalizationRecordCount: sourceNormalizationStats?.recordCount ?? 0,
         sourceNormalizationRawChars: sourceNormalizationStats?.rawChars ?? 0,
         sourceNormalizationCleanChars: sourceNormalizationStats?.cleanChars ?? 0,
@@ -957,7 +945,6 @@ interface BuildReport {
         noopReuse: boolean;
         sourceNarrativeWrittenFiles: number;
         sourceNarrativeSkippedFiles: number;
-        sourceFastSkippedFiles: number;
         sourceNormalizationRecordCount: number;
         sourceNormalizationRawChars: number;
         sourceNormalizationCleanChars: number;
@@ -1216,16 +1203,29 @@ function buildMicroFallbackItems(input: {
         list.push(span);
         spansByUnit.set(span.unitId, list);
     }
+    for (const spans of spansByUnit.values()) {
+        spans.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    }
+
+    const candidates = input.units
+        .filter((unit) => unit.layer === "micro" && !representedMicroUnitIds.has(unit.id))
+        .map((unit) => ({
+            unit,
+            text: unit.text.trim().replace(/\s+/g, " "),
+        }))
+        .filter((item) => item.text.length > 0)
+        .sort(
+            (a, b) =>
+                a.unit.narrativeRecordId.localeCompare(b.unit.narrativeRecordId) ||
+                a.unit.ordinal - b.unit.ordinal ||
+                a.unit.charStart - b.unit.charStart ||
+                a.unit.id.localeCompare(b.unit.id)
+        );
+
     const nowIso = new Date().toISOString();
     const output: V8MemoryItem[] = [];
-    for (const unit of input.units) {
-        if (unit.layer !== "micro") continue;
-        if (representedMicroUnitIds.has(unit.id)) continue;
-        const text = unit.text.trim().replace(/\s+/g, " ");
-        if (!text || isLowSignalFallbackText(text)) continue;
-        const bestSpan = (spansByUnit.get(unit.id) || [])
-            .slice()
-            .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))[0];
+    const emitItem = (unit: V8Unit, text: string) => {
+        const bestSpan = (spansByUnit.get(unit.id) || [])[0];
         const object = text.length > 120 ? `${text.slice(0, 120)}...` : text;
         const hash = createHash("sha1")
             .update(unit.id)
@@ -1253,15 +1253,55 @@ function buildMicroFallbackItems(input: {
             createdAt: nowIso,
             updatedAt: nowIso,
         });
+    };
+
+    let activeNarrativeId = "";
+    let lowSignalRunText = "";
+    let lowSignalRun: Array<{ unit: V8Unit; text: string }> = [];
+    const flushLowSignalRun = () => {
+        if (lowSignalRun.length >= 3) {
+            for (const entry of lowSignalRun) {
+                emitItem(entry.unit, entry.text);
+            }
+        }
+        lowSignalRun = [];
+        lowSignalRunText = "";
+    };
+
+    for (const candidate of candidates) {
+        const narrativeId = candidate.unit.narrativeRecordId;
+        if (activeNarrativeId !== narrativeId) {
+            flushLowSignalRun();
+            activeNarrativeId = narrativeId;
+        }
+        const compact = normalizeLowSignalText(candidate.text);
+        const lowSignal = isLowSignalFallbackText(candidate.text, compact);
+        if (!lowSignal) {
+            flushLowSignalRun();
+            emitItem(candidate.unit, candidate.text);
+            continue;
+        }
+        if (lowSignalRun.length === 0 || lowSignalRunText === compact) {
+            lowSignalRunText = compact;
+            lowSignalRun.push(candidate);
+            continue;
+        }
+        flushLowSignalRun();
+        lowSignalRunText = compact;
+        lowSignalRun.push(candidate);
     }
+    flushLowSignalRun();
     return output;
 }
 
-function isLowSignalFallbackText(text: string): boolean {
-    const compact = text
+function normalizeLowSignalText(text: string): string {
+    return text
         .toLowerCase()
         .replace(/[\s`*_~\-.,!?;:()[\]{}"'，。！？；：（）【】]/g, "")
         .trim();
+}
+
+function isLowSignalFallbackText(text: string, compact = normalizeLowSignalText(text)): boolean {
     if (!compact) return true;
     if (/^(hi|hello|hey|ok|okay|yo|hmm|lol|test|ping)+$/.test(compact)) return true;
     if (/^(你好|您好|哈喽|嗯|啊|哦|好的|收到|测试)+$/.test(compact)) return true;
@@ -1627,7 +1667,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
         `- cache: reused=${String(report.buildStats.reusedCache)}, coldPromoted=${String(report.buildStats.coldDocsPromotedToHot)}, noop=${String(report.buildStats.noopReuse)}`
     );
     lines.push(
-        `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedExisting=${report.buildStats.sourceNarrativeSkippedFiles}, fastSkipped=${report.buildStats.sourceFastSkippedFiles}`
+        `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedExisting=${report.buildStats.sourceNarrativeSkippedFiles}`
     );
     lines.push(
         `- sourceNormalization: records=${report.buildStats.sourceNormalizationRecordCount}, touchedRecords=${report.buildStats.sourceNormalizationTouchedRecords}, rawChars=${report.buildStats.sourceNormalizationRawChars}, cleanChars=${report.buildStats.sourceNormalizationCleanChars}, removedChars=${report.buildStats.sourceNormalizationRemovedChars}, removedRatioPct=${report.buildStats.sourceNormalizationRemovedRatioPct.toFixed(2)}`
@@ -2124,7 +2164,6 @@ function loadLinkedSessionRecords(input: {
     toolCleaningProfiles: ReturnType<typeof loadResolvedToolCleaningProfiles>;
     workspace: string;
     sourceSyncState: SourceSyncState;
-    onFastSkip?: () => void;
 }): V8NarrativeRecord[] {
     const agentsRoot = resolveAgentsRoot(input.sessionTraceDir);
     if (!agentsRoot) return [];
@@ -2161,12 +2200,10 @@ function loadLinkedSessionRecords(input: {
                 traceMtime > 0 &&
                 traceMtime <= sourceCursorUpdatedAtMs
             ) {
-                input.onFastSkip?.();
                 continue;
             }
             const fastCount = countSessionTraceMessagesFast(filePath);
             if (fastCount !== null && fastCount <= minSourceIndexExclusive) {
-                input.onFastSkip?.();
                 continue;
             }
         }

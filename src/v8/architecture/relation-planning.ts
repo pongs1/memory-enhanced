@@ -562,9 +562,12 @@ function buildRelationCandidateHitsAndJobs(input: {
 
         const candidateHitIds: string[] = [];
         const evidenceSpanIds: string[] = [];
+        const candidateEdgeTypes = plan.edgeFamilyHints.map((hint) => hint.id).slice(0, 5);
         for (const item of top) {
-            const candidateEdgeType =
-                plan.edgeFamilyHints[0]?.id || "supports";
+            const candidateEdgeType = pickCandidateEdgeType(
+                candidateEdgeTypes,
+                item.span.text
+            );
             const hitId = `rch_${shortHash(`${plan.id}|${item.span.id}|${candidateEdgeType}`)}`;
             if (hitIdSet.has(hitId)) continue;
             hitIdSet.add(hitId);
@@ -589,7 +592,7 @@ function buildRelationCandidateHitsAndJobs(input: {
             id: jobId,
             planId: plan.id,
             anchorNodeIds: [...plan.anchorNodeIds],
-            candidateEdgeTypes: plan.edgeFamilyHints.map((hint) => hint.id).slice(0, 5),
+            candidateEdgeTypes,
             candidateHitIds,
             evidenceSpanIds: uniqueList(evidenceSpanIds).slice(0, 40),
             bundleIds: [...(plan.hintBundleIds || [])].slice(0, 10),
@@ -604,6 +607,49 @@ function buildRelationCandidateHitsAndJobs(input: {
         relationCandidateHits,
         relationReviewJobs,
     };
+}
+
+function pickCandidateEdgeType(
+    candidateEdgeTypes: string[],
+    spanText: string
+): string {
+    if (candidateEdgeTypes.length === 0) return "supports";
+    const normalized = (spanText || "").toLowerCase();
+    const includes = (pattern: RegExp) => pattern.test(normalized);
+    const choose = (preferred: string[]): string | null => {
+        for (const edgeType of preferred) {
+            if (candidateEdgeTypes.includes(edgeType)) return edgeType;
+        }
+        return null;
+    };
+
+    if (includes(/改为|改成|切换|替换|废弃|取代|从.*到|switch|replace|deprecat|migrat/)) {
+        const edge =
+            choose(["state_supersedes_state", "supersedes", "evolves_to"]) || null;
+        if (edge) return edge;
+    }
+    if (includes(/冲突|矛盾|互斥|不兼容|conflict|incompatib|mutually exclusive/)) {
+        const edge = choose(["conflicts_with", "contradicts"]);
+        if (edge) return edge;
+    }
+    if (includes(/因为|导致|因此|所以|从而|cause|lead to|result in|due to/)) {
+        const edge = choose(["causes", "enables", "prevents", "conditioned_on"]);
+        if (edge) return edge;
+    }
+    if (includes(/支持|证明|依据|evidence|support|validate|confirm/)) {
+        const edge = choose(["supports", "evidenced_by", "grounded_by"]);
+        if (edge) return edge;
+    }
+    if (includes(/反对|否定|推翻|reject|deny|refute|disprove/)) {
+        const edge = choose(["contradicts", "conflicts_with"]);
+        if (edge) return edge;
+    }
+    if (includes(/先|后|之前|之后|before|after|earlier|later/)) {
+        const edge = choose(["before", "after", "valid_during"]);
+        if (edge) return edge;
+    }
+
+    return candidateEdgeTypes[0]!;
 }
 
 function selectShardHintsByLane(
