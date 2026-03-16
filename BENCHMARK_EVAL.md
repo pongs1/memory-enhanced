@@ -127,6 +127,16 @@ node scripts/benchmark-eval-runner.mjs \
   --top-k 5
 ```
 
+Optional:
+
+```bash
+node scripts/benchmark-eval-runner.mjs \
+  --prepared-sample /path/to/prepared/locomo/sample_dir \
+  --top-k 5 \
+  --ir-llm-command "<offline llm batch command>" \
+  --rule-ir-mode micro_light
+```
+
 This runner currently gives a first baseline:
 
 - prepare benchmark sample
@@ -135,6 +145,11 @@ This runner currently gives a first baseline:
 - score whether top-k hits overlap expected evidence
 
 It is intentionally a baseline, not the final full protocol. Its job is to tell us whether the current memory pipeline is moving in the right direction before we add relation-review and full answer-generation scoring.
+
+Important current limitation:
+
+- without stronger semantic IR (especially LLM-produced semantic anchors), `relation_search_plans` may stay empty
+- in that case the runner still gives a valid raw archive-search baseline, but graph-guided retrieval is not meaningfully active yet
 
 ## What To Measure
 
