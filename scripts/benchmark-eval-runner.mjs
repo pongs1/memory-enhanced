@@ -5,6 +5,7 @@ import path from "node:path";
 import { buildCleanSlateGraph } from "../dist/v8/compiler_clean_slate.js";
 import { searchArchiveSpans } from "../dist/v8/archive-search.js";
 import { v8StorePaths } from "../dist/v8/paths_v8.js";
+import { V8GraphScanner } from "../dist/v8/scanner.js";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const DEFAULT_TMP = path.join(ROOT, ".tmp", "benchmark-run");
@@ -44,16 +45,22 @@ async function main() {
     const store = v8StorePaths(workspace);
     const questions = readJsonl(path.join(preparedSampleDir, "questions.jsonl"));
     const turnMap = readJsonl(path.join(preparedSampleDir, "turn_map.jsonl"));
+    const graphNodes = readJsonl(store.graphNodes);
+    const evidenceSpans = readJsonl(store.evidenceSpans);
     const relationSearchPlans = readJsonl(store.relationSearchPlans);
     const narrativeShardSelections = readJsonl(store.narrativeShardSelections);
+    const scanner = new V8GraphScanner(workspace, {}, "trajectory");
     const results = questions.map((question) =>
         evaluateQuestion({
             workspace,
             benchmark,
             question,
             turnMap,
+            graphNodes,
+            evidenceSpans,
             relationSearchPlans,
             narrativeShardSelections,
+            scanner,
             topK,
         })
     );
@@ -69,7 +76,8 @@ async function main() {
         relation_search_plan_count: relationSearchPlans.length,
         result_count: results.length,
         raw_hit_at_k: results.filter((item) => item.raw_hit).length,
-        guided_hit_at_k: results.filter((item) => item.guided_hit).length,
+        static_guided_hit_at_k: results.filter((item) => item.static_guided_hit).length,
+        ignition_guided_hit_at_k: results.filter((item) => item.ignition_guided_hit).length,
         results,
     };
 
@@ -81,7 +89,8 @@ async function main() {
     console.log(`workspace=${workspace}`);
     console.log(`summary=${summaryPath}`);
     console.log(`raw_hit_at_${topK}=${summary.raw_hit_at_k}/${summary.question_count}`);
-    console.log(`guided_hit_at_${topK}=${summary.guided_hit_at_k}/${summary.question_count}`);
+    console.log(`static_guided_hit_at_${topK}=${summary.static_guided_hit_at_k}/${summary.question_count}`);
+    console.log(`ignition_guided_hit_at_${topK}=${summary.ignition_guided_hit_at_k}/${summary.question_count}`);
 }
 
 function prepareWorkspace({ preparedSampleDir, workspace, sampleId }) {
@@ -112,8 +121,11 @@ function evaluateQuestion({
     benchmark,
     question,
     turnMap,
+    graphNodes,
+    evidenceSpans,
     relationSearchPlans,
     narrativeShardSelections,
+    scanner,
     topK,
 }) {
     const rawHits = searchArchiveSpans({
@@ -124,7 +136,7 @@ function evaluateQuestion({
         windowChars: 260,
     });
     const selectedPlans = selectPlansForQuestion(question, relationSearchPlans, 3);
-    const guidedHits = selectedPlans.length > 0
+    const staticGuidedHits = selectedPlans.length > 0
         ? searchArchiveSpans({
               workspace,
               query: joinQuery(
@@ -145,8 +157,28 @@ function evaluateQuestion({
           })
         : [];
 
+    const ignitionGuided = runIgnitionGuidedSearch({
+        question,
+        scanner,
+        graphNodes,
+        evidenceSpans,
+        workspace,
+        topK,
+    });
+
     const rawMatch = findFirstMatch({ benchmark, question, turnMap, hits: rawHits });
-    const guidedMatch = findFirstMatch({ benchmark, question, turnMap, hits: guidedHits });
+    const staticGuidedMatch = findFirstMatch({
+        benchmark,
+        question,
+        turnMap,
+        hits: staticGuidedHits,
+    });
+    const ignitionGuidedMatch = findFirstMatch({
+        benchmark,
+        question,
+        turnMap,
+        hits: ignitionGuided.hits,
+    });
     return {
         question_id: question.question_id,
         question: question.question,
@@ -159,9 +191,14 @@ function evaluateQuestion({
         raw_hit: Boolean(rawMatch),
         raw_first_hit_rank: rawMatch ? rawMatch.rank : null,
         raw_matched_span_id: rawMatch ? rawMatch.spanId : null,
-        guided_hit: Boolean(guidedMatch),
-        guided_first_hit_rank: guidedMatch ? guidedMatch.rank : null,
-        guided_matched_span_id: guidedMatch ? guidedMatch.spanId : null,
+        static_guided_hit: Boolean(staticGuidedMatch),
+        static_guided_first_hit_rank: staticGuidedMatch ? staticGuidedMatch.rank : null,
+        static_guided_matched_span_id: staticGuidedMatch ? staticGuidedMatch.spanId : null,
+        ignition_guided_bundle_ids: ignitionGuided.bundleIds,
+        ignition_guided_anchor_labels: ignitionGuided.anchorLabels,
+        ignition_guided_hit: Boolean(ignitionGuidedMatch),
+        ignition_guided_first_hit_rank: ignitionGuidedMatch ? ignitionGuidedMatch.rank : null,
+        ignition_guided_matched_span_id: ignitionGuidedMatch ? ignitionGuidedMatch.spanId : null,
         raw_top_hits: rawHits.slice(0, topK).map((hit, index) => ({
             rank: index + 1,
             span_id: hit.spanId,
@@ -169,7 +206,14 @@ function evaluateQuestion({
             span_text: hit.spanText,
             raw_text: hit.rawText,
         })),
-        guided_top_hits: guidedHits.slice(0, topK).map((hit, index) => ({
+        static_guided_top_hits: staticGuidedHits.slice(0, topK).map((hit, index) => ({
+            rank: index + 1,
+            span_id: hit.spanId,
+            score: round4(hit.score),
+            span_text: hit.spanText,
+            raw_text: hit.rawText,
+        })),
+        ignition_guided_top_hits: ignitionGuided.hits.slice(0, topK).map((hit, index) => ({
             rank: index + 1,
             span_id: hit.spanId,
             score: round4(hit.score),
@@ -207,8 +251,20 @@ function findFirstMatch({ benchmark, question, turnMap, hits }) {
     for (let index = 0; index < hits.length; index += 1) {
         const hit = hits[index];
         const hay = `${hit.spanText} ${hit.rawText}`.toLowerCase();
-        const evidenceMatched = evidenceTexts.some((needle) => hay.includes(needle.toLowerCase()));
-        const answerMatched = answer ? hay.includes(answer.toLowerCase()) : false;
+        const evidenceMatched = evidenceTexts.some((needle) =>
+            textEvidenceMatches({
+                haystack: hay,
+                needle,
+                answer,
+            })
+        );
+        const answerMatched = answer
+            ? textEvidenceMatches({
+                  haystack: hay,
+                  needle: answer,
+                  answer,
+              })
+            : false;
         if (evidenceMatched || answerMatched) {
             return { rank: index + 1, spanId: hit.spanId };
         }
@@ -224,7 +280,8 @@ function renderSummaryMarkdown(summary) {
     lines.push(`- sample_id: ${summary.sample_id}`);
     lines.push(`- relation_search_plan_count: ${summary.relation_search_plan_count}`);
     lines.push(`- raw_hit_at_${summary.top_k}: ${summary.raw_hit_at_k}/${summary.question_count}`);
-    lines.push(`- guided_hit_at_${summary.top_k}: ${summary.guided_hit_at_k}/${summary.question_count}`);
+    lines.push(`- static_guided_hit_at_${summary.top_k}: ${summary.static_guided_hit_at_k}/${summary.question_count}`);
+    lines.push(`- ignition_guided_hit_at_${summary.top_k}: ${summary.ignition_guided_hit_at_k}/${summary.question_count}`);
     lines.push("");
     for (const item of summary.results) {
         lines.push(`## ${item.question_id}`);
@@ -238,8 +295,14 @@ function renderSummaryMarkdown(summary) {
         );
         lines.push(`- raw_hit: ${item.raw_hit ? "yes" : "no"}`);
         lines.push(`- raw_first_hit_rank: ${item.raw_first_hit_rank ?? "none"}`);
-        lines.push(`- guided_hit: ${item.guided_hit ? "yes" : "no"}`);
-        lines.push(`- guided_first_hit_rank: ${item.guided_first_hit_rank ?? "none"}`);
+        lines.push(`- static_guided_hit: ${item.static_guided_hit ? "yes" : "no"}`);
+        lines.push(`- static_guided_first_hit_rank: ${item.static_guided_first_hit_rank ?? "none"}`);
+        lines.push(`- ignition_guided_bundle_ids: ${(item.ignition_guided_bundle_ids || []).join(", ") || "(none)"}`);
+        lines.push(
+            `- ignition_guided_anchor_labels: ${(item.ignition_guided_anchor_labels || []).join(", ") || "(none)"}`
+        );
+        lines.push(`- ignition_guided_hit: ${item.ignition_guided_hit ? "yes" : "no"}`);
+        lines.push(`- ignition_guided_first_hit_rank: ${item.ignition_guided_first_hit_rank ?? "none"}`);
         lines.push(`- evidence_refs: ${(item.evidence_refs || []).join(", ") || "(none)"}`);
         lines.push("");
         lines.push("### Raw Hits");
@@ -249,8 +312,15 @@ function renderSummaryMarkdown(summary) {
             );
         });
         lines.push("");
-        lines.push("### Guided Hits");
-        item.guided_top_hits.forEach((hit) => {
+        lines.push("### Static Guided Hits");
+        item.static_guided_top_hits.forEach((hit) => {
+            lines.push(
+                `  - [${hit.rank}] ${hit.span_id} score=${hit.score} text=${trim(hit.span_text, 180)}`
+            );
+        });
+        lines.push("");
+        lines.push("### Ignition Guided Hits");
+        item.ignition_guided_top_hits.forEach((hit) => {
             lines.push(
                 `  - [${hit.rank}] ${hit.span_id} score=${hit.score} text=${trim(hit.span_text, 180)}`
             );
@@ -281,6 +351,109 @@ function readJsonl(filePath) {
 
 function rangesOverlap(aStart, aEnd, bStart, bEnd) {
     return Math.max(aStart, bStart) < Math.min(aEnd, bEnd);
+}
+
+function textEvidenceMatches({ haystack, needle, answer }) {
+    const normalizedHaystack = normalizeText(haystack);
+    const normalizedNeedle = normalizeText(needle);
+    if (!normalizedNeedle || !normalizedHaystack) return false;
+    if (normalizedHaystack.includes(normalizedNeedle)) return true;
+
+    const hayTokens = tokenize(normalizedHaystack);
+    const needleTokens = tokenize(normalizedNeedle);
+    if (needleTokens.length === 0) return false;
+
+    const overlap = tokenOverlapRatio(hayTokens, needleTokens);
+    const containsRareNeedle = containsAnyLongToken(hayTokens, needleTokens);
+    if (needleTokens.length <= 4) {
+        if (overlap >= 0.5 && containsRareNeedle) return true;
+    } else if (overlap >= 0.45) {
+        return true;
+    }
+
+    const answerTokens = tokenize(normalizeText(answer || ""));
+    const answerOverlap = answerTokens.length > 0 ? tokenOverlapRatio(hayTokens, answerTokens) : 0;
+    return answerOverlap >= 0.6 && overlap >= 0.3;
+}
+
+function normalizeText(text) {
+    return String(text || "")
+        .toLowerCase()
+        .replace(/[`"'“”‘’.,;:!?()[\]{}<>/\\|@#$%^&*_+=~-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function tokenize(text) {
+    return String(text || "")
+        .split(/[^a-z0-9\u4e00-\u9fff]+/)
+        .map((item) => item.trim())
+        .filter((item) => item.length >= 2 || /[\u4e00-\u9fff]/.test(item));
+}
+
+function tokenOverlapRatio(hayTokens, needleTokens) {
+    const haySet = new Set(hayTokens);
+    let hits = 0;
+    for (const token of needleTokens) {
+        if (haySet.has(token)) hits += 1;
+    }
+    return hits / Math.max(needleTokens.length, 1);
+}
+
+function containsAnyLongToken(hayTokens, needleTokens) {
+    const haySet = new Set(hayTokens);
+    return needleTokens.some((token) => token.length >= 5 && haySet.has(token));
+}
+
+function runIgnitionGuidedSearch({
+    question,
+    scanner,
+    graphNodes,
+    evidenceSpans,
+    workspace,
+    topK,
+}) {
+    const anchors = {
+        goal: String(question.question || ""),
+        activeTask: "benchmark_recall_eval",
+        latestUserRequest: String(question.question || ""),
+    };
+    scanner.refreshScene([{ source: "task", text: String(question.question || ""), weight: 1 }], anchors);
+    scanner.preExcite(String(question.question || ""), anchors);
+    const scan = scanner.processChunk(`${String(question.question || "")} `.repeat(2), anchors);
+    const bundles = scan.activatedBundles || [];
+    const nodeById = new Map((graphNodes || []).map((node) => [node.id, node]));
+    const spanById = new Map((evidenceSpans || []).map((span) => [span.id, span]));
+    const anchorLabels = uniqueStrings(
+        bundles.flatMap((bundle) =>
+            (bundle.nodeIds || [])
+                .map((nodeId) => nodeById.get(nodeId)?.canonicalLabel || "")
+                .filter(Boolean)
+        )
+    );
+    const boostSpanIds = uniqueStrings(bundles.flatMap((bundle) => bundle.evidenceSpanIds || []));
+    const allowedShardIds = uniqueStrings(
+        boostSpanIds
+            .map((spanId) => spanById.get(spanId)?.narrativeRecordId || "")
+            .filter(Boolean)
+    );
+    const hits =
+        bundles.length > 0
+            ? searchArchiveSpans({
+                  workspace,
+                  query: joinQuery(question.question, anchorLabels),
+                  topK,
+                  mode: "hybrid",
+                  windowChars: 260,
+                  allowedShardIds,
+                  boostSpanIds,
+              })
+            : [];
+    return {
+        bundleIds: bundles.map((bundle) => bundle.bundleId),
+        anchorLabels,
+        hits,
+    };
 }
 
 function selectPlansForQuestion(question, relationSearchPlans, limit) {
