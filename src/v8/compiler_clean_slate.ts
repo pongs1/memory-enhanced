@@ -1,7 +1,8 @@
 import { resolveWorkspace } from "../utils.js";
 import { ensureV8StoreDirs } from "./paths_v8.js";
 import {
-    loadSessionTraces,
+    listSessionTraceFiles,
+    readSessionTraceMessages,
     resolveSessionTraceDir,
 } from "./adapters/session-source.js";
 import {
@@ -128,14 +129,20 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     } | null = null;
     if (startAt === "source") {
         const sourceSyncState = loadSourceSyncState(store.sourceSyncState);
-        const traceGroups = loadSessionTraces(workspace, {
+        const traceFiles = listSessionTraceFiles(workspace, {
             sessionTraceDir: options?.sessionTraceDir,
             maxFiles: options?.maxSessionFiles,
         });
+        const traceGroups = traceFiles
+            .map((entry) => ({
+                sourceRefPrefix: entry.filePath,
+                messages: readSessionTraceMessages(entry.filePath),
+            }))
+            .filter((entry) => entry.messages.length > 0);
         const sessionTraceDir =
             resolveSessionTraceDir(workspace, options?.sessionTraceDir) ||
-            (traceGroups.length > 0
-                ? path.dirname(traceGroups[0].sourceRefPrefix)
+            (traceFiles.length > 0
+                ? path.dirname(traceFiles[0]!.filePath)
                 : null);
 
         const traceNarrativeRecords: V8NarrativeRecord[] = [];

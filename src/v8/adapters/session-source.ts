@@ -9,6 +9,11 @@ export interface SessionSourceOptions {
     maxFiles?: number;
 }
 
+export interface SessionTraceFile {
+    filePath: string;
+    mtimeMs: number;
+}
+
 export function resolveSessionTraceDir(
     workspaceDir?: string,
     override?: string
@@ -36,6 +41,19 @@ export function loadSessionTraces(
     workspaceDir?: string,
     options?: SessionSourceOptions
 ): { sourceRefPrefix: string; messages: RawSessionMessage[] }[] {
+    const files = listSessionTraceFiles(workspaceDir, options);
+    return files
+        .map((entry) => ({
+            sourceRefPrefix: entry.filePath,
+            messages: readSessionTraceMessages(entry.filePath),
+        }))
+        .filter((entry) => entry.messages.length > 0);
+}
+
+export function listSessionTraceFiles(
+    workspaceDir?: string,
+    options?: SessionSourceOptions
+): SessionTraceFile[] {
     const dir = resolveSessionTraceDir(workspaceDir, options?.sessionTraceDir);
     if (!dir || !fs.existsSync(dir)) return [];
 
@@ -54,22 +72,16 @@ export function loadSessionTraces(
         mtimeMs: safeReadMtimeMs(filePath),
     }));
     decorated.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    const sortedFiles = decorated.map((entry) => entry.filePath);
-
     const limited =
         typeof options?.maxFiles === "number"
-            ? sortedFiles.slice(0, options.maxFiles)
-            : sortedFiles;
+            ? decorated.slice(0, options.maxFiles)
+            : decorated;
 
-    return limited
-        .map((filePath) => {
-            const messages = readSessionFile(filePath).filter(isMessageRecord);
-            return {
-                sourceRefPrefix: filePath,
-                messages,
-            };
-        })
-        .filter((entry) => entry.messages.length > 0);
+    return limited;
+}
+
+export function readSessionTraceMessages(filePath: string): RawSessionMessage[] {
+    return readSessionFile(filePath).filter(isMessageRecord);
 }
 
 function safeReadMtimeMs(filePath: string): number {
