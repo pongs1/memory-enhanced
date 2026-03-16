@@ -12,6 +12,17 @@ export interface GraphMaterializationOutput {
     edges: V8GraphEdge[];
 }
 
+interface DerivedStateCandidate {
+    stateNodeId: string;
+    sourceItemId: string;
+    edgeNodeId: string;
+    anchorNodeIds: string[];
+    anchorTokens: string[];
+    timestampMs: number | null;
+    statusRank: number;
+    validity: V8GraphNode["state"]["validity"];
+}
+
 export function materializeGraph(
     items: V8MemoryItem[],
     units: V8Unit[],
@@ -22,6 +33,10 @@ export function materializeGraph(
 
     const nodeIdByItemId = new Map<string, string>();
     const itemByNodeId = new Map<string, V8MemoryItem>();
+    const itemSemanticLinks = new Map<
+        string,
+        { subjectNodeId: string; objectNodeId: string }
+    >();
     const discourseUnitBySpan = new Map<string, string>();
     const semanticNodeByKey = new Map<string, V8GraphNode>();
     let semanticNodeSeq = 0;
@@ -226,6 +241,7 @@ export function materializeGraph(
             item.evidenceSpanIds,
             item.confidence
         );
+        itemSemanticLinks.set(item.id, { subjectNodeId, objectNodeId });
 
         pushEdge({
             type: item.predicate as V8GraphEdge["type"],
@@ -242,6 +258,192 @@ export function materializeGraph(
                 validity: item.validity,
             },
         });
+    }
+
+    const stateCandidates: DerivedStateCandidate[] = [];
+    const stateLinkSeen = new Set<string>();
+    const pushUniqueEdge = (edge: Omit<V8GraphEdge, "id">) => {
+        const signature = [
+            edge.type,
+            edge.src,
+            edge.dst,
+            edge.sourceItemIds.join(","),
+            edge.evidenceSpanIds.join(","),
+        ].join("|");
+        if (stateLinkSeen.has(signature)) return;
+        stateLinkSeen.add(signature);
+        pushEdge(edge);
+    };
+
+    for (const item of items) {
+        if (item.itemType === "discourse_unit") continue;
+        const cue = deriveStateCue(item);
+        const isNativeState = isStateMemoryType(item.itemType);
+        if (!isNativeState && !cue) continue;
+
+        const edgeNodeId = nodeIdByItemId.get(item.id);
+        if (!edgeNodeId) continue;
+        const semanticLinks = itemSemanticLinks.get(item.id);
+        const stateNodeId = isNativeState ? edgeNodeId : `node_state_${item.id}`;
+        const validity = resolveStateValidity(item.validity, cue?.status);
+
+        if (!isNativeState) {
+            nodes.push({
+                id: stateNodeId,
+                memoryType: "topic_state",
+                canonicalLabel: buildStateLabel(item, cue?.status),
+                aliases: [],
+                primaryLayer: item.layer,
+                layerMemberships: [item.layer],
+                sourceItemIds: [item.id],
+                evidenceSpanIds: item.evidenceSpanIds,
+                bestEvidenceSpanIds: item.evidenceSpanIds.slice(0, 1),
+                state: {
+                    scope: item.scope,
+                    validity,
+                    confidence: item.confidence,
+                    supportCount: item.evidenceSpanIds.length,
+                },
+            });
+        } else {
+            const node = nodes.find((candidate) => candidate.id === stateNodeId);
+            if (node) {
+                node.state.validity = validity;
+            }
+        }
+
+        if (!isNativeState) {
+            pushUniqueEdge({
+                type: "asserted_by",
+                src: stateNodeId,
+                dst: edgeNodeId,
+                layer: item.layer,
+                originType: item.originType as V8MemoryOriginType,
+                sourceItemIds: [item.id],
+                evidenceSpanIds: item.evidenceSpanIds.slice(0, 2),
+                qualifiers: item.qualifiers || {},
+                confidence: Math.min(0.92, item.confidence),
+                state: {
+                    scope: item.scope,
+                    validity,
+                },
+            });
+        }
+        if (semanticLinks?.objectNodeId) {
+            pushUniqueEdge({
+                type: "scoped_to",
+                src: stateNodeId,
+                dst: semanticLinks.objectNodeId,
+                layer: item.layer,
+                originType: item.originType as V8MemoryOriginType,
+                sourceItemIds: [item.id],
+                evidenceSpanIds: item.evidenceSpanIds.slice(0, 2),
+                qualifiers: item.qualifiers || {},
+                confidence: Math.min(0.88, item.confidence),
+                state: {
+                    scope: item.scope,
+                    validity,
+                },
+            });
+        }
+
+        stateCandidates.push({
+            stateNodeId,
+            sourceItemId: item.id,
+            edgeNodeId,
+            anchorNodeIds: [
+                semanticLinks?.subjectNodeId || "",
+                semanticLinks?.objectNodeId || "",
+            ].filter(Boolean),
+            anchorTokens: deriveAnchorTokens(item),
+            timestampMs: resolveItemTimestampMs(item, spanById),
+            statusRank: cue ? stateStatusRank(cue.status) : validity === "superseded" ? 0 : 1,
+            validity,
+        });
+    }
+
+    const itemById = new Map(items.map((item) => [item.id, item]));
+    const eventCandidates = items
+        .filter((item) => item.itemType === "event")
+        .map((item) => ({
+            item,
+            edgeNodeId: nodeIdByItemId.get(item.id) || "",
+            timestampMs: resolveItemTimestampMs(item, spanById),
+            anchorTokens: deriveAnchorTokens(item),
+        }))
+        .filter((candidate) => candidate.edgeNodeId);
+
+    const transitionSeen = new Set<string>();
+    for (const current of stateCandidates) {
+        let bestPrevious: DerivedStateCandidate | null = null;
+        let bestScore = 0;
+        for (const previous of stateCandidates) {
+            if (previous.stateNodeId === current.stateNodeId) continue;
+            if (previous.statusRank >= current.statusRank) continue;
+            const previousTime = previous.timestampMs ?? Number.NEGATIVE_INFINITY;
+            const currentTime = current.timestampMs ?? Number.POSITIVE_INFINITY;
+            if (previousTime > currentTime) continue;
+            const score = stateCandidateSimilarity(current, previous);
+            if (score <= bestScore || score < 0.16) continue;
+            bestPrevious = previous;
+            bestScore = score;
+        }
+        if (!bestPrevious) continue;
+
+        const transitionKey = `${current.stateNodeId}->${bestPrevious.stateNodeId}`;
+        if (transitionSeen.has(transitionKey)) continue;
+        transitionSeen.add(transitionKey);
+
+        const currentItem = itemById.get(current.sourceItemId);
+        pushUniqueEdge({
+            type: "state_supersedes_state",
+            src: current.stateNodeId,
+            dst: bestPrevious.stateNodeId,
+            layer: currentItem?.layer || "micro",
+            originType: (currentItem?.originType || "inferred") as V8MemoryOriginType,
+            sourceItemIds: [current.sourceItemId, bestPrevious.sourceItemId],
+            evidenceSpanIds: mergeIds(
+                [...(currentItem?.evidenceSpanIds || [])],
+                [...(itemById.get(bestPrevious.sourceItemId)?.evidenceSpanIds || [])]
+            ).slice(0, 4),
+            qualifiers: {
+                derived: true,
+                similarity: Number(bestScore.toFixed(3)),
+            },
+            confidence: Math.min(0.92, 0.58 + bestScore),
+            state: {
+                scope: currentItem?.scope || "session",
+                validity: "active",
+            },
+        });
+
+        const changingEvent = selectChangingEvent(
+            eventCandidates,
+            current,
+            bestPrevious
+        );
+        if (changingEvent) {
+            pushUniqueEdge({
+                type: "state_changed_by_event",
+                src: current.stateNodeId,
+                dst: changingEvent.edgeNodeId,
+                layer: "micro",
+                originType: "inferred",
+                sourceItemIds: [current.sourceItemId, changingEvent.item.id],
+                evidenceSpanIds: mergeIds(
+                    [...itemById.get(current.sourceItemId)?.evidenceSpanIds || []],
+                    [...changingEvent.item.evidenceSpanIds || []]
+                ).slice(0, 4),
+                qualifiers: {
+                    derived: true,
+                },
+                confidence: 0.68,
+                state: {
+                    scope: currentItem?.scope || "session",
+                    validity: "active",
+                },
+            });
+        }
     }
 
     for (const span of evidenceSpans) {
@@ -576,4 +778,180 @@ function selectTopSpans(spanIds: string[], maxCount: number): string[] {
         unique.push(spanId);
     }
     return unique.slice(0, maxCount);
+}
+
+function isStateMemoryType(itemType: V8MemoryItem["itemType"]): boolean {
+    return itemType.endsWith("_state") || itemType === "session_state" || itemType === "topic_state";
+}
+
+function deriveStateCue(item: V8MemoryItem): { status: string } | null {
+    const status = String(item.qualifiers?.status || item.qualifiers?.phase || "").trim().toLowerCase();
+    if (!status) return null;
+    if (
+        status.includes("current") ||
+        status.includes("latest") ||
+        status.includes("now") ||
+        status.includes("final") ||
+        status.includes("earlier") ||
+        status.includes("previous") ||
+        status.includes("original") ||
+        status.includes("initial") ||
+        status.includes("former")
+    ) {
+        return { status };
+    }
+    return null;
+}
+
+function resolveStateValidity(
+    validity: V8MemoryItem["validity"],
+    status?: string
+): V8GraphNode["state"]["validity"] {
+    if (!status) return validity;
+    if (
+        status.includes("earlier") ||
+        status.includes("previous") ||
+        status.includes("original") ||
+        status.includes("initial") ||
+        status.includes("former")
+    ) {
+        return "superseded";
+    }
+    if (
+        status.includes("current") ||
+        status.includes("latest") ||
+        status.includes("now") ||
+        status.includes("final")
+    ) {
+        return "active";
+    }
+    return validity;
+}
+
+function stateStatusRank(status: string): number {
+    if (
+        status.includes("earlier") ||
+        status.includes("previous") ||
+        status.includes("original") ||
+        status.includes("initial") ||
+        status.includes("former")
+    ) {
+        return 0;
+    }
+    if (
+        status.includes("current") ||
+        status.includes("latest") ||
+        status.includes("now") ||
+        status.includes("final")
+    ) {
+        return 2;
+    }
+    return 1;
+}
+
+function buildStateLabel(item: V8MemoryItem, status?: string): string {
+    const prefix = status ? `${status.replace(/_/g, " ")} state` : "derived state";
+    return truncateLabel(`${prefix}: ${item.label || item.object || item.subject}`);
+}
+
+function resolveItemTimestampMs(
+    item: V8MemoryItem,
+    spanById: Map<string, V8EvidenceSpan>
+): number | null {
+    const qualifierTime = String(item.qualifiers?.time || "").trim();
+    const qualifierMs = qualifierTime ? Date.parse(qualifierTime) : Number.NaN;
+    if (Number.isFinite(qualifierMs)) return qualifierMs;
+    for (const spanId of item.evidenceSpanIds || []) {
+        const span = spanById.get(spanId);
+        if (!span?.timestamp) continue;
+        const spanMs = Date.parse(span.timestamp);
+        if (Number.isFinite(spanMs)) return spanMs;
+    }
+    return null;
+}
+
+function deriveAnchorTokens(item: V8MemoryItem): string[] {
+    return tokenizeForState([
+        item.subject || "",
+        item.object || "",
+        item.label || "",
+    ].join(" "));
+}
+
+function tokenizeForState(text: string): string[] {
+    const stop = new Set([
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "to",
+        "of",
+        "on",
+        "in",
+        "for",
+        "with",
+        "current",
+        "design",
+        "team",
+        "service",
+        "state",
+        "avoidance",
+        "should",
+        "stay",
+    ]);
+    return Array.from(
+        new Set(
+            String(text || "")
+                .toLowerCase()
+                .split(/[^a-z0-9\u4e00-\u9fff]+/)
+                .map((token) => token.trim())
+                .filter((token) => token.length >= 2 || /[\u4e00-\u9fff]/.test(token))
+                .filter((token) => !stop.has(token))
+        )
+    );
+}
+
+function stateCandidateSimilarity(
+    current: DerivedStateCandidate,
+    previous: DerivedStateCandidate
+): number {
+    const sharedAnchorNode = current.anchorNodeIds.some((id) => previous.anchorNodeIds.includes(id));
+    const currentTokens = new Set(current.anchorTokens);
+    const previousTokens = new Set(previous.anchorTokens);
+    let tokenHits = 0;
+    for (const token of previousTokens) {
+        if (currentTokens.has(token)) tokenHits += 1;
+    }
+    const tokenScore = tokenHits / Math.max(1, Math.min(currentTokens.size || 1, previousTokens.size || 1));
+    return tokenScore + (sharedAnchorNode ? 0.35 : 0);
+}
+
+function selectChangingEvent(
+    events: Array<{
+        item: V8MemoryItem;
+        edgeNodeId: string;
+        timestampMs: number | null;
+        anchorTokens: string[];
+    }>,
+    current: DerivedStateCandidate,
+    previous: DerivedStateCandidate
+): { item: V8MemoryItem; edgeNodeId: string; timestampMs: number | null; anchorTokens: string[] } | null {
+    const currentTime = current.timestampMs ?? Number.POSITIVE_INFINITY;
+    const previousTime = previous.timestampMs ?? Number.NEGATIVE_INFINITY;
+    let best: { item: V8MemoryItem; edgeNodeId: string; timestampMs: number | null; anchorTokens: string[] } | null = null;
+    let bestScore = 0;
+    const anchorSet = new Set([...current.anchorTokens, ...previous.anchorTokens]);
+    for (const event of events) {
+        const eventTime = event.timestampMs ?? currentTime;
+        if (eventTime < previousTime || eventTime > currentTime) continue;
+        let overlap = 0;
+        for (const token of event.anchorTokens) {
+            if (anchorSet.has(token)) overlap += 1;
+        }
+        if (overlap <= bestScore) continue;
+        bestScore = overlap;
+        best = event;
+    }
+    return bestScore > 0 ? best : null;
 }

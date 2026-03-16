@@ -602,10 +602,19 @@ function runIgnitionGuidedSearch({
         4
     );
     const bundleById = new Map((recallBundles || []).map((bundle) => [bundle.bundleId, bundle]));
+    const bundleByNodeId = new Map();
+    for (const bundle of recallBundles || []) {
+        for (const nodeId of bundle.nodeIds || []) {
+            if (!bundleByNodeId.has(nodeId)) {
+                bundleByNodeId.set(nodeId, []);
+            }
+            bundleByNodeId.get(nodeId).push(bundle);
+        }
+    }
     const verticalSeedBundles = uniqueById(
         verticalCards
             .flatMap((card) => card.hintBundleIds || [])
-            .map((bundleId) => bundleById.get(bundleId))
+            .flatMap((bundleId) => resolveBundleHint(bundleId, bundleById, bundleByNodeId))
             .filter(Boolean)
     );
     const verticalPlanLabels = uniqueStrings(
@@ -925,6 +934,16 @@ function uniqueById(items) {
         output.push(item);
     }
     return output;
+}
+
+function resolveBundleHint(bundleId, bundleById, bundleByNodeId) {
+    const direct = bundleById.get(bundleId);
+    if (direct) return [direct];
+    if (String(bundleId || "").startsWith("seed_")) {
+        const nodeId = String(bundleId || "").slice(5);
+        return bundleByNodeId.get(nodeId) || [];
+    }
+    return [];
 }
 
 function termOverlapScore(question, label) {
