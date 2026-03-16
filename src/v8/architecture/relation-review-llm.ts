@@ -39,7 +39,15 @@ export function writeRelationReviewJobsMarkdown(
 
     lines.push("# Relation Review Jobs");
     lines.push("");
-    lines.push("Read jobs and output reviewed relations in markdown.");
+    lines.push("Review relation candidates and output only evidence-backed reviewed relations in markdown.");
+    lines.push("");
+    lines.push("Review rules:");
+    lines.push("- Accept a relation only when the candidate spans directly support that edge type between the nodes.");
+    lines.push("- If evidence is suggestive but not decisive, use `hypothesis`.");
+    lines.push("- If the spans do not support the edge, use `rejected`.");
+    lines.push("- Prefer direct span evidence over abstract guessing.");
+    lines.push("- Do not invent node ids, edge types, or evidence ids.");
+    lines.push("- One reviewed relation should describe one concrete relation judgment.");
     lines.push("");
     lines.push("Output format:");
     lines.push("```md");
@@ -73,6 +81,12 @@ export function writeRelationReviewJobsMarkdown(
         lines.push(`- review_question: ${job.reviewQuestion}`);
         lines.push(`- candidate_edge_types: ${(job.candidateEdgeTypes || []).join(", ")}`);
         lines.push(`- anchor_nodes: ${anchors || "(none)"}`);
+        if (plan?.anchorLabels?.length) {
+            lines.push(`- anchor_labels: ${plan.anchorLabels.join(", ")}`);
+        }
+        if (plan?.queryTerms?.length) {
+            lines.push(`- query_terms: ${plan.queryTerms.slice(0, 12).join(", ")}`);
+        }
         lines.push("");
 
         lines.push("### Candidate Hits");

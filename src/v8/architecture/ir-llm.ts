@@ -119,6 +119,54 @@ const MAX_ITEMS_PER_NARRATIVE_LAYER: Record<V8GraphLayer, number> = {
     macro: 10,
 };
 
+const LAYER_OBJECTIVE_LINES: Record<V8GraphLayer, string[]> = {
+    micro: [
+        "Extract only local, directly stated memory facts.",
+        "Prefer concrete entity-action-object, attribute, comparison, condition, support, contradiction, or explicit user control signals.",
+        "Do not abstract across multiple turns here.",
+    ],
+    meso: [
+        "Extract mid-range structure from a coherent local block.",
+        "Prefer decisions, goals, constraints, strategy shifts, problem/solution framing, evidence-backed state changes, and interaction structure.",
+        "Do not repeat every micro fact; compress to the block-level relation that matters for later recall.",
+    ],
+    macro: [
+        "Extract only long-range, high-value lines that survive compression.",
+        "Prefer phase shifts, enduring regimes, relationship arcs, method lines, objective lines, conflict lines, and global state transitions.",
+        "Do not emit local details unless they clearly define the arc or regime.",
+    ],
+};
+
+const LAYER_AVOID_LINES: Record<V8GraphLayer, string[]> = {
+    micro: [
+        "Avoid greetings, retries, filler, acknowledgements, and tool noise unless they explicitly change memory state.",
+        "Avoid splitting one short fact into multiple near-duplicate items.",
+    ],
+    meso: [
+        "Avoid restating micro-level entity facts one by one.",
+        "Avoid weak topic labels with no actionable relation or state change.",
+    ],
+    macro: [
+        "Avoid local episodic details, one-off facts, and shallow restatements of meso items.",
+        "Avoid emitting more than a few strongest lines for the batch.",
+    ],
+};
+
+const LAYER_EXAMPLE_LINES: Record<V8GraphLayer, string[]> = {
+    micro: [
+        "Good micro example: a direct instruction changes a constraint, a sentence states A supports B, a line explicitly says X was replaced by Y.",
+        "Bad micro example: \"hi\", \"继续\", or generic chatter with no durable fact.",
+    ],
+    meso: [
+        "Good meso example: a block establishes a design decision, reframes a problem, or records that a previous approach was replaced.",
+        "Bad meso example: listing every noun or every repeated sentence from the block.",
+    ],
+    macro: [
+        "Good macro example: a thread evolves from early preference to later rejection, or a project phase shifts from exploration to implementation.",
+        "Bad macro example: replaying one local turn or emitting a vague theme with no evidence-backed transition.",
+    ],
+};
+
 function edgeCatalogPath(): string {
     const here = path.dirname(fileURLToPath(import.meta.url));
     return path.resolve(here, "../../../schema/v8-edge-catalog.json");
@@ -604,6 +652,9 @@ function buildPrompt(input: {
             : layer === "meso"
               ? Math.min(16, units.length * 5)
               : Math.min(48, units.length * 12);
+    const layerObjectives = LAYER_OBJECTIVE_LINES[layer] || [];
+    const layerAvoid = LAYER_AVOID_LINES[layer] || [];
+    const layerExamples = LAYER_EXAMPLE_LINES[layer] || [];
     const unitBlocks = units.flatMap((unit) => {
         const evidenceLines = (spansByUnit.get(unit.id) || []).map(
             (span) => `- (${span.id}) ${sanitizeLine(span.text)}`
@@ -626,6 +677,13 @@ function buildPrompt(input: {
         "Primary objective:",
         "- Capture high-value memory facts for future recall: decisions, constraints, goals, preference shifts, state changes, and stable entity relations.",
         "- Avoid noisy restatements and avoid splitting one fact into many near-duplicate items.",
+        ...layerObjectives.map((line) => `- ${line}`),
+        "",
+        "Avoid:",
+        ...layerAvoid.map((line) => `- ${line}`),
+        "",
+        "Examples:",
+        ...layerExamples.map((line) => `- ${line}`),
         "",
         "Rules:",
         "- Use only the relations listed under Allowed relations (by group).",

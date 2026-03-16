@@ -1017,7 +1017,17 @@ function buildReviewQuestion(plan: V8RelationSearchPlan): string {
         .map((hint) => hint.id)
         .slice(0, 4)
         .join(", ");
-    return `Verify whether direct evidence supports relations for ${anchor} under edge families: ${edgeList}.`;
+    const scope =
+        plan.searchScope === "local_active"
+            ? "recent active context"
+            : "archive history";
+    const lane =
+        plan.lane === "focused"
+            ? "focused"
+            : plan.lane === "broadened"
+              ? "broadened"
+              : "exploratory";
+    return `Within ${scope}, decide whether the candidate spans directly support a ${lane} relation judgment for ${anchor} under edge families: ${edgeList}.`;
 }
 
 function uniqueList<T>(items: T[]): T[] {
