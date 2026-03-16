@@ -123,16 +123,25 @@ function evaluateQuestion({
         mode: "hybrid",
         windowChars: 260,
     });
-    const selectedPlan = selectPlanForQuestion(question, relationSearchPlans);
-    const guidedHits = selectedPlan
+    const selectedPlans = selectPlansForQuestion(question, relationSearchPlans, 3);
+    const guidedHits = selectedPlans.length > 0
         ? searchArchiveSpans({
               workspace,
-              query: joinQuery(question.question, selectedPlan.queryTerms || []),
+              query: joinQuery(
+                  question.question,
+                  uniqueStrings(selectedPlans.flatMap((plan) => plan.queryTerms || []))
+              ),
               topK,
               mode: "hybrid",
               windowChars: 260,
-              allowedShardIds: loadAllowedShardIds(selectedPlan.id, narrativeShardSelections),
-              boostSpanIds: selectedPlan.hintSpanIds || [],
+              allowedShardIds: uniqueStrings(
+                  selectedPlans.flatMap((plan) =>
+                      loadAllowedShardIds(plan.id, narrativeShardSelections)
+                  )
+              ),
+              boostSpanIds: uniqueStrings(
+                  selectedPlans.flatMap((plan) => plan.hintSpanIds || [])
+              ),
           })
         : [];
 
@@ -143,8 +152,10 @@ function evaluateQuestion({
         question: question.question,
         answer: question.answer,
         evidence_refs: question.evidence_refs || [],
-        selected_plan_id: selectedPlan ? selectedPlan.id : null,
-        selected_plan_anchor_labels: selectedPlan ? selectedPlan.anchorLabels || [] : [],
+        selected_plan_ids: selectedPlans.map((plan) => plan.id),
+        selected_plan_anchor_labels: uniqueStrings(
+            selectedPlans.flatMap((plan) => plan.anchorLabels || [])
+        ),
         raw_hit: Boolean(rawMatch),
         raw_first_hit_rank: rawMatch ? rawMatch.rank : null,
         raw_matched_span_id: rawMatch ? rawMatch.spanId : null,
@@ -219,7 +230,9 @@ function renderSummaryMarkdown(summary) {
         lines.push(`## ${item.question_id}`);
         lines.push(`- question: ${item.question}`);
         lines.push(`- expected answer: ${item.answer}`);
-        lines.push(`- selected_plan_id: ${item.selected_plan_id ?? "none"}`);
+        lines.push(
+            `- selected_plan_ids: ${(item.selected_plan_ids || []).join(", ") || "none"}`
+        );
         lines.push(
             `- selected_plan_anchor_labels: ${(item.selected_plan_anchor_labels || []).join(", ") || "(none)"}`
         );
@@ -270,25 +283,24 @@ function rangesOverlap(aStart, aEnd, bStart, bEnd) {
     return Math.max(aStart, bStart) < Math.min(aEnd, bEnd);
 }
 
-function selectPlanForQuestion(question, relationSearchPlans) {
+function selectPlansForQuestion(question, relationSearchPlans, limit) {
     const q = String(question.question || "").toLowerCase();
-    let best = null;
-    let bestScore = 0;
-    for (const plan of relationSearchPlans || []) {
-        const labels = [
-            ...(plan.anchorLabels || []),
-            ...(plan.queryTerms || []),
-            ...(plan.anchorKinds || []),
-        ]
-            .map((item) => String(item || "").trim().toLowerCase())
-            .filter(Boolean);
-        const score = labels.reduce((acc, label) => acc + termOverlapScore(q, label), 0);
-        if (score > bestScore) {
-            best = plan;
-            bestScore = score;
-        }
-    }
-    return bestScore > 0 ? best : null;
+    return (relationSearchPlans || [])
+        .map((plan) => ({
+            plan,
+            score: [
+                ...(plan.anchorLabels || []),
+                ...(plan.queryTerms || []),
+                ...(plan.anchorKinds || []),
+            ]
+                .map((item) => String(item || "").trim().toLowerCase())
+                .filter(Boolean)
+                .reduce((acc, label) => acc + termOverlapScore(q, label), 0),
+        }))
+        .filter((entry) => entry.score > 0)
+        .sort((a, b) => b.score - a.score || a.plan.id.localeCompare(b.plan.id))
+        .slice(0, limit)
+        .map((entry) => entry.plan);
 }
 
 function loadAllowedShardIds(planId, narrativeShardSelections) {
@@ -304,6 +316,16 @@ function joinQuery(base, extraTerms) {
         .join(" ")
         .replace(/\s+/g, " ")
         .trim();
+}
+
+function uniqueStrings(values) {
+    return Array.from(
+        new Set(
+            (values || [])
+                .map((item) => String(item || "").trim())
+                .filter(Boolean)
+        )
+    );
 }
 
 function termOverlapScore(question, label) {
