@@ -207,11 +207,13 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         requestedPhase: compilePhase,
     });
     const artifactsReusable = hasReusableArtifacts(store);
+    let coldDocsPromotedToHot = false;
     if (scope.coldDocIds.size > 0 && !artifactsReusable) {
         for (const docId of scope.coldDocIds) {
             scope.hotDocIds.add(docId);
         }
         scope.coldDocIds.clear();
+        coldDocsPromotedToHot = true;
         logStage("cache artifacts missing: promoted cold docs to hot rebuild");
     }
     const scopePreview = buildScopePreview(scope, allNarrativeDocs);
@@ -253,6 +255,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         coldDocs: scope.coldDocIds.size,
         removedDocs: scope.removedDocIds.size,
         reusedCache: canReuseCache,
+        coldDocsPromotedToHot,
         noopReuse: hotBuildIsNoop,
         sourceNarrativeWrittenFiles: sourcePersistStats?.writtenFiles ?? 0,
         sourceNarrativeSkippedFiles: sourcePersistStats?.skippedFiles ?? 0,
@@ -876,6 +879,7 @@ interface BuildReport {
         coldDocs: number;
         removedDocs: number;
         reusedCache: boolean;
+        coldDocsPromotedToHot: boolean;
         noopReuse: boolean;
         sourceNarrativeWrittenFiles: number;
         sourceNarrativeSkippedFiles: number;
@@ -1297,7 +1301,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
         `- scope: hot=${report.buildStats.hotDocs}, cold=${report.buildStats.coldDocs}, removed=${report.buildStats.removedDocs}`
     );
     lines.push(
-        `- cache: reused=${String(report.buildStats.reusedCache)}, noop=${String(report.buildStats.noopReuse)}`
+        `- cache: reused=${String(report.buildStats.reusedCache)}, coldPromoted=${String(report.buildStats.coldDocsPromotedToHot)}, noop=${String(report.buildStats.noopReuse)}`
     );
     lines.push(
         `- sourceNarrativeWrites: written=${report.buildStats.sourceNarrativeWrittenFiles}, skippedExisting=${report.buildStats.sourceNarrativeSkippedFiles}`
