@@ -119,6 +119,23 @@ node scripts/benchmark-eval-prep.mjs \
 node scripts/archive-search-smoke.mjs
 ```
 
+### Run prepared benchmark sample through V8 build + archive-search baseline
+
+```bash
+node scripts/benchmark-eval-runner.mjs \
+  --prepared-sample /path/to/prepared/locomo/sample_dir \
+  --top-k 5
+```
+
+This runner currently gives a first baseline:
+
+- prepare benchmark sample
+- build V8 artifacts from `session_narrative.md`
+- run archive search per question
+- score whether top-k hits overlap expected evidence
+
+It is intentionally a baseline, not the final full protocol. Its job is to tell us whether the current memory pipeline is moving in the right direction before we add relation-review and full answer-generation scoring.
+
 ## What To Measure
 
 For each prepared sample, we eventually want to score at least:
