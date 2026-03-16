@@ -949,9 +949,16 @@ function selectChangingEvent(
         for (const token of event.anchorTokens) {
             if (anchorSet.has(token)) overlap += 1;
         }
-        if (overlap <= bestScore) continue;
-        bestScore = overlap;
+        const cueScore = hasChangeCue(event.item) ? 0.75 : 0;
+        const score = overlap + cueScore;
+        if (score <= bestScore) continue;
+        bestScore = score;
         best = event;
     }
     return bestScore > 0 ? best : null;
+}
+
+function hasChangeCue(item: V8MemoryItem): boolean {
+    const hay = `${item.subject || ""} ${item.predicate || ""} ${item.object || ""} ${item.label || ""}`.toLowerCase();
+    return /(revers|changed|change|switch|replace|removed|remove|drop|rollback|fallout|fix|fixed|resolved|invalidat|reactivat|取代|改成|改为|变成|反转|撤回|恢复|修复)/.test(hay);
 }
