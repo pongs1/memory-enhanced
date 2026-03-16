@@ -601,13 +601,17 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         ruleIrMode === "micro_light"
             ? extractMemoryItems(hotUnitsPhaseFiltered, hotEvidenceSpans)
             : [];
-    const fallbackRuleItems: V8MemoryItem[] = [];
+    const fallbackRuleItems = buildMicroFallbackItems({
+        units: hotUnitsPhaseFiltered,
+        evidenceSpans: hotEvidenceSpans,
+        existingItems: [...ruleItems, ...llmItems],
+    });
     buildStats.irRuleItems = ruleItems.length;
     buildStats.irLlmItems = llmItems.length;
     buildStats.irFallbackItems = fallbackRuleItems.length;
-    buildStats.irFallbackApplied = false;
+    buildStats.irFallbackApplied = fallbackRuleItems.length > 0;
     const resolvedLlmStatus = llmStatus;
-    const hotMemoryItems = [...ruleItems, ...llmItems];
+    const hotMemoryItems = [...ruleItems, ...llmItems, ...fallbackRuleItems];
     const memoryItems = [
         ...cached.memoryItems,
         ...streamMacroCarry.memoryItems,
@@ -1160,6 +1164,65 @@ function dedupeMemoryItems(items: V8MemoryItem[]): V8MemoryItem[] {
         if (seen.has(key)) continue;
         seen.add(key);
         output.push(item);
+    }
+    return output;
+}
+
+function buildMicroFallbackItems(input: {
+    units: V8Unit[];
+    evidenceSpans: V8EvidenceSpan[];
+    existingItems: V8MemoryItem[];
+}): V8MemoryItem[] {
+    const representedMicroUnitIds = new Set<string>();
+    for (const item of input.existingItems) {
+        if (item.layer !== "micro") continue;
+        for (const unitId of item.unitIds || []) {
+            if (unitId) representedMicroUnitIds.add(unitId);
+        }
+    }
+    const spansByUnit = new Map<string, V8EvidenceSpan[]>();
+    for (const span of input.evidenceSpans) {
+        const list = spansByUnit.get(span.unitId) || [];
+        list.push(span);
+        spansByUnit.set(span.unitId, list);
+    }
+    const nowIso = new Date().toISOString();
+    const output: V8MemoryItem[] = [];
+    for (const unit of input.units) {
+        if (unit.layer !== "micro") continue;
+        if (representedMicroUnitIds.has(unit.id)) continue;
+        const text = unit.text.trim().replace(/\s+/g, " ");
+        if (!text) continue;
+        const bestSpan = (spansByUnit.get(unit.id) || [])
+            .slice()
+            .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))[0];
+        const object = text.length > 120 ? `${text.slice(0, 120)}...` : text;
+        const hash = createHash("sha1")
+            .update(unit.id)
+            .update("\n")
+            .update(object)
+            .digest("hex")
+            .slice(0, 12);
+        output.push({
+            id: `mi_fallback_${hash}`,
+            narrativeRecordId: unit.narrativeRecordId,
+            sourceRef: unit.narrativeRef,
+            itemType: "discourse_unit",
+            originType: "aggregated",
+            layer: "micro",
+            subject: unit.speaker || "unknown",
+            predicate: "summarizes",
+            object,
+            label: object,
+            qualifiers: {},
+            evidenceSpanIds: bestSpan ? [bestSpan.id] : [],
+            unitIds: [unit.id],
+            confidence: 0.34,
+            scope: "session",
+            validity: "active",
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        });
     }
     return output;
 }
