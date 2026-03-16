@@ -178,6 +178,7 @@ function evaluateQuestion({
         graphNodes,
         graphEdges,
         evidenceSpans,
+        relationSearchPlans,
         workspace,
         topK,
     });
@@ -231,6 +232,8 @@ function evaluateQuestion({
         static_guided_full_support_hit: staticGuidedSupport.fullHit,
         ignition_guided_bundle_ids: ignitionGuided.bundleIds,
         ignition_guided_anchor_labels: ignitionGuided.anchorLabels,
+        ignition_guided_vertical_plan_ids: ignitionGuided.verticalPlanIds,
+        ignition_guided_vertical_plan_anchor_labels: ignitionGuided.verticalPlanAnchorLabels,
         ignition_guided_modes: ignitionGuided.modes,
         ignition_guided_background_turns: ignitionGuided.backgroundTurns,
         ignition_guided_profile_bundle_ids: ignitionGuided.profileBundleIds,
@@ -442,6 +445,12 @@ function renderSummaryMarkdown(summary) {
         lines.push(
             `- ignition_guided_anchor_labels: ${(item.ignition_guided_anchor_labels || []).join(", ") || "(none)"}`
         );
+        lines.push(
+            `- ignition_guided_vertical_plan_ids: ${(item.ignition_guided_vertical_plan_ids || []).join(", ") || "(none)"}`
+        );
+        lines.push(
+            `- ignition_guided_vertical_plan_anchor_labels: ${(item.ignition_guided_vertical_plan_anchor_labels || []).join(", ") || "(none)"}`
+        );
         lines.push(`- ignition_guided_modes: ${(item.ignition_guided_modes || []).join(", ") || "(none)"}`);
         lines.push(`- ignition_guided_background_turns: ${item.ignition_guided_background_turns ?? 0}`);
         lines.push(`- ignition_guided_profile_bundle_ids: ${(item.ignition_guided_profile_bundle_ids || []).join(", ") || "(none)"}`);
@@ -573,12 +582,20 @@ function runIgnitionGuidedSearch({
     graphNodes,
     graphEdges,
     evidenceSpans,
+    relationSearchPlans,
     workspace,
     topK,
 }) {
     const questionText = String(question.question || "");
-    const plan = inferIgnitionPlan(questionText);
     const warmupTurns = Array.isArray(turnMap) ? turnMap : [];
+    const textSignals = buildIgnitionTextSignals(questionText, warmupTurns);
+    const verticalPlans = selectVerticalPlansFromSignals(textSignals, relationSearchPlans, 4);
+    const verticalPlanLabels = uniqueStrings(
+        verticalPlans.flatMap((plan) => plan.anchorLabels || [])
+    );
+    const verticalPlanSpanIds = uniqueStrings(
+        verticalPlans.flatMap((plan) => plan.hintSpanIds || [])
+    );
     const replayAnchors = {
         goal: "",
         activeTask: "benchmark_replay",
@@ -593,7 +610,7 @@ function runIgnitionGuidedSearch({
 
     const backgroundTurns = warmupTurns.slice(-Math.min(3, warmupTurns.length));
     const backgroundText = backgroundTurns.map((turn) => String(turn.text || "").trim()).filter(Boolean).join("\n");
-    const modes = plan.modes;
+    const modes = ["profile", "trajectory"];
     const passBundles = new Map();
     const modeBundleIds = {
         profile: [],
@@ -603,17 +620,20 @@ function runIgnitionGuidedSearch({
     for (const mode of modes) {
         scanner.setMode(mode);
         const anchors = {
-            goal: questionText,
+            goal: [questionText, ...verticalPlanLabels].filter(Boolean).join("\n"),
             activeTask: backgroundText || "benchmark_recall_eval",
             latestUserRequest: questionText,
         };
-        const signals = [
-            { source: "task", text: questionText, weight: 1 },
-            { source: "background", text: backgroundText, weight: 0.7 },
-        ].filter((item) => item.text);
+        const signals = textSignals.filter((item) => item.text);
         scanner.refreshScene(signals, anchors);
-        scanner.preExcite(questionText, anchors);
-        const scan = scanner.processChunk(`${questionText}\n`, anchors);
+        scanner.preExcite(
+            [questionText, ...verticalPlanLabels].filter(Boolean).join("\n"),
+            anchors
+        );
+        const scan = scanner.processChunk(
+            [questionText, ...verticalPlanLabels].filter(Boolean).join("\n") + "\n",
+            anchors
+        );
         for (const bundle of scan.activatedBundles || []) {
             modeBundleIds[mode].push(bundle.bundleId);
             const existing = passBundles.get(bundle.bundleId);
@@ -639,21 +659,22 @@ function runIgnitionGuidedSearch({
         )
     );
     const boostSpanIds = uniqueStrings(bundles.flatMap((bundle) => bundle.evidenceSpanIds || []));
+    const mergedBoostSpanIds = uniqueStrings([...boostSpanIds, ...verticalPlanSpanIds]);
     const allowedShardIds = uniqueStrings(
-        boostSpanIds
+        mergedBoostSpanIds
             .map((spanId) => spanById.get(spanId)?.narrativeRecordId || "")
             .filter(Boolean)
     );
     const hits =
-        bundles.length > 0
+        bundles.length > 0 || verticalPlanLabels.length > 0 || mergedBoostSpanIds.length > 0
             ? searchArchiveSpans({
                   workspace,
-                  query: joinQuery(question.question, anchorLabels),
+                  query: joinQuery(question.question, [...anchorLabels, ...verticalPlanLabels]),
                   topK,
                   mode: "hybrid",
                   windowChars: 260,
                   allowedShardIds,
-                  boostSpanIds,
+                  boostSpanIds: mergedBoostSpanIds,
               })
             : [];
     return {
@@ -663,6 +684,8 @@ function runIgnitionGuidedSearch({
         backgroundTurns: backgroundTurns.length,
         profileBundleIds: uniqueStrings(modeBundleIds.profile),
         trajectoryBundleIds: uniqueStrings(modeBundleIds.trajectory),
+        verticalPlanIds: verticalPlans.map((plan) => plan.id),
+        verticalPlanAnchorLabels: verticalPlanLabels,
         verticalDiagnostics,
         hits,
     };
@@ -677,22 +700,46 @@ function benchmarkScannerConfig() {
     };
 }
 
-function inferIgnitionPlan(question) {
-    const q = normalizeText(question);
-    const historyCue =
-        /\b(before|earlier|later|previous|used to|history|timeline|evolv|change|changed|supersed|fallout|originally|original)\b/.test(q) ||
-        /之前|前面| earlier |后来|变成|变化|完整脉络|演化|历史|以前|原来|最初|取代/.test(question);
-    const currentCue =
-        /\b(now|current|currently|latest|present)\b/.test(q) ||
-        /现在|当前|最新|目前/.test(question);
-    const modes = [];
-    if (currentCue || !historyCue) {
-        modes.push("profile");
-    }
-    if (historyCue) {
-        modes.push("trajectory");
-    }
-    return { modes: uniqueStrings(modes.length > 0 ? modes : ["profile"]) };
+function buildIgnitionTextSignals(questionText, turnMap) {
+    const turns = Array.isArray(turnMap) ? turnMap : [];
+    const signals = turns.map((turn, index) => ({
+        source: String(turn.speaker || "turn"),
+        text: String(turn.text || "").trim(),
+        weight: index >= turns.length - 2 ? 0.85 : 0.6,
+    }));
+    signals.push({
+        source: "question",
+        text: String(questionText || "").trim(),
+        weight: 1,
+    });
+    return signals.filter((item) => item.text);
+}
+
+function selectVerticalPlansFromSignals(textSignals, relationSearchPlans, limit) {
+    const signals = Array.isArray(textSignals) ? textSignals : [];
+    return (relationSearchPlans || [])
+        .map((plan) => {
+            const planTerms = uniqueStrings([
+                ...(plan.anchorLabels || []),
+                ...(plan.queryTerms || []),
+                ...((plan.edgeFamilyHints || []).map((hint) => hint.id) || []),
+            ]);
+            const planText = normalizeText(planTerms.join(" "));
+            const planTokens = new Set(tokenize(planText));
+            let score = 0;
+            for (const signal of signals) {
+                const signalText = normalizeText(signal.text);
+                const signalTokens = new Set(tokenize(signalText));
+                const overlap = overlapScore(signalTokens, planTokens);
+                if (overlap <= 0) continue;
+                score += overlap * Number(signal.weight || 0.5);
+            }
+            return { plan, score };
+        })
+        .filter((entry) => entry.score >= 0.08)
+        .sort((left, right) => right.score - left.score)
+        .slice(0, limit)
+        .map((entry) => entry.plan);
 }
 
 function analyzeVerticalParticipation({ bundles, graphNodes, graphEdges }) {

@@ -962,7 +962,7 @@ Rules:
 - node cooldown and bundle cooldown are separate runtime controls
 - second-wave recall remains allowed after one propagation pass
 - tier is delivery policy, not graph ontology
-- default recall mode is `profile`; `trajectory`, `oblique`, and `audit` are explicit mode switches
+- default recall slice is `profile`; `trajectory`, `oblique`, and `audit` are additional slice policies or explicit overrides, not the sole trigger entrance
 - `scope_anchor` is `gate` role in all modes
 - `change` edges are `reweight` in profile and oblique, and `reweight + lineage traversal` in trajectory
 - `evidence_anchor` is `backtrace` role rather than propagation role

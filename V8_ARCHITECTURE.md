@@ -747,12 +747,27 @@ V8 needs explicit recall modes so "current snapshot answer" and "full lifecycle 
 | `oblique` | what related lines may matter | abstraction + line_binding + selective semantic expansion | cross-line hypothesis bundle plus supporting evidence |
 | `audit` | why the system answered this | evidence_anchor + change lineage + scope anchors | provenance-first pack with explicit span citations |
 
-Mode selection should be query-driven:
+Modes are slice policies, not the primary trigger entrance.
+The primary entrance should be a unified cleaned-text signal bus:
 
-- default to `profile` for ordinary Q&A and live generation support
-- switch to `trajectory` when the request asks for history, evolution, versions, or "how we got here"
-- switch to `oblique` when the request asks for analogies, side effects, adjacent risks, or indirect relations
-- force `audit` for debugging, compliance, or memory-quality inspection
+- user text
+- assistant text
+- tool result text
+- subagent result text
+- feedback text
+- goal / working-state text
+
+Those signals should project into both horizontal semantic seeds and vertical state/lineage seeds.
+V8 should not rely on regex-only query inspection to decide whether trajectory-worthy structure exists.
+Instead:
+
+- `profile` remains the default slice for current-state answering
+- `trajectory` is activated when the live signal bus or vertical trigger projections surface state-change / supersession / lineage structure
+- `oblique` is activated when the same signal bus surfaces adjacent-line or cross-line pressure
+- `audit` remains an explicit provenance-heavy slice, or is activated by debugging / validation flows
+
+One request may activate more than one slice at the same time.
+For example, "what is true now, and what did it replace?" should assemble a current-state slice plus a lineage slice instead of forcing a single-mode gate.
 
 This is how V8 answers both:
 

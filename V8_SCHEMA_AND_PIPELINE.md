@@ -1322,13 +1322,21 @@ Recommended request contract:
 
 Recommended defaults:
 
-- ordinary QA and live generation: `profile`
-- "how did this evolve / what changed / timeline" queries: `trajectory`
-- "what related lines or hidden links matter" queries: `oblique`
-- debugging/compliance/memory validation: `audit`
+- ordinary QA and live generation: start with `profile`, but allow additional slices if triggered by state/lineage evidence
+- historical / "what changed" / timeline tasks: ensure `trajectory` is available
+- indirect / adjacent-line reasoning: ensure `oblique` is available
+- debugging/compliance/memory validation: ensure `audit` is available
 
-Mode selection must happen before treating a mismatch as a memory error.
-Temporal or state-shift anchors such as `之前`, `前面`, `前几章`, `前几步`, `一开始`, `后来`, `现在`, `改了`, `变成`, `从头到尾`, and `完整脉络` should bias recall toward `trajectory` or `audit`.
+`mode` should be treated as an override or requested emphasis, not the only entrance into recall.
+The primary entrance should be a unified cleaned-text signal bus assembled from user text, assistant text, tool-result text, subagent text, feedback text, and active working-state text.
+Those signals should project into:
+
+- horizontal semantic/entity seeds
+- vertical trigger projections for state change, supersession, validity windows, and lifecycle lines
+
+Mode selection must happen after that projection stage, not before it.
+V8 should not rely on regex-only temporal cue detection.
+Implicit descriptions such as reversals, fallout, "not anymore", or regime shifts should be able to activate lineage slices through vertical trigger projections even when the request does not spell out `before/after`.
 If the user is asking for a historical slice or a state transition, returning a non-current state is not automatically a memory failure.
 
 ### 9.11 Hypothesis exploration contract
