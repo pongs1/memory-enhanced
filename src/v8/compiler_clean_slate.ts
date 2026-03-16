@@ -46,6 +46,7 @@ import type {
     V8MemoryItem,
     V8NarrativeRecord,
     V8RecallBundleProjection,
+    V8RelationReviewJob,
     V8SearchFeedbackSignal,
     V8ReviewedRelation,
     V8Unit,
@@ -348,6 +349,10 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         buildStats.relationShardSelections = countJsonlRecords(store.narrativeShardSelections);
         buildStats.relationCandidateHits = countJsonlRecords(store.relationCandidateHits);
         buildStats.relationReviewJobs = countJsonlRecords(store.relationReviewJobs);
+        buildStats.relationReviewJobsCompleted = countRelationReviewJobsByStatus(
+            store.relationReviewJobs,
+            "completed"
+        );
         buildStats.relationReviewedAccepted = countReviewedRelationsByStatus(
             store.reviewedRelations,
             "accepted"
@@ -1189,6 +1194,19 @@ function countReviewedRelationsByStatus(
 ): number {
     try {
         return readJsonl<V8ReviewedRelation>(filePath).filter(
+            (item) => item.status === status
+        ).length;
+    } catch {
+        return 0;
+    }
+}
+
+function countRelationReviewJobsByStatus(
+    filePath: string,
+    status: "pending" | "completed" | "failed"
+): number {
+    try {
+        return readJsonl<V8RelationReviewJob>(filePath).filter(
             (item) => item.status === status
         ).length;
     } catch {
