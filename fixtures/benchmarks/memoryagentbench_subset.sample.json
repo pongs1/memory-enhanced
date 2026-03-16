@@ -1,0 +1,57 @@
+[
+  {
+    "id": "mab_alias_bridge_01",
+    "competency": "long_range_understanding",
+    "messages": [
+      {
+        "role": "assistant",
+        "timestamp": "2026-03-01 09:00",
+        "content": "Blue Finch keeps the notes stack on SQLite so deployment stays single-binary."
+      },
+      {
+        "role": "assistant",
+        "timestamp": "2026-03-02 11:15",
+        "content": "We renamed Blue Finch to Atlas for the investor deck."
+      },
+      {
+        "role": "assistant",
+        "timestamp": "2026-03-03 18:20",
+        "content": "Atlas migration tests keep failing because an old SQLite lock file survives the restart."
+      }
+    ],
+    "task_description": "Answer using the long-range memory trace only.",
+    "question": "What database did Atlas originally use?",
+    "answer": "Atlas originally used SQLite, back when the project was called Blue Finch.",
+    "supporting_facts": [
+      "Blue Finch used SQLite.",
+      "Blue Finch was renamed to Atlas."
+    ]
+  },
+  {
+    "id": "mab_conflict_resolution_01",
+    "competency": "conflict_resolution",
+    "messages": [
+      {
+        "role": "assistant",
+        "timestamp": "2026-03-05 09:10",
+        "content": "The team first said the service should stay on Redis."
+      },
+      {
+        "role": "assistant",
+        "timestamp": "2026-03-08 15:40",
+        "content": "After memory pressure tests, the team reversed the decision and removed Redis from the design."
+      },
+      {
+        "role": "assistant",
+        "timestamp": "2026-03-08 16:00",
+        "content": "The current design explicitly avoids Redis."
+      }
+    ],
+    "question": "What is the current database-cache decision, and what earlier decision does it supersede?",
+    "answer": "The current design avoids Redis, superseding the earlier plan to keep Redis.",
+    "supporting_facts": [
+      "The latest state explicitly avoids Redis.",
+      "That replaced the earlier plan to keep Redis."
+    ]
+  }
+]
