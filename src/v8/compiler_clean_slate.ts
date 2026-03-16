@@ -1372,9 +1372,13 @@ function buildAutoHypothesisReviewedRelations(input: {
             nodeById.has(nodeId)
         );
         if (anchorNodeIds.length === 0) continue;
+        const laneScoreFloor =
+            plan.lane === "focused" ? 0.12 : plan.lane === "broadened" ? 0.16 : 0.2;
         const laneTopHits =
             plan.lane === "focused" ? 5 : plan.lane === "broadened" ? 7 : 9;
-        const planHits = (candidateHitsByPlan.get(plan.id) || []).slice(0, laneTopHits);
+        const planHits = (candidateHitsByPlan.get(plan.id) || [])
+            .filter((hit) => hit.score >= laneScoreFloor)
+            .slice(0, laneTopHits);
         if (planHits.length === 0) continue;
 
         const reviewJobId = reviewJobByPlan.get(plan.id) || `auto_plan_${plan.id}`;
@@ -1424,7 +1428,7 @@ function buildAutoHypothesisReviewedRelations(input: {
                         status: "hypothesis",
                         supportEvidenceSpanIds: [hit.spanId],
                         confidence,
-                        rationale: `auto_hypothesis_from_relation_plan(lane=${plan.lane})`,
+                        rationale: `auto_hypothesis_from_relation_plan(lane=${plan.lane},hitScore=${hit.score.toFixed(3)})`,
                         createdAt: nowIso,
                     });
                     planAdded += 1;
