@@ -130,6 +130,14 @@ function nowMs(): number {
     return Date.now();
 }
 
+function fileMtimeMs(filePath: string): number {
+    try {
+        return fs.statSync(filePath).mtimeMs;
+    } catch {
+        return 0;
+    }
+}
+
 function clamp01(value: number): number {
     return Math.max(0, Math.min(1, value));
 }
@@ -209,11 +217,15 @@ export const DEFAULT_V8_SCANNER_CONFIG: V8ScannerConfig = {
     groupEnergyGain: 0.92,
 };
 
+const GRAPH_REFRESH_INTERVAL_MS = 2000;
+
 export class V8GraphScanner {
     private readonly workspace: string;
     private readonly config: V8ScannerConfig;
     private mode: V8RecallMode;
-    private readonly graph: LoadedGraphData;
+    private graph: LoadedGraphData;
+    private graphLoadSignature = 0;
+    private lastGraphCheckAt = 0;
     private readonly activations = new Map<string, number>();
     private readonly nodeCooldowns = new Map<string, number>();
     private readonly bundleCooldowns = new Map<string, number>();
@@ -233,6 +245,7 @@ export class V8GraphScanner {
         this.config = { ...DEFAULT_V8_SCANNER_CONFIG, ...config };
         this.mode = mode;
         this.graph = this.loadGraph();
+        this.graphLoadSignature = this.computeGraphSignature();
     }
 
     public setMode(mode: V8RecallMode): void {
@@ -427,6 +440,45 @@ export class V8GraphScanner {
         };
     }
 
+    private computeGraphSignature(): number {
+        const store = v8StorePaths(this.workspace);
+        return Math.max(
+            fileMtimeMs(store.graphNodes),
+            fileMtimeMs(store.graphEdges),
+            fileMtimeMs(store.evidenceSpans),
+            fileMtimeMs(store.ignitionNodes),
+            fileMtimeMs(store.ignitionEdges),
+            fileMtimeMs(store.recallBundles),
+            fileMtimeMs(store.hypothesisEdges)
+        );
+    }
+
+    private ensureGraphFresh(force = false): void {
+        const now = nowMs();
+        if (!force && now - this.lastGraphCheckAt < GRAPH_REFRESH_INTERVAL_MS) {
+            return;
+        }
+        this.lastGraphCheckAt = now;
+        const signature = this.computeGraphSignature();
+        if (signature <= this.graphLoadSignature) {
+            return;
+        }
+
+        this.graph = this.loadGraph();
+        this.graphLoadSignature = signature;
+        this.runtimeEdgeCache.clear();
+        this.runtimeReweightCache.clear();
+
+        // Reloading graph invalidates activation/cooldown references.
+        this.activations.clear();
+        this.nodeCooldowns.clear();
+        this.bundleCooldowns.clear();
+        this.sceneBiases.clear();
+        this.activeScopeIds = null;
+        this.activeDayKeys = null;
+        this.charsSinceLastScan = 0;
+    }
+
     private getRuntimeEdges(mode: V8RecallMode) {
         const cached = this.runtimeEdgeCache.get(mode);
         if (cached) return cached;
@@ -545,6 +597,7 @@ export class V8GraphScanner {
     }
 
     public refreshScene(signals: V8SceneSignal[], anchors: V8ControlAnchors): void {
+        this.ensureGraphFresh();
         const combined = [
             anchors.goal,
             anchors.activeTask,
@@ -582,6 +635,7 @@ export class V8GraphScanner {
     }
 
     public preExcite(prompt: string, anchors: V8ControlAnchors): void {
+        this.ensureGraphFresh();
         if (!prompt) {
             return;
         }
@@ -601,6 +655,7 @@ export class V8GraphScanner {
     }
 
     public processChunk(delta: string, _anchors: V8ControlAnchors): V8ScanResult {
+        this.ensureGraphFresh();
         if (!delta) {
             return { activatedBundles: [], recentWindow: this.recentWindow };
         }
