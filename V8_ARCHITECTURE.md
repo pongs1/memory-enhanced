@@ -560,6 +560,12 @@ They are what keep `graph -> evidence span -> raw text` reliable across layers a
 - local scene structure with long-range line membership
 - state validity with ordinary semantic relations
 
+Ownership split:
+
+- `causes`, `caused_by`, and `explains` remain horizontal semantic/discourse relations.
+- `state_changed_by_event` belongs to the vertical change family.
+- So V8 should not duplicate a generic `reason` edge here; it should only promote causality into `state_changed_by_event` when the target is a state rewrite, reversal, or lifecycle change.
+
 ### 9.6 Edge qualifiers and classification metadata
 
 For full-text multilingual understanding, edges need structured qualifiers.

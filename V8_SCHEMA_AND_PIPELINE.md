@@ -1039,6 +1039,12 @@ Whether runtime energy propagates through them is a separate scanner policy.
 Cross-layer mapping edges must remain explicit and typed.
 Do not collapse containment, abstraction, scope, and change into one generic `cross-layer` bucket.
 
+Clarification:
+
+- `causes`, `caused_by`, and `explains` stay in the horizontal semantic/discourse families.
+- `state_changed_by_event` is reserved for state-line rewrites: "this state changed because that event happened".
+- This is a type-and-ownership split, not an extra generic reason edge.
+
 ### 9.5 Graph ingestion rules
 
 - merge by canonical identity and type, not by raw string equality only
