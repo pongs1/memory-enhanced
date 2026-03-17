@@ -795,7 +795,6 @@ function deriveStateMemoryType(
     }
 
     const predicate = String(item.predicate || "").trim().toLowerCase();
-    const hay = `${item.subject || ""} ${item.object || ""} ${item.label || ""}`.toLowerCase();
     const hasDualAnchors = Boolean(semanticLinks?.subjectNodeId && semanticLinks?.objectNodeId);
     const relationshipPredicate = new Set([
         "involves",
@@ -809,13 +808,11 @@ function deriveStateMemoryType(
         "equivalent_to",
         "before",
         "after",
+        "similar_to",
+        "differs_from",
     ]);
 
-    if (
-        hasDualAnchors &&
-        (relationshipPredicate.has(predicate) ||
-            /(relationship|partner|friend|enemy|rival|夫妻|恋人|朋友|敌人|对手|搭档|盟友|同事|关系)/.test(hay))
-    ) {
+    if (hasDualAnchors && relationshipPredicate.has(predicate)) {
         return "relationship_state";
     }
 
@@ -1023,6 +1020,46 @@ function selectChangingEvent(
 }
 
 function hasChangeCue(item: V8MemoryItem): boolean {
-    const hay = `${item.subject || ""} ${item.predicate || ""} ${item.object || ""} ${item.label || ""}`.toLowerCase();
-    return /(revers|changed|change|switch|replace|removed|remove|drop|rollback|fallout|fix|fixed|resolved|invalidat|reactivat|取代|改成|改为|变成|反转|撤回|恢复|修复)/.test(hay);
+    const predicate = String(item.predicate || "").trim().toLowerCase();
+    const transitionPredicates = new Set([
+        "causes",
+        "caused_by",
+        "results_in_event",
+        "leads_to",
+        "produces_shift",
+        "revises",
+        "resolved_by",
+        "stabilizes",
+        "destabilizes",
+        "opens",
+        "closes",
+        "evolves_to",
+        "branches_to",
+        "merges_into",
+        "transitions_to_phase",
+        "shifts_regime",
+        "triggered_by",
+        "mitigates",
+        "attempts_to_resolve",
+    ]);
+    if (transitionPredicates.has(predicate)) {
+        return true;
+    }
+
+    const qualifiers = [
+        String(item.qualifiers?.aspect || ""),
+        String(item.qualifiers?.context || ""),
+        String(item.qualifiers?.polarity || ""),
+        String(item.qualifiers?.certainty || ""),
+    ]
+        .join(" ")
+        .toLowerCase();
+    return (
+        qualifiers.includes("change") ||
+        qualifiers.includes("shift") ||
+        qualifiers.includes("reversal") ||
+        qualifiers.includes("resolved") ||
+        qualifiers.includes("invalid") ||
+        qualifiers.includes("reactivat")
+    );
 }

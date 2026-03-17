@@ -240,6 +240,7 @@ function evaluateQuestion({
         ignition_guided_vertical_plan_anchor_labels: ignitionGuided.verticalPlanAnchorLabels,
         ignition_guided_vertical_seed_bundle_ids: ignitionGuided.verticalSeedBundleIds,
         ignition_guided_state_bundle_terms: ignitionGuided.stateBundleTerms,
+        ignition_guided_state_seed_span_ids: ignitionGuided.stateSeedSpanIds,
         ignition_guided_modes: ignitionGuided.modes,
         ignition_guided_background_turns: ignitionGuided.backgroundTurns,
         ignition_guided_profile_bundle_ids: ignitionGuided.profileBundleIds,
@@ -459,6 +460,9 @@ function renderSummaryMarkdown(summary) {
         );
         lines.push(
             `- ignition_guided_state_bundle_terms: ${(item.ignition_guided_state_bundle_terms || []).join(" | ") || "(none)"}`
+        );
+        lines.push(
+            `- ignition_guided_state_seed_span_ids: ${(item.ignition_guided_state_seed_span_ids || []).join(", ") || "(none)"}`
         );
         lines.push(`- ignition_guided_modes: ${(item.ignition_guided_modes || []).join(", ") || "(none)"}`);
         lines.push(`- ignition_guided_background_turns: ${item.ignition_guided_background_turns ?? 0}`);
@@ -714,7 +718,7 @@ function runIgnitionGuidedSearch({
             .map((spanId) => spanById.get(spanId)?.narrativeRecordId || "")
             .filter(Boolean)
     );
-    const hits =
+    const searchHits =
         bundles.length > 0 || verticalPlanLabels.length > 0 || mergedBoostSpanIds.length > 0
             ? searchArchiveSpans({
                   workspace,
@@ -730,6 +734,12 @@ function runIgnitionGuidedSearch({
                   boostSpanIds: mergedBoostSpanIds,
               })
             : [];
+    const supportSeedHits = buildStateSupportSeedHits({
+        bundles,
+        evidenceSpans,
+        topK,
+    });
+    const hits = mergeSeedHits(searchHits, supportSeedHits, topK);
     return {
         bundleIds: bundles.map((bundle) => bundle.bundleId),
         anchorLabels,
@@ -741,9 +751,46 @@ function runIgnitionGuidedSearch({
         verticalPlanAnchorLabels: verticalPlanLabels,
         verticalSeedBundleIds: verticalSeedBundles.map((bundle) => bundle.bundleId),
         stateBundleTerms,
+        stateSeedSpanIds: supportSeedHits.map((hit) => hit.spanId),
         verticalDiagnostics,
         hits,
     };
+}
+
+function buildStateSupportSeedHits({ bundles, evidenceSpans, topK }) {
+    const spanById = new Map((evidenceSpans || []).map((span) => [span.id, span]));
+    const seedSpanIds = uniqueStrings(
+        (bundles || [])
+            .filter((bundle) => String(bundle.packType || "") === "state")
+            .flatMap((bundle) => bundle.bestEvidenceSpanIds || bundle.evidenceSpanIds || [])
+    ).slice(0, Math.max(topK * 2, 6));
+    return seedSpanIds
+        .map((spanId, index) => {
+            const span = spanById.get(spanId);
+            if (!span) return null;
+            return {
+                spanId: span.id,
+                score: 2 - index * 0.01,
+                spanText: span.text,
+                rawText: span.text,
+                charStart: span.charStart,
+                charEnd: span.charEnd,
+            };
+        })
+        .filter(Boolean);
+}
+
+function mergeSeedHits(searchHits, seedHits, topK) {
+    const merged = [];
+    const seen = new Set();
+    for (const hit of [...(seedHits || []), ...(searchHits || [])]) {
+        const spanId = String(hit?.spanId || "").trim();
+        if (!spanId || seen.has(spanId)) continue;
+        seen.add(spanId);
+        merged.push(hit);
+        if (merged.length >= topK) break;
+    }
+    return merged;
 }
 
 function benchmarkScannerConfig() {

@@ -591,12 +591,31 @@ function resolveStateLineNode(
 }
 
 function readableStateLabel(node: V8GraphNode): string {
-    return String(node.canonicalLabel || "")
-        .replace(
-            /^(current|latest|now|final|earlier|previous|original|initial|former|derived)\s+(relationship|state):\s*/i,
-            ""
-        )
-        .trim();
+    const raw = String(node.canonicalLabel || "").trim();
+    if (!raw) return "";
+    const lower = raw.toLowerCase();
+    const statuses = [
+        "current",
+        "latest",
+        "now",
+        "final",
+        "earlier",
+        "previous",
+        "original",
+        "initial",
+        "former",
+        "derived",
+    ];
+    const kinds = ["relationship:", "state:"];
+    for (const status of statuses) {
+        for (const kind of kinds) {
+            const prefix = `${status} ${kind}`;
+            if (lower.startsWith(prefix)) {
+                return raw.slice(prefix.length).trim();
+            }
+        }
+    }
+    return raw;
 }
 
 function toStateClause(node: V8GraphNode, flavor: "current" | "previous"): string {
