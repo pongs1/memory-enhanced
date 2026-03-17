@@ -92,35 +92,6 @@ const EDGE_PRIOR_BY_TYPE: Record<string, string[]> = {
     risk_state: ["state_supersedes_state", "state_refines_state", "causes", "prevents", "valid_during"],
 };
 
-const EDGE_QUERY_CUES_BY_TYPE: Record<string, string[]> = {
-    supports: ["支持", "依据", "证据", "证明", "support", "evidence", "confirm"],
-    evidenced_by: ["证据", "依据", "evidence", "backed by", "grounded by"],
-    grounded_by: ["依据", "基础", "grounded by", "based on"],
-    contradicts: ["矛盾", "冲突", "否定", "推翻", "contradict", "refute", "reject"],
-    conflicts_with: ["冲突", "互斥", "不兼容", "conflict", "incompatible"],
-    before: ["之前", "先", "earlier", "before"],
-    after: ["之后", "后", "later", "after"],
-    evolves_to: ["演变", "变成", "发展为", "evolve", "become"],
-    supersedes: ["替代", "取代", "废弃", "升级为", "supersede", "replace", "deprecate"],
-    state_supersedes_state: ["改为", "改成", "从...到...", "切换", "replaced", "switched"],
-    state_refines_state: ["细化", "限定", "refine", "scope"],
-    valid_during: ["期间", "阶段", "当时", "during", "in phase"],
-    uses: ["使用", "采用", "基于", "use", "using"],
-    produces: ["产生", "生成", "输出", "produce", "output"],
-    enables: ["使得", "可以", " enable", "allows", "enables"],
-    prevents: ["阻止", "避免", "防止", "prevent", "avoid", "block"],
-    conditioned_on: ["条件", "前提", "依赖", "condition", "depends on"],
-    requires: ["需要", "要求", "必须", "require", "needs"],
-    targets: ["目标", "面向", "针对", "target", "objective"],
-    decides: ["决定", "选定", "采用", "decide", "choose"],
-    refines: ["细化", "补充", "收紧", "refine", "tighten"],
-    is_a: ["是", "属于", "类型", "kind of"],
-    part_of: ["组成部分", "属于", "part of", "component of"],
-    better_than: ["更好", "优于", "better than"],
-    worse_than: ["更差", "不如", "worse than"],
-    causes: ["导致", "引起", "因为", "cause", "lead to", "result in"],
-};
-
 const CONTROL_MEMORY_TYPES = new Set([
     "preference",
     "goal",
@@ -845,38 +816,12 @@ function pickCandidateEdgeType(
 ): string {
     if (candidateEdgeTypes.length === 0) return "supports";
     const normalized = (spanText || "").toLowerCase();
-    const includes = (pattern: RegExp) => pattern.test(normalized);
     const scoreByEdgeType = new Map<string, number>();
     for (const edgeType of candidateEdgeTypes) {
         const cueScore = scoreEdgeTypeCueMatch(edgeType, normalized);
         if (cueScore > 0) {
             scoreByEdgeType.set(edgeType, cueScore);
         }
-    }
-    const boost = (preferred: string[], delta: number): void => {
-        for (const edgeType of preferred) {
-            if (!candidateEdgeTypes.includes(edgeType)) continue;
-            scoreByEdgeType.set(edgeType, (scoreByEdgeType.get(edgeType) || 0) + delta);
-        }
-    };
-
-    if (includes(/改为|改成|切换|替换|废弃|取代|从.*到|switch|replace|deprecat|migrat/)) {
-        boost(["state_supersedes_state", "supersedes", "evolves_to"], 1.4);
-    }
-    if (includes(/冲突|矛盾|互斥|不兼容|conflict|incompatib|mutually exclusive/)) {
-        boost(["conflicts_with", "contradicts"], 1.2);
-    }
-    if (includes(/因为|导致|因此|所以|从而|cause|lead to|result in|due to/)) {
-        boost(["causes", "enables", "prevents", "conditioned_on"], 1.1);
-    }
-    if (includes(/支持|证明|依据|evidence|support|validate|confirm/)) {
-        boost(["supports", "evidenced_by", "grounded_by"], 1.1);
-    }
-    if (includes(/反对|否定|推翻|reject|deny|refute|disprove/)) {
-        boost(["contradicts", "conflicts_with"], 1.1);
-    }
-    if (includes(/先|后|之前|之后|before|after|earlier|later/)) {
-        boost(["before", "after", "valid_during"], 1.0);
     }
 
     const ranked = candidateEdgeTypes
@@ -893,16 +838,15 @@ function pickCandidateEdgeType(
 
 function scoreEdgeTypeCueMatch(edgeType: string, text: string): number {
     if (!text) return 0;
-    const cues = expandEdgeQueryCues(edgeType);
+    const spanTokens = new Set(tokenizeTerms([text]));
+    const cues = tokenizeTerms(expandEdgeQueryCues(edgeType));
     if (cues.length === 0) return 0;
     let hits = 0;
     for (const cue of cues) {
-        const normalizedCue = cue.trim().toLowerCase();
-        if (!normalizedCue || normalizedCue.length < 2) continue;
-        if (!text.includes(normalizedCue)) continue;
-        hits += normalizedCue.length >= 8 ? 1.2 : normalizedCue.length >= 4 ? 1 : 0.8;
+        if (!spanTokens.has(cue)) continue;
+        hits += cue.length >= 8 ? 1.2 : cue.length >= 4 ? 1 : 0.8;
     }
-    return round3(hits);
+    return round3(hits / Math.max(1, Math.min(cues.length, 6)));
 }
 
 function selectShardHintsByLane(
@@ -1016,12 +960,11 @@ function uniqueStrings(values: string[]): string[] {
 function expandEdgeQueryCues(edgeType: string): string[] {
     const normalized = (edgeType || "").trim();
     if (!normalized) return [];
-    const direct = EDGE_QUERY_CUES_BY_TYPE[normalized] || [];
     const fallback = normalized
         .split(/[_\-]+/g)
         .map((part) => part.trim())
         .filter((part) => part.length >= 3);
-    return Array.from(new Set([...direct, ...fallback]));
+    return Array.from(new Set([normalized, ...fallback]));
 }
 
 function scoreSpanAgainstTerms(

@@ -576,6 +576,7 @@ function summarizeStateLine(
 
     const currentNode = resolveStateLineNode(nodeLookup, supersedeEdge.src);
     let previousNode = resolveStateLineNode(nodeLookup, supersedeEdge.dst);
+    const middleNodes: V8GraphNode[] = [];
     let cursor = previousNode ? supersedeBySrc.get(previousNode.id) || null : null;
     const visited = new Set<string>([
         currentNode?.id || "",
@@ -584,6 +585,9 @@ function summarizeStateLine(
     while (cursor) {
         const ancestor = resolveStateLineNode(nodeLookup, cursor.dst);
         if (!ancestor || visited.has(ancestor.id)) break;
+        if (previousNode) {
+            middleNodes.push(previousNode);
+        }
         previousNode = ancestor;
         visited.add(ancestor.id);
         cursor = supersedeBySrc.get(ancestor.id) || null;
@@ -593,9 +597,17 @@ function summarizeStateLine(
     const currentSummary = toStateClause(currentNode, "current");
     const previousSummary = toStateClause(previousNode, "previous");
     const title = readableStateLabel(currentNode) || readableStateLabel(previousNode);
+    const middleSummary =
+        middleNodes.length > 0
+            ? `via ${middleNodes
+                  .slice(0, 2)
+                  .map((node) => toStateClause(node, "intermediate"))
+                  .join(" -> ")}`
+            : "";
     const clauses = [
         currentSummary,
         previousSummary ? `replaces ${previousSummary}` : "",
+        middleSummary,
         eventNode?.canonicalLabel ? `changed by ${readableStateLabel(eventNode)}` : "",
     ].filter(Boolean);
     return {
@@ -644,11 +656,18 @@ function readableStateLabel(node: V8GraphNode): string {
     return raw;
 }
 
-function toStateClause(node: V8GraphNode, flavor: "current" | "previous"): string {
+function toStateClause(
+    node: V8GraphNode,
+    flavor: "current" | "previous" | "intermediate"
+): string {
     const label = readableStateLabel(node);
     if (!label) return "";
     if (node.memoryType === "relationship_state") {
-        return flavor === "current" ? `relationship now: ${label}` : `relationship: ${label}`;
+        if (flavor === "current") return `relationship now: ${label}`;
+        if (flavor === "intermediate") return `relationship: ${label}`;
+        return `relationship: ${label}`;
     }
-    return flavor === "current" ? `state now: ${label}` : `state: ${label}`;
+    if (flavor === "current") return `state now: ${label}`;
+    if (flavor === "intermediate") return `state: ${label}`;
+    return `state: ${label}`;
 }
