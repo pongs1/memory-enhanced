@@ -170,6 +170,7 @@ export function buildRuntimeProjections(input: {
     recallBundles: V8RecallBundleProjection[];
 } {
     const spanById = new Map(input.evidenceSpans.map((span) => [span.id, span]));
+    const nodeById = new Map(input.nodes.map((node) => [node.id, node]));
     const edgeKinds = loadEdgeCatalog();
 
     const ignitionNodes: V8IgnitionNodeProjection[] = [];
@@ -246,9 +247,10 @@ export function buildRuntimeProjections(input: {
             .slice()
             .sort((a, b) => b.node.state.confidence - a.node.state.confidence);
         const nodeIds = sorted.map((item) => item.node.id);
+        const stateLine = summarizeStateLine(nodeIds, nodeById, input.edges);
         const labelTop = sorted.map((item) => item.label).filter(Boolean).slice(0, 3);
-        const title = labelTop[0] || bundleId;
-        const summaryText = unique(labelTop).join(" | ") || title;
+        const title = stateLine?.title || labelTop[0] || bundleId;
+        const summaryText = stateLine?.summaryText || unique(labelTop).join(" | ") || title;
         const sourceRefs = unique(sorted.map((item) => item.sourceRef || "").filter(Boolean));
         const evidenceSpanIds = unique(
             sorted.flatMap((item) => item.node.evidenceSpanIds || [])
@@ -263,7 +265,7 @@ export function buildRuntimeProjections(input: {
             evidenceSpanIds,
             bestEvidenceSpanIds,
             summaryText,
-            packType: resolveBundlePackType(sorted.map((item) => item.packType)),
+            packType: stateLine ? "state" : resolveBundlePackType(sorted.map((item) => item.packType)),
         });
     }
     for (const bundle of groupedBundles) {
@@ -436,9 +438,10 @@ function buildBundlesFromCandidates(
                 .slice()
                 .sort((a, b) => b.node.state.confidence - a.node.state.confidence);
             const nodeIds = sorted.map((item) => item.node.id);
+            const stateLine = summarizeStateLine(nodeIds, candidateById, edges);
             const labelTop = sorted.slice(0, 3).map((item) => item.label).filter(Boolean);
-            const title = labelTop[0] || `bundle_${bundleSeq}`;
-            const summaryText = unique(labelTop).join(" | ") || title;
+            const title = stateLine?.title || labelTop[0] || `bundle_${bundleSeq}`;
+            const summaryText = stateLine?.summaryText || unique(labelTop).join(" | ") || title;
             const sourceRefs = unique(
                 sorted
                     .map((item) => item.sourceRef || "")
@@ -453,7 +456,7 @@ function buildBundlesFromCandidates(
                 title,
                 summaryText,
                 kind: resolveBundleKind(sorted.map((item) => item.kind)),
-                packType: resolveGroupPackType(sorted.map((item) => item.packType)),
+                packType: stateLine ? "state" : resolveGroupPackType(sorted.map((item) => item.packType)),
                 nodeIds,
                 sourceRefs,
                 evidenceSpanIds: evidenceSpanIds.slice(0, 80),
@@ -534,4 +537,53 @@ function selectBestSpans(
         .sort((a, b) => (b?.score || 0) - (a?.score || 0))
         .slice(0, limit)
         .map((span) => span!.id);
+}
+
+function summarizeStateLine(
+    nodeIds: string[],
+    nodeLookup:
+        | Map<string, V8GraphNode>
+        | Map<string, { node: V8GraphNode }>,
+    edges: V8GraphEdge[]
+): { title: string; summaryText: string } | null {
+    const nodeIdSet = new Set(nodeIds);
+    let supersedeEdge: V8GraphEdge | null = null;
+    let changingEdge: V8GraphEdge | null = null;
+    for (const edge of edges) {
+        if (!nodeIdSet.has(edge.src) || !nodeIdSet.has(edge.dst)) continue;
+        if (edge.type === "state_supersedes_state" && !supersedeEdge) {
+            supersedeEdge = edge;
+        }
+        if (edge.type === "state_changed_by_event" && !changingEdge) {
+            changingEdge = edge;
+        }
+    }
+    if (!supersedeEdge) return null;
+
+    const currentNode = resolveStateLineNode(nodeLookup, supersedeEdge.src);
+    const previousNode = resolveStateLineNode(nodeLookup, supersedeEdge.dst);
+    if (!currentNode || !previousNode) return null;
+    const eventNode = changingEdge ? resolveStateLineNode(nodeLookup, changingEdge.dst) : null;
+    const title = currentNode.canonicalLabel || previousNode.canonicalLabel;
+    const clauses = [
+        currentNode.canonicalLabel || "",
+        previousNode.canonicalLabel ? `replaces ${previousNode.canonicalLabel}` : "",
+        eventNode?.canonicalLabel ? `changed by ${eventNode.canonicalLabel}` : "",
+    ].filter(Boolean);
+    return {
+        title,
+        summaryText: clauses.join("; "),
+    };
+}
+
+function resolveStateLineNode(
+    nodeLookup:
+        | Map<string, V8GraphNode>
+        | Map<string, { node: V8GraphNode }>,
+    nodeId: string
+): V8GraphNode | null {
+    const value = nodeLookup.get(nodeId);
+    if (!value) return null;
+    if ("canonicalLabel" in value) return value;
+    return value.node || null;
 }
