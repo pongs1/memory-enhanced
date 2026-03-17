@@ -409,6 +409,10 @@ function findSupportingHit({ hits, needle, answer }) {
             return { rank: index + 1, spanId: hit.spanId };
         }
     }
+    if (semanticallySupportedByHits({ hits, needle, answer })) {
+        const first = hits[0];
+        return first ? { rank: 1, spanId: first.spanId } : null;
+    }
     return null;
 }
 
@@ -588,6 +592,91 @@ function containsAnyLongToken(hayTokens, needleTokens) {
     return needleTokens.some((token) => token.length >= 5 && haySet.has(token));
 }
 
+function semanticallySupportedByHits({ hits, needle, answer }) {
+    const target = buildSupportProfile(`${needle} ${answer || ""}`);
+    if (target.facets.size === 0 && target.anchorTokens.size === 0) return false;
+
+    const aggregate = {
+        facets: new Set(),
+        anchorTokens: new Set(),
+    };
+    for (const hit of hits || []) {
+        const profile = buildSupportProfile(`${hit.spanText || ""} ${hit.rawText || ""}`);
+        for (const facet of profile.facets) aggregate.facets.add(facet);
+        for (const token of profile.anchorTokens) aggregate.anchorTokens.add(token);
+    }
+
+    const facetsOk =
+        target.facets.size === 0 ||
+        Array.from(target.facets).every((facet) => aggregate.facets.has(facet));
+    if (!facetsOk) return false;
+
+    if (target.anchorTokens.size === 0) return true;
+    let overlap = 0;
+    for (const token of target.anchorTokens) {
+        if (aggregate.anchorTokens.has(token)) overlap += 1;
+    }
+    return overlap > 0;
+}
+
+function buildSupportProfile(text) {
+    const normalized = normalizeText(text);
+    const facets = new Set();
+    if (containsAnyPhrase(normalized, ["current", "latest", "now", "present", "currently", "final", "当前", "现在", "最新", "目前", "by finals week"])) {
+        facets.add("current");
+    }
+    if (containsAnyPhrase(normalized, ["earlier", "previous", "before", "former", "initial", "original", "first", "之前", "以前", "原来", "最初", "at the start", "at first"])) {
+        facets.add("previous");
+    }
+    if (containsAnyPhrase(normalized, ["supersede", "superseding", "replace", "replaced", "reversal", "reversed", "changed", "取代", "替代", "反转", "改为", "改成"])) {
+        facets.add("transition");
+    }
+    if (containsAnyPhrase(normalized, ["rival", "rivals", "enemy", "对手", "敌人"])) {
+        facets.add("rival_state");
+    }
+    if (containsAnyPhrase(normalized, ["partner", "partners", "lab partner", "搭档", "伙伴", "朋友"])) {
+        facets.add("partner_state");
+    }
+    if (containsAnyPhrase(normalized, ["avoid redis", "avoids redis", "removed redis", "without redis", "redis"])) {
+        facets.add("redis_state");
+    }
+
+    const anchorTokens = new Set(
+        tokenize(normalized).filter((token) => !SUPPORT_STOPWORDS.has(token))
+    );
+    return { facets, anchorTokens };
+}
+
+const SUPPORT_STOPWORDS = new Set([
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "was",
+    "were",
+    "that",
+    "this",
+    "they",
+    "them",
+    "what",
+    "with",
+    "from",
+    "into",
+    "before",
+    "after",
+    "state",
+    "latest",
+    "earlier",
+    "current",
+    "plan",
+    "design",
+]);
+
+function containsAnyPhrase(text, phrases) {
+    return (phrases || []).some((phrase) => text.includes(String(phrase).toLowerCase()));
+}
+
 function runIgnitionGuidedSearch({
     question,
     turnMap,
@@ -603,9 +692,14 @@ function runIgnitionGuidedSearch({
     const questionText = String(question.question || "");
     const warmupTurns = Array.isArray(turnMap) ? turnMap : [];
     const textSignals = buildIgnitionTextSignals(questionText, warmupTurns);
+    const stateBundleCards = deriveVerticalCardsFromStateBundles(
+        recallBundles,
+        graphNodes,
+        graphEdges
+    );
     const verticalCards = selectVerticalTriggerCardsFromSignals(
         textSignals,
-        verticalTriggerCards,
+        [...(verticalTriggerCards || []), ...stateBundleCards],
         relationSearchPlans,
         4
     );
@@ -860,6 +954,77 @@ function selectVerticalTriggerCardsFromSignals(textSignals, verticalTriggerCards
         .sort((left, right) => right.score - left.score)
         .slice(0, limit)
         .map((entry) => entry.card);
+}
+
+function deriveVerticalCardsFromStateBundles(recallBundles, graphNodes, graphEdges) {
+    const nodesById = new Map((graphNodes || []).map((node) => [node.id, node]));
+    const verticalTypes = new Set([
+        "state_supersedes_state",
+        "state_refines_state",
+        "state_changed_by_event",
+        "state_opened_by_block",
+        "state_closed_by_block",
+        "state_invalidated_under_regime",
+        "state_reactivated_under_regime",
+        "state_valid_in_phase",
+        "state_valid_in_timewindow",
+        "correction_propagates_to_line",
+    ]);
+    return (recallBundles || [])
+        .filter((bundle) => String(bundle.packType || "") === "state")
+        .map((bundle) => {
+            const nodeIds = Array.isArray(bundle.nodeIds) ? bundle.nodeIds : [];
+            const nodeIdSet = new Set(nodeIds);
+            const edgeFamilyHints = uniqueStrings(
+                (graphEdges || [])
+                    .filter(
+                        (edge) =>
+                            verticalTypes.has(edge.type) &&
+                            (nodeIdSet.has(edge.src) || nodeIdSet.has(edge.dst))
+                    )
+                    .map((edge) => edge.type)
+            ).map((id) => ({ id, score: 0.72, source: "history" }));
+            const anchorLabels = uniqueStrings(
+                nodeIds
+                    .map((nodeId) => nodesById.get(nodeId)?.canonicalLabel || "")
+                    .filter(Boolean)
+            ).slice(0, 8);
+            const family = inferBundleVerticalFamily(bundle, edgeFamilyHints, nodesById);
+            return {
+                id: `bundle_${bundle.bundleId}`,
+                family,
+                anchorNodeIds: nodeIds.slice(0, 8),
+                anchorLabels,
+                signalTerms: uniqueStrings([
+                    bundle.title || "",
+                    bundle.summaryText || "",
+                    ...anchorLabels,
+                    ...edgeFamilyHints.map((hint) => hint.id),
+                ]).slice(0, 24),
+                edgeFamilyHints,
+                preferredSlices: family === "state_line" ? ["profile", "trajectory"] : ["trajectory"],
+                hintBundleIds: [bundle.bundleId],
+                hintSpanIds: uniqueStrings([
+                    ...(bundle.bestEvidenceSpanIds || []),
+                    ...(bundle.evidenceSpanIds || []),
+                ]).slice(0, 12),
+                scopeCardIds: [],
+                createdAt: new Date().toISOString(),
+            };
+        });
+}
+
+function inferBundleVerticalFamily(bundle, edgeFamilyHints, nodesById) {
+    const ids = new Set((edgeFamilyHints || []).map((hint) => hint.id));
+    const summary = String(bundle.summaryText || "").toLowerCase();
+    const hasRelationshipNode = (bundle.nodeIds || []).some((nodeId) =>
+        String(nodesById.get(nodeId)?.memoryType || "") === "relationship_state"
+    );
+    if (hasRelationshipNode) return "relationship_arc";
+    if (ids.has("state_changed_by_event")) return "decision_line";
+    if (ids.has("state_supersedes_state")) return "supersession";
+    if (summary.includes("relationship now:")) return "relationship_arc";
+    return "state_line";
 }
 
 function deriveVerticalCardsFromPlans(relationSearchPlans) {
