@@ -25,6 +25,7 @@ async function main() {
     const workspace = path.join(outRoot, benchmark, sampleId);
     const irLlmCommand = args.ir_llm_command ? String(args.ir_llm_command) : undefined;
     const ruleIrMode = args.rule_ir_mode ? String(args.rule_ir_mode) : "off";
+    const hypothesis = args.hypothesis ? String(args.hypothesis) : null;
 
     prepareWorkspace({
         preparedSampleDir,
@@ -73,8 +74,24 @@ async function main() {
     const summary = {
         benchmark,
         sample_id: sampleId,
+        evaluation_profile: "compiled_memory_recall_proxy",
+        hypothesis,
         ir_llm_command: irLlmCommand || null,
         rule_ir_mode: ruleIrMode,
+        compiler_loop_executed: true,
+        online_loop_probe: "scanner_replay_on_compiled_memory",
+        measures: [
+            "offline compile artifact quality",
+            "raw archive retrieval quality on compiled memory",
+            "ignition-guided retrieval quality on compiled memory",
+            "support-pack completeness under replayed text signals",
+        ],
+        does_not_measure: [
+            "true live lag between hot recall and background compile",
+            "partial-memory behavior before compile finishes",
+            "long-run feedback convergence",
+            "wall-clock scheduler timing effects",
+        ],
         question_count: questions.length,
         top_k: topK,
         evidence_spans_path: store.evidenceSpans,
@@ -422,6 +439,12 @@ function renderSummaryMarkdown(summary) {
     lines.push("");
     lines.push(`- benchmark: ${summary.benchmark}`);
     lines.push(`- sample_id: ${summary.sample_id}`);
+    lines.push(`- evaluation_profile: ${summary.evaluation_profile}`);
+    if (summary.hypothesis) {
+        lines.push(`- hypothesis: ${summary.hypothesis}`);
+    }
+    lines.push(`- compiler_loop_executed: ${summary.compiler_loop_executed ? "yes" : "no"}`);
+    lines.push(`- online_loop_probe: ${summary.online_loop_probe}`);
     lines.push(`- build_llm_status: ${summary.build_llm_status ?? "unknown"}`);
     lines.push(`- build_ir_llm_items: ${summary.build_ir_llm_items ?? "unknown"}`);
     lines.push(`- build_ir_fallback_items: ${summary.build_ir_fallback_items ?? "unknown"}`);
@@ -433,6 +456,12 @@ function renderSummaryMarkdown(summary) {
     lines.push(`- static_guided_full_support_hit_at_${summary.top_k}: ${summary.static_guided_full_support_hit_at_k}/${summary.question_count}`);
     lines.push(`- ignition_guided_hit_at_${summary.top_k}: ${summary.ignition_guided_hit_at_k}/${summary.question_count}`);
     lines.push(`- ignition_guided_full_support_hit_at_${summary.top_k}: ${summary.ignition_guided_full_support_hit_at_k}/${summary.question_count}`);
+    lines.push("");
+    lines.push("## Validation Contract");
+    lines.push("");
+    lines.push("- This runner evaluates recall on a fully compiled memory workspace.");
+    lines.push("- It measures retrieval/support quality on top of compiled graph, bundles, and replayed scanner signals.");
+    lines.push("- It does not measure true asynchronous lag between hot recall and background compilation.");
     lines.push("");
     for (const item of summary.results) {
         lines.push(`## ${item.question_id}`);
@@ -1265,6 +1294,7 @@ function printHelp() {
             "Usage:",
             "  node scripts/benchmark-eval-runner.mjs --prepared-sample <dir> [--top-k 8] [--out <dir>]",
             "  node scripts/benchmark-eval-runner.mjs --prepared-sample <dir> [--ir-llm-command '<cmd>'] [--rule-ir-mode micro_light]",
+            "  node scripts/benchmark-eval-runner.mjs --prepared-sample <dir> [--hypothesis 'what this run is validating']",
             "",
             "Expected prepared sample dir contents:",
             "  session_narrative.md",
