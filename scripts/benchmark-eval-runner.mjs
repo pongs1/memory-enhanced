@@ -594,57 +594,56 @@ function containsAnyLongToken(hayTokens, needleTokens) {
 
 function semanticallySupportedByHits({ hits, needle, answer }) {
     const target = buildSupportProfile(`${needle} ${answer || ""}`);
-    if (target.facets.size === 0 && target.anchorTokens.size === 0) return false;
+    if (target.segments.length === 0 && target.anchorTokens.size === 0) return false;
 
-    const aggregate = {
-        facets: new Set(),
-        anchorTokens: new Set(),
-    };
-    for (const hit of hits || []) {
-        const profile = buildSupportProfile(`${hit.spanText || ""} ${hit.rawText || ""}`);
-        for (const facet of profile.facets) aggregate.facets.add(facet);
-        for (const token of profile.anchorTokens) aggregate.anchorTokens.add(token);
+    const hitProfiles = (hits || []).map((hit) =>
+        buildSupportProfile(`${hit.spanText || ""} ${hit.rawText || ""}`)
+    );
+    const aggregateTokens = new Set(
+        hitProfiles.flatMap((profile) => Array.from(profile.anchorTokens))
+    );
+
+    let coveredSegments = 0;
+    for (const segment of target.segments) {
+        const matched = hitProfiles.some((profile) =>
+            segmentOverlapScore(profile.segmentTokens, segment.tokens) >= 0.45
+        );
+        if (matched) coveredSegments += 1;
     }
 
-    const facetsOk =
-        target.facets.size === 0 ||
-        Array.from(target.facets).every((facet) => aggregate.facets.has(facet));
-    if (!facetsOk) return false;
-
-    if (target.anchorTokens.size === 0) return true;
-    let overlap = 0;
+    let anchorOverlap = 0;
     for (const token of target.anchorTokens) {
-        if (aggregate.anchorTokens.has(token)) overlap += 1;
+        if (aggregateTokens.has(token)) anchorOverlap += 1;
     }
-    return overlap > 0;
+
+    const segmentCoverage =
+        target.segments.length > 0 ? coveredSegments / target.segments.length : 0;
+    const anchorCoverage =
+        target.anchorTokens.size > 0 ? anchorOverlap / target.anchorTokens.size : 0;
+
+    if (target.segments.length > 0 && segmentCoverage >= 0.6 && anchorCoverage >= 0.2) {
+        return true;
+    }
+    if (target.segments.length === 0 && anchorCoverage >= 0.35) {
+        return true;
+    }
+    return segmentCoverage >= 0.8;
 }
 
 function buildSupportProfile(text) {
     const normalized = normalizeText(text);
-    const facets = new Set();
-    if (containsAnyPhrase(normalized, ["current", "latest", "now", "present", "currently", "final", "当前", "现在", "最新", "目前", "by finals week"])) {
-        facets.add("current");
-    }
-    if (containsAnyPhrase(normalized, ["earlier", "previous", "before", "former", "initial", "original", "first", "之前", "以前", "原来", "最初", "at the start", "at first"])) {
-        facets.add("previous");
-    }
-    if (containsAnyPhrase(normalized, ["supersede", "superseding", "replace", "replaced", "reversal", "reversed", "changed", "取代", "替代", "反转", "改为", "改成"])) {
-        facets.add("transition");
-    }
-    if (containsAnyPhrase(normalized, ["rival", "rivals", "enemy", "对手", "敌人"])) {
-        facets.add("rival_state");
-    }
-    if (containsAnyPhrase(normalized, ["partner", "partners", "lab partner", "搭档", "伙伴", "朋友"])) {
-        facets.add("partner_state");
-    }
-    if (containsAnyPhrase(normalized, ["avoid redis", "avoids redis", "removed redis", "without redis", "redis"])) {
-        facets.add("redis_state");
-    }
-
     const anchorTokens = new Set(
         tokenize(normalized).filter((token) => !SUPPORT_STOPWORDS.has(token))
     );
-    return { facets, anchorTokens };
+    const segments = splitSupportSegments(normalized).map((segment) => ({
+        text: segment,
+        tokens: tokenize(segment).filter((token) => !SUPPORT_STOPWORDS.has(token)),
+    }));
+    return {
+        anchorTokens,
+        segments: segments.filter((segment) => segment.tokens.length > 0),
+        segmentTokens: segments.flatMap((segment) => segment.tokens),
+    };
 }
 
 const SUPPORT_STOPWORDS = new Set([
@@ -666,15 +665,27 @@ const SUPPORT_STOPWORDS = new Set([
     "before",
     "after",
     "state",
-    "latest",
-    "earlier",
-    "current",
     "plan",
     "design",
 ]);
 
-function containsAnyPhrase(text, phrases) {
-    return (phrases || []).some((phrase) => text.includes(String(phrase).toLowerCase()));
+function splitSupportSegments(text) {
+    return String(text || "")
+        .split(/(?:\s*[.;!?]\s*|\s+\band\b\s+|\s+\bbut\b\s+|\s+\bthen\b\s+|\s+\bwhile\b\s+|；|。|，|、|并且|但是|然后|而)/)
+        .map((segment) => segment.trim())
+        .filter((segment) => segment.length >= 6);
+}
+
+function segmentOverlapScore(hitTokens, targetTokens) {
+    if (!Array.isArray(hitTokens) || !Array.isArray(targetTokens) || targetTokens.length === 0) {
+        return 0;
+    }
+    const hitSet = new Set(hitTokens);
+    let matched = 0;
+    for (const token of targetTokens) {
+        if (hitSet.has(token)) matched += 1;
+    }
+    return matched / targetTokens.length;
 }
 
 function runIgnitionGuidedSearch({
@@ -853,12 +864,13 @@ function runIgnitionGuidedSearch({
 
 function buildStateSupportSeedHits({ bundles, evidenceSpans, topK }) {
     const spanById = new Map((evidenceSpans || []).map((span) => [span.id, span]));
-    const seedSpanIds = uniqueStrings(
-        (bundles || [])
-            .filter((bundle) => String(bundle.packType || "") === "state")
-            .flatMap((bundle) => bundle.bestEvidenceSpanIds || bundle.evidenceSpanIds || [])
-    ).slice(0, Math.max(topK * 2, 6));
-    return seedSpanIds
+    const stateBundles = (bundles || []).filter(
+        (bundle) => String(bundle.packType || "") === "state"
+    );
+    const seedSpanHits = uniqueStrings(
+        stateBundles.flatMap((bundle) => bundle.bestEvidenceSpanIds || bundle.evidenceSpanIds || [])
+    )
+        .slice(0, Math.max(topK * 2, 6))
         .map((spanId, index) => {
             const span = spanById.get(spanId);
             if (!span) return null;
@@ -872,6 +884,24 @@ function buildStateSupportSeedHits({ bundles, evidenceSpans, topK }) {
             };
         })
         .filter(Boolean);
+    const summaryHits = stateBundles
+        .map((bundle, index) => {
+            const summaryText = [bundle.title || "", bundle.summaryText || ""]
+                .filter(Boolean)
+                .join(". ")
+                .trim();
+            if (!summaryText) return null;
+            return {
+                spanId: `state_summary_${bundle.bundleId}`,
+                score: 1.4 - index * 0.01,
+                spanText: summaryText,
+                rawText: summaryText,
+                charStart: -1,
+                charEnd: -1,
+            };
+        })
+        .filter(Boolean);
+    return [...summaryHits, ...seedSpanHits].slice(0, Math.max(topK * 2, 6));
 }
 
 function mergeSeedHits(searchHits, seedHits, topK) {
@@ -1016,14 +1046,12 @@ function deriveVerticalCardsFromStateBundles(recallBundles, graphNodes, graphEdg
 
 function inferBundleVerticalFamily(bundle, edgeFamilyHints, nodesById) {
     const ids = new Set((edgeFamilyHints || []).map((hint) => hint.id));
-    const summary = String(bundle.summaryText || "").toLowerCase();
     const hasRelationshipNode = (bundle.nodeIds || []).some((nodeId) =>
         String(nodesById.get(nodeId)?.memoryType || "") === "relationship_state"
     );
     if (hasRelationshipNode) return "relationship_arc";
     if (ids.has("state_changed_by_event")) return "decision_line";
     if (ids.has("state_supersedes_state")) return "supersession";
-    if (summary.includes("relationship now:")) return "relationship_arc";
     return "state_line";
 }
 

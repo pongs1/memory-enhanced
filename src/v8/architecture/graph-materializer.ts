@@ -16,6 +16,7 @@ interface DerivedStateCandidate {
     stateNodeId: string;
     sourceItemId: string;
     edgeNodeId: string;
+    familyKey: string;
     anchorNodeIds: string[];
     anchorTokens: string[];
     timestampMs: number | null;
@@ -279,12 +280,11 @@ export function materializeGraph(
         if (item.itemType === "discourse_unit") continue;
         const cue = deriveStateCue(item);
         const isNativeState = isStateMemoryType(item.itemType);
-        if (!isNativeState && !cue) continue;
-
         const edgeNodeId = nodeIdByItemId.get(item.id);
         if (!edgeNodeId) continue;
         const semanticLinks = itemSemanticLinks.get(item.id);
         const stateMemoryType = deriveStateMemoryType(item, semanticLinks);
+        if (!isNativeState && !stateMemoryType) continue;
         const stateNodeId = isNativeState ? edgeNodeId : `node_state_${item.id}`;
         const validity = resolveStateValidity(item.validity, cue?.status);
 
@@ -353,12 +353,13 @@ export function materializeGraph(
             stateNodeId,
             sourceItemId: item.id,
             edgeNodeId,
+            familyKey: buildStateFamilyKey(item, stateMemoryType, semanticLinks),
             anchorNodeIds: [
                 semanticLinks?.subjectNodeId || "",
                 semanticLinks?.objectNodeId || "",
             ].filter(Boolean),
             anchorTokens: deriveAnchorTokens(item),
-            timestampMs: resolveItemTimestampMs(item, spanById),
+            timestampMs: resolveItemTimestampMs(item, spanById, unitById),
             statusRank: cue ? stateStatusRank(cue.status) : validity === "superseded" ? 0 : 1,
             validity,
         });
@@ -370,10 +371,44 @@ export function materializeGraph(
         .map((item) => ({
             item,
             edgeNodeId: nodeIdByItemId.get(item.id) || "",
-            timestampMs: resolveItemTimestampMs(item, spanById),
+            timestampMs: resolveItemTimestampMs(item, spanById, unitById),
             anchorTokens: deriveAnchorTokens(item),
         }))
         .filter((candidate) => candidate.edgeNodeId);
+
+    const stateNodesById = new Map(
+        nodes
+            .filter((node) => node.id.startsWith("node_state_") || isStateMemoryType(node.memoryType))
+            .map((node) => [node.id, node])
+    );
+    const familyBuckets = new Map<string, DerivedStateCandidate[]>();
+    for (const candidate of stateCandidates) {
+        const list = familyBuckets.get(candidate.familyKey) || [];
+        list.push(candidate);
+        familyBuckets.set(candidate.familyKey, list);
+    }
+    for (const family of familyBuckets.values()) {
+        family.sort((left, right) => {
+            const leftTs = left.timestampMs ?? Number.NEGATIVE_INFINITY;
+            const rightTs = right.timestampMs ?? Number.NEGATIVE_INFINITY;
+            return leftTs - rightTs;
+        });
+        for (let index = 0; index < family.length; index += 1) {
+            const candidate = family[index]!;
+            const inferredRank =
+                family.length === 1
+                    ? candidate.statusRank
+                    : index === family.length - 1
+                      ? 2
+                      : 0;
+            candidate.statusRank = Math.max(candidate.statusRank, inferredRank);
+            candidate.validity = candidate.statusRank >= 2 ? "active" : "superseded";
+            const node = stateNodesById.get(candidate.stateNodeId);
+            if (node) {
+                node.state.validity = candidate.validity;
+            }
+        }
+    }
 
     const transitionSeen = new Set<string>();
     for (const current of stateCandidates) {
@@ -381,10 +416,10 @@ export function materializeGraph(
         let bestScore = 0;
         for (const previous of stateCandidates) {
             if (previous.stateNodeId === current.stateNodeId) continue;
-            if (previous.statusRank >= current.statusRank) continue;
+            if (previous.familyKey !== current.familyKey) continue;
             const previousTime = previous.timestampMs ?? Number.NEGATIVE_INFINITY;
             const currentTime = current.timestampMs ?? Number.POSITIVE_INFINITY;
-            if (previousTime > currentTime) continue;
+            if (previousTime >= currentTime) continue;
             const score = stateCandidateSimilarity(current, previous);
             if (score <= bestScore || score < 0.16) continue;
             bestPrevious = previous;
@@ -789,34 +824,58 @@ function isStateMemoryType(itemType: V8MemoryItem["itemType"]): boolean {
 function deriveStateMemoryType(
     item: V8MemoryItem,
     semanticLinks?: { subjectNodeId: string; objectNodeId: string }
-): V8GraphNode["memoryType"] {
+): V8GraphNode["memoryType"] | null {
     if (isStateMemoryType(item.itemType)) {
         return item.itemType;
     }
 
     const predicate = String(item.predicate || "").trim().toLowerCase();
-    const hasDualAnchors = Boolean(semanticLinks?.subjectNodeId && semanticLinks?.objectNodeId);
-    const relationshipPredicate = new Set([
-        "involves",
-        "conflicts_with",
-        "supports",
-        "contradicts",
-        "similar_to",
-        "differs_from",
-        "better_than",
-        "worse_than",
-        "equivalent_to",
-        "before",
-        "after",
-        "similar_to",
-        "differs_from",
-    ]);
+    const subjectNodeId = semanticLinks?.subjectNodeId || "";
+    const objectNodeId = semanticLinks?.objectNodeId || "";
 
-    if (hasDualAnchors && relationshipPredicate.has(predicate)) {
-        return "relationship_state";
+    if (item.itemType === "claim") {
+        if (subjectNodeId && objectNodeId && objectNodeId !== subjectNodeId && predicate === "involves") {
+            return "relationship_state";
+        }
+        if (subjectNodeId || objectNodeId) {
+            return "topic_state";
+        }
     }
 
-    return "topic_state";
+    if (item.itemType === "decision" || item.itemType === "goal" || item.itemType === "constraint") {
+        return "topic_state";
+    }
+
+    return null;
+}
+
+function buildStateFamilyKey(
+    item: V8MemoryItem,
+    memoryType: V8GraphNode["memoryType"] | null,
+    semanticLinks?: { subjectNodeId: string; objectNodeId: string }
+): string {
+    const resolvedMemoryType = memoryType || item.itemType;
+    if (resolvedMemoryType === "relationship_state") {
+        const participantIds = [
+            semanticLinks?.subjectNodeId || "",
+            semanticLinks?.objectNodeId || "",
+        ]
+            .filter(Boolean)
+            .sort();
+        if (participantIds.length > 0) {
+            return [resolvedMemoryType, ...participantIds].join("|");
+        }
+    }
+
+    const primaryAnchorId =
+        semanticLinks?.subjectNodeId ||
+        semanticLinks?.objectNodeId ||
+        "";
+    if (primaryAnchorId) {
+        return `${resolvedMemoryType}|${primaryAnchorId}`;
+    }
+
+    return `${resolvedMemoryType}|${normalizeKey(item.subject || item.object || item.label)}`;
 }
 
 function deriveStateCue(item: V8MemoryItem): { status: string } | null {
@@ -908,16 +967,17 @@ function deriveStateScopeTargets(
             new Set([semanticLinks.subjectNodeId, semanticLinks.objectNodeId].filter(Boolean))
         );
     }
-    return semanticLinks.objectNodeId
-        ? [semanticLinks.objectNodeId]
-        : semanticLinks.subjectNodeId
-          ? [semanticLinks.subjectNodeId]
+    return semanticLinks.subjectNodeId
+        ? [semanticLinks.subjectNodeId]
+        : semanticLinks.objectNodeId
+          ? [semanticLinks.objectNodeId]
           : [];
 }
 
 function resolveItemTimestampMs(
     item: V8MemoryItem,
-    spanById: Map<string, V8EvidenceSpan>
+    spanById: Map<string, V8EvidenceSpan>,
+    unitById: Map<string, V8Unit>
 ): number | null {
     const qualifierTime = String(item.qualifiers?.time || "").trim();
     const qualifierMs = qualifierTime ? Date.parse(qualifierTime) : Number.NaN;
@@ -927,6 +987,10 @@ function resolveItemTimestampMs(
         if (!span?.timestamp) continue;
         const spanMs = Date.parse(span.timestamp);
         if (Number.isFinite(spanMs)) return spanMs;
+    }
+    const unit = (item.unitIds || []).map((unitId) => unitById.get(unitId)).find(Boolean);
+    if (unit) {
+        return unit.ordinal * 1_000_000 + unit.charStart;
     }
     return null;
 }
