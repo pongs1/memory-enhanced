@@ -564,11 +564,13 @@ function summarizeStateLine(
     const previousNode = resolveStateLineNode(nodeLookup, supersedeEdge.dst);
     if (!currentNode || !previousNode) return null;
     const eventNode = changingEdge ? resolveStateLineNode(nodeLookup, changingEdge.dst) : null;
-    const title = currentNode.canonicalLabel || previousNode.canonicalLabel;
+    const currentSummary = toStateClause(currentNode, "current");
+    const previousSummary = toStateClause(previousNode, "previous");
+    const title = readableStateLabel(currentNode) || readableStateLabel(previousNode);
     const clauses = [
-        currentNode.canonicalLabel || "",
-        previousNode.canonicalLabel ? `replaces ${previousNode.canonicalLabel}` : "",
-        eventNode?.canonicalLabel ? `changed by ${eventNode.canonicalLabel}` : "",
+        currentSummary,
+        previousSummary ? `previously ${previousSummary}` : "",
+        eventNode?.canonicalLabel ? `changed by ${readableStateLabel(eventNode)}` : "",
     ].filter(Boolean);
     return {
         title,
@@ -586,4 +588,22 @@ function resolveStateLineNode(
     if (!value) return null;
     if ("canonicalLabel" in value) return value;
     return value.node || null;
+}
+
+function readableStateLabel(node: V8GraphNode): string {
+    return String(node.canonicalLabel || "")
+        .replace(
+            /^(current|latest|now|final|earlier|previous|original|initial|former|derived)\s+(relationship|state):\s*/i,
+            ""
+        )
+        .trim();
+}
+
+function toStateClause(node: V8GraphNode, flavor: "current" | "previous"): string {
+    const label = readableStateLabel(node);
+    if (!label) return "";
+    if (node.memoryType === "relationship_state") {
+        return flavor === "current" ? `relationship now: ${label}` : `relationship: ${label}`;
+    }
+    return flavor === "current" ? `state now: ${label}` : `state: ${label}`;
 }

@@ -284,14 +284,15 @@ export function materializeGraph(
         const edgeNodeId = nodeIdByItemId.get(item.id);
         if (!edgeNodeId) continue;
         const semanticLinks = itemSemanticLinks.get(item.id);
+        const stateMemoryType = deriveStateMemoryType(item, semanticLinks);
         const stateNodeId = isNativeState ? edgeNodeId : `node_state_${item.id}`;
         const validity = resolveStateValidity(item.validity, cue?.status);
 
         if (!isNativeState) {
             nodes.push({
                 id: stateNodeId,
-                memoryType: "topic_state",
-                canonicalLabel: buildStateLabel(item, cue?.status),
+                memoryType: stateMemoryType,
+                canonicalLabel: buildStateLabel(item, stateMemoryType, cue?.status),
                 aliases: [],
                 primaryLayer: item.layer,
                 layerMemberships: [item.layer],
@@ -329,11 +330,12 @@ export function materializeGraph(
                 },
             });
         }
-        if (semanticLinks?.objectNodeId) {
+        const scopeTargetIds = deriveStateScopeTargets(semanticLinks, stateMemoryType);
+        for (const scopeTargetId of scopeTargetIds) {
             pushUniqueEdge({
                 type: "scoped_to",
                 src: stateNodeId,
-                dst: semanticLinks.objectNodeId,
+                dst: scopeTargetId,
                 layer: item.layer,
                 originType: item.originType as V8MemoryOriginType,
                 sourceItemIds: [item.id],
@@ -784,6 +786,42 @@ function isStateMemoryType(itemType: V8MemoryItem["itemType"]): boolean {
     return itemType.endsWith("_state") || itemType === "session_state" || itemType === "topic_state";
 }
 
+function deriveStateMemoryType(
+    item: V8MemoryItem,
+    semanticLinks?: { subjectNodeId: string; objectNodeId: string }
+): V8GraphNode["memoryType"] {
+    if (isStateMemoryType(item.itemType)) {
+        return item.itemType;
+    }
+
+    const predicate = String(item.predicate || "").trim().toLowerCase();
+    const hay = `${item.subject || ""} ${item.object || ""} ${item.label || ""}`.toLowerCase();
+    const hasDualAnchors = Boolean(semanticLinks?.subjectNodeId && semanticLinks?.objectNodeId);
+    const relationshipPredicate = new Set([
+        "involves",
+        "conflicts_with",
+        "supports",
+        "contradicts",
+        "similar_to",
+        "differs_from",
+        "better_than",
+        "worse_than",
+        "equivalent_to",
+        "before",
+        "after",
+    ]);
+
+    if (
+        hasDualAnchors &&
+        (relationshipPredicate.has(predicate) ||
+            /(relationship|partner|friend|enemy|rival|夫妻|恋人|朋友|敌人|对手|搭档|盟友|同事|关系)/.test(hay))
+    ) {
+        return "relationship_state";
+    }
+
+    return "topic_state";
+}
+
 function deriveStateCue(item: V8MemoryItem): { status: string } | null {
     const status = String(item.qualifiers?.status || item.qualifiers?.phase || "").trim().toLowerCase();
     if (!status) return null;
@@ -849,9 +887,35 @@ function stateStatusRank(status: string): number {
     return 1;
 }
 
-function buildStateLabel(item: V8MemoryItem, status?: string): string {
-    const prefix = status ? `${status.replace(/_/g, " ")} state` : "derived state";
-    return truncateLabel(`${prefix}: ${item.label || item.object || item.subject}`);
+function buildStateLabel(
+    item: V8MemoryItem,
+    memoryType: V8GraphNode["memoryType"],
+    status?: string
+): string {
+    const statusPrefix = status ? `${status.replace(/_/g, " ")}` : "derived";
+    if (memoryType === "relationship_state") {
+        const participants = [item.subject, item.object].filter(Boolean).join(" ↔ ");
+        const relationshipText = item.label || participants;
+        return truncateLabel(`${statusPrefix} relationship: ${relationshipText}`);
+    }
+    return truncateLabel(`${statusPrefix} state: ${item.label || item.object || item.subject}`);
+}
+
+function deriveStateScopeTargets(
+    semanticLinks: { subjectNodeId: string; objectNodeId: string } | undefined,
+    memoryType: V8GraphNode["memoryType"]
+): string[] {
+    if (!semanticLinks) return [];
+    if (memoryType === "relationship_state") {
+        return Array.from(
+            new Set([semanticLinks.subjectNodeId, semanticLinks.objectNodeId].filter(Boolean))
+        );
+    }
+    return semanticLinks.objectNodeId
+        ? [semanticLinks.objectNodeId]
+        : semanticLinks.subjectNodeId
+          ? [semanticLinks.subjectNodeId]
+          : [];
 }
 
 function resolveItemTimestampMs(

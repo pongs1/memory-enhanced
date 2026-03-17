@@ -239,6 +239,7 @@ function evaluateQuestion({
         ignition_guided_vertical_plan_ids: ignitionGuided.verticalPlanIds,
         ignition_guided_vertical_plan_anchor_labels: ignitionGuided.verticalPlanAnchorLabels,
         ignition_guided_vertical_seed_bundle_ids: ignitionGuided.verticalSeedBundleIds,
+        ignition_guided_state_bundle_terms: ignitionGuided.stateBundleTerms,
         ignition_guided_modes: ignitionGuided.modes,
         ignition_guided_background_turns: ignitionGuided.backgroundTurns,
         ignition_guided_profile_bundle_ids: ignitionGuided.profileBundleIds,
@@ -455,6 +456,9 @@ function renderSummaryMarkdown(summary) {
         );
         lines.push(
             `- ignition_guided_vertical_plan_anchor_labels: ${(item.ignition_guided_vertical_plan_anchor_labels || []).join(", ") || "(none)"}`
+        );
+        lines.push(
+            `- ignition_guided_state_bundle_terms: ${(item.ignition_guided_state_bundle_terms || []).join(" | ") || "(none)"}`
         );
         lines.push(`- ignition_guided_modes: ${(item.ignition_guided_modes || []).join(", ") || "(none)"}`);
         lines.push(`- ignition_guided_background_turns: ${item.ignition_guided_background_turns ?? 0}`);
@@ -690,6 +694,12 @@ function runIgnitionGuidedSearch({
         graphNodes,
         graphEdges,
     });
+    const stateBundleTerms = uniqueStrings(
+        bundles
+            .filter((bundle) => String(bundle.packType || "") === "state")
+            .flatMap((bundle) => [bundle.title, bundle.summaryText])
+            .filter(Boolean)
+    );
     const anchorLabels = uniqueStrings(
         bundles.flatMap((bundle) =>
             (bundle.nodeIds || [])
@@ -708,7 +718,11 @@ function runIgnitionGuidedSearch({
         bundles.length > 0 || verticalPlanLabels.length > 0 || mergedBoostSpanIds.length > 0
             ? searchArchiveSpans({
                   workspace,
-                  query: joinQuery(question.question, [...anchorLabels, ...verticalPlanLabels]),
+                  query: joinQuery(question.question, [
+                      ...anchorLabels,
+                      ...verticalPlanLabels,
+                      ...stateBundleTerms,
+                  ]),
                   topK,
                   mode: "hybrid",
                   windowChars: 260,
@@ -726,6 +740,7 @@ function runIgnitionGuidedSearch({
         verticalPlanIds: verticalCards.map((card) => card.id),
         verticalPlanAnchorLabels: verticalPlanLabels,
         verticalSeedBundleIds: verticalSeedBundles.map((bundle) => bundle.bundleId),
+        stateBundleTerms,
         verticalDiagnostics,
         hits,
     };
