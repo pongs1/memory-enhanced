@@ -547,21 +547,47 @@ function summarizeStateLine(
     edges: V8GraphEdge[]
 ): { title: string; summaryText: string } | null {
     const nodeIdSet = new Set(nodeIds);
-    let supersedeEdge: V8GraphEdge | null = null;
+    const supersedeEdges: V8GraphEdge[] = [];
     let changingEdge: V8GraphEdge | null = null;
     for (const edge of edges) {
         if (!nodeIdSet.has(edge.src) || !nodeIdSet.has(edge.dst)) continue;
-        if (edge.type === "state_supersedes_state" && !supersedeEdge) {
-            supersedeEdge = edge;
+        if (edge.type === "state_supersedes_state") {
+            supersedeEdges.push(edge);
         }
         if (edge.type === "state_changed_by_event" && !changingEdge) {
             changingEdge = edge;
         }
     }
+    const supersedeEdge = supersedeEdges
+        .slice()
+        .sort((left, right) => {
+            const leftNode = resolveStateLineNode(nodeLookup, left.src);
+            const rightNode = resolveStateLineNode(nodeLookup, right.src);
+            const leftActive = leftNode?.state.validity === "active" ? 1 : 0;
+            const rightActive = rightNode?.state.validity === "active" ? 1 : 0;
+            return rightActive - leftActive;
+        })[0] || null;
     if (!supersedeEdge) return null;
 
+    const supersedeBySrc = new Map<string, V8GraphEdge>();
+    for (const edge of supersedeEdges) {
+        if (!supersedeBySrc.has(edge.src)) supersedeBySrc.set(edge.src, edge);
+    }
+
     const currentNode = resolveStateLineNode(nodeLookup, supersedeEdge.src);
-    const previousNode = resolveStateLineNode(nodeLookup, supersedeEdge.dst);
+    let previousNode = resolveStateLineNode(nodeLookup, supersedeEdge.dst);
+    let cursor = previousNode ? supersedeBySrc.get(previousNode.id) || null : null;
+    const visited = new Set<string>([
+        currentNode?.id || "",
+        previousNode?.id || "",
+    ]);
+    while (cursor) {
+        const ancestor = resolveStateLineNode(nodeLookup, cursor.dst);
+        if (!ancestor || visited.has(ancestor.id)) break;
+        previousNode = ancestor;
+        visited.add(ancestor.id);
+        cursor = supersedeBySrc.get(ancestor.id) || null;
+    }
     if (!currentNode || !previousNode) return null;
     const eventNode = changingEdge ? resolveStateLineNode(nodeLookup, changingEdge.dst) : null;
     const currentSummary = toStateClause(currentNode, "current");
@@ -569,7 +595,7 @@ function summarizeStateLine(
     const title = readableStateLabel(currentNode) || readableStateLabel(previousNode);
     const clauses = [
         currentSummary,
-        previousSummary ? `previously ${previousSummary}` : "",
+        previousSummary ? `replaces ${previousSummary}` : "",
         eventNode?.canonicalLabel ? `changed by ${readableStateLabel(eventNode)}` : "",
     ].filter(Boolean);
     return {

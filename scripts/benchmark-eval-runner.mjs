@@ -574,8 +574,24 @@ function normalizeText(text) {
 function tokenize(text) {
     return String(text || "")
         .split(/[^a-z0-9\u4e00-\u9fff]+/)
-        .map((item) => item.trim())
+        .map((item) => normalizeToken(item.trim()))
         .filter((item) => item.length >= 2 || /[\u4e00-\u9fff]/.test(item));
+}
+
+function normalizeToken(token) {
+    const lower = String(token || "").toLowerCase();
+    if (!lower) return "";
+    if (/[\u4e00-\u9fff]/.test(lower)) return lower;
+    if (lower.endsWith("ies") && lower.length > 4) return `${lower.slice(0, -3)}y`;
+    if (lower.endsWith("ing") && lower.length > 5) return lower.slice(0, -3);
+    if (lower.endsWith("ed") && lower.length > 4) return lower.slice(0, -2);
+    if (lower.endsWith("es") && lower.length > 4 && !lower.endsWith("ses") && !lower.endsWith("ies")) {
+        return lower.slice(0, -2);
+    }
+    if (lower.endsWith("s") && lower.length > 4 && !lower.endsWith("ss") && !lower.endsWith("is")) {
+        return lower.slice(0, -1);
+    }
+    return lower;
 }
 
 function tokenOverlapRatio(hayTokens, needleTokens) {
@@ -776,10 +792,14 @@ function runIgnitionGuidedSearch({
             anchors
         );
         for (const bundle of scan.activatedBundles || []) {
-            modeBundleIds[mode].push(bundle.bundleId);
+            const hydratedBundle = {
+                ...(bundleById.get(bundle.bundleId) || {}),
+                ...bundle,
+            };
+            modeBundleIds[mode].push(hydratedBundle.bundleId);
             const existing = passBundles.get(bundle.bundleId);
-            if (!existing || (bundle.energy || 0) > (existing.energy || 0)) {
-                passBundles.set(bundle.bundleId, bundle);
+            if (!existing || (hydratedBundle.energy || 0) > (existing.energy || 0)) {
+                passBundles.set(hydratedBundle.bundleId, hydratedBundle);
             }
         }
     }
