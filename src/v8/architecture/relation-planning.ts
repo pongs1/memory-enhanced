@@ -1220,22 +1220,18 @@ function clamp01(value: number): number {
 }
 
 function buildReviewQuestion(plan: V8RelationSearchPlan): string {
-    const anchor = plan.anchorLabels?.[0] || "anchor";
+    const anchors = (plan.anchorLabels || []).filter(Boolean).slice(0, 3).join(", ") || "the anchor";
     const edgeList = plan.edgeFamilyHints
         .map((hint) => hint.id)
         .slice(0, 4)
         .join(", ");
+    const queryTerms = (plan.queryTerms || []).filter(Boolean).slice(0, 6).join(", ");
     const scope =
         plan.searchScope === "local_active"
             ? "recent active context"
             : "archive history";
-    const lane =
-        plan.lane === "focused"
-            ? "focused"
-            : plan.lane === "broadened"
-              ? "broadened"
-              : "exploratory";
-    return `Within ${scope}, decide whether the candidate spans directly support a ${lane} relation judgment for ${anchor} under edge families: ${edgeList}.`;
+    const focus = queryTerms ? ` Focus terms: ${queryTerms}.` : "";
+    return `Using ${scope}, decide whether the candidate spans directly support a concrete relation involving ${anchors}. Stay within these candidate edge types: ${edgeList}.${focus}`;
 }
 
 function uniqueList<T>(items: T[]): T[] {

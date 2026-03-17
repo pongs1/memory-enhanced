@@ -77,8 +77,6 @@ export function writeRelationReviewJobsMarkdown(
 
         lines.push(`## Job ${job.id}`);
         lines.push(`- plan_id: ${job.planId}`);
-        lines.push(`- lane: ${plan?.lane || "focused"}`);
-        lines.push(`- mode_hint: ${job.modeHint}`);
         lines.push(`- review_question: ${job.reviewQuestion}`);
         lines.push(`- candidate_edge_types: ${(job.candidateEdgeTypes || []).join(", ")}`);
         lines.push(`- anchor_nodes: ${anchors || "(none)"}`);
@@ -99,9 +97,14 @@ export function writeRelationReviewJobsMarkdown(
             lines.push("- (none)");
         } else {
             for (const node of candidateNodes) {
+                const evidenceLabel =
+                    node.bestEvidenceSpanIds?.[0] || node.evidenceSpanIds?.[0] || "";
                 lines.push(
                     `- node_id=${node.id}; label=${singleLine(node.canonicalLabel || node.id, 80)}; type=${node.memoryType}; confidence=${node.state.confidence.toFixed(3)}`
                 );
+                if (evidenceLabel) {
+                    lines.push(`  best_evidence_span_id=${evidenceLabel}`);
+                }
             }
         }
         lines.push("");
