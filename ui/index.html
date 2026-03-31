@@ -3,1155 +3,1126 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Memory Graph — V8 Neuro-Symbolic</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
-
-  <!-- Graphology + Sigma.js — served locally from ui/lib/ -->
-  <script src="/lib/graphology.umd.min.js"></script>
-  <script src="/lib/sigma.min.js"></script>
-
+  <title>Memory Graph 3D Demo</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.170.0/build/three.module.js"
+      }
+    }
+  </script>
   <style>
     :root {
-      --bg:         #0e1117;
-      --bg-surface: #161b22;
-      --bg-card:    #1c2333;
-      --border:     rgba(255,255,255,0.08);
-      --text:       #e6edf3;
-      --text-muted: #7d8590;
-      --accent:     #58a6ff;
-
-      --episodic:   #3fb950;  /* green */
-      --semantic:   #bc8cff;  /* violet */
-      --procedural: #ffa657;  /* amber */
-
-      --diff-add:   #2ea043;
-      --diff-rem:   #f85149;
-      --diff-mod:   #d29922;
-
-      --drawer-w: 380px;
-      --sidebar-w: 220px;
-      --topbar-h: 52px;
+      color-scheme: dark;
+      --bg: #060912;
+      --bg-strong: rgba(10, 14, 28, 0.72);
+      --bg-soft: rgba(11, 16, 31, 0.56);
+      --border: rgba(118, 148, 225, 0.16);
+      --text: #edf3ff;
+      --muted: #8fa4d5;
+      --accent: #87b7ff;
+      --accent-soft: rgba(135, 183, 255, 0.18);
+      --evolution: #ff9f5d;
+      --episodic: #59e0a3;
+      --semantic: #71a0ff;
+      --procedural: #c18cff;
+      --shadow: 0 32px 90px rgba(0, 0, 0, 0.42);
+      --drawer-w: 336px;
+      --panel-radius: 22px;
     }
 
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    * { box-sizing: border-box; }
 
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-      font-size: 13px;
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
       overflow: hidden;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-
-    /* ── Topbar ───────────────────────────────────── */
-    #topbar {
-      height: var(--topbar-h);
-      background: var(--bg-surface);
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      padding: 0 18px;
-      flex-shrink: 0;
-      z-index: 100;
-    }
-
-    #topbar .logo {
-      font-size: 16px;
-      font-weight: 700;
-      letter-spacing: -0.5px;
+      background:
+        radial-gradient(circle at 18% 18%, rgba(64, 99, 255, 0.28), transparent 22%),
+        radial-gradient(circle at 74% 22%, rgba(103, 68, 210, 0.22), transparent 21%),
+        radial-gradient(circle at 64% 72%, rgba(255, 133, 71, 0.16), transparent 24%),
+        radial-gradient(circle at 50% 58%, rgba(39, 64, 144, 0.28), transparent 38%),
+        linear-gradient(180deg, #07101f 0%, #04070e 100%);
       color: var(--text);
-      display: flex;
-      align-items: center;
-      gap: 8px;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
     }
-    #topbar .logo span { opacity: 0.4; font-weight: 400; font-size: 12px; }
 
-    .divider { width: 1px; height: 24px; background: var(--border); }
-
-    /* Layer filter chips */
-    .chips { display: flex; gap: 6px; }
-    .chip {
-      padding: 4px 12px;
-      border-radius: 20px;
-      border: 1px solid var(--border);
-      background: transparent;
-      color: var(--text-muted);
-      cursor: pointer;
-      font-size: 12px;
-      transition: all 0.15s;
-      user-select: none;
-    }
-    .chip:hover { border-color: rgba(255,255,255,0.25); color: var(--text); }
-    .chip[data-layer="episodic"].active  { background: rgba(63,185,80,0.18); border-color: var(--episodic); color: var(--episodic); }
-    .chip[data-layer="semantic"].active  { background: rgba(188,140,255,0.18); border-color: var(--semantic); color: var(--semantic); }
-    .chip[data-layer="procedural"].active{ background: rgba(255,166,87,0.18); border-color: var(--procedural); color: var(--procedural); }
-    .chip[data-layer="all"].active       { background: rgba(88,166,255,0.18); border-color: var(--accent); color: var(--accent); }
-
-    /* Diff toggle */
-    #diff-toggle {
-      margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    #diff-toggle label {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      cursor: pointer;
-      font-size: 12px;
-      color: var(--text-muted);
-    }
-    .switch { position: relative; width: 36px; height: 20px; }
-    .switch input { opacity: 0; width: 0; height: 0; }
-    .slider {
+    body { position: relative; }
+    #scene {
       position: absolute;
       inset: 0;
-      background: rgba(255,255,255,0.1);
-      border-radius: 20px;
-      transition: 0.2s;
+      background:
+        radial-gradient(circle at 34% 60%, rgba(70, 118, 255, 0.26), transparent 20%),
+        radial-gradient(circle at 49% 54%, rgba(160, 100, 255, 0.18), transparent 16%),
+        radial-gradient(circle at 57% 57%, rgba(255, 144, 91, 0.16), transparent 20%),
+        radial-gradient(circle at 45% 50%, rgba(58, 95, 189, 0.20), transparent 30%);
     }
-    .slider::before {
-      content: "";
+    canvas { display: block; }
+
+    .glass {
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      background: var(--bg-strong);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+
+    #control-cluster {
       position: absolute;
-      width: 14px; height: 14px;
-      left: 3px; top: 3px;
-      background: #fff;
-      border-radius: 50%;
-      transition: 0.2s;
+      top: 20px;
+      left: 20px;
+      display: flex;
+      gap: 10px;
+      padding: 10px;
+      border-radius: 24px;
+      z-index: 10;
+      background: rgba(7, 12, 24, 0.54);
+      transform: scale(0.94);
+      transform-origin: top left;
     }
-    input:checked + .slider { background: var(--accent); }
-    input:checked + .slider::before { transform: translateX(16px); }
 
-    /* Status dot */
-    #status {
-      font-size: 11px;
-      color: var(--text-muted);
+    .control-group {
       display: flex;
       align-items: center;
-      gap: 6px;
-    }
-    #status-dot {
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      background: var(--text-muted);
-    }
-    #status-dot.live { background: var(--episodic); box-shadow: 0 0 6px var(--episodic); }
-    #status-dot.err  { background: var(--diff-rem); }
-
-    /* ── Layout ───────────────────────────────────── */
-    #main {
-      display: flex;
-      flex: 1;
-      overflow: hidden;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 18px;
+      background: rgba(14, 19, 37, 0.72);
+      border: 1px solid rgba(125, 151, 226, 0.10);
     }
 
-    /* ── Sidebar ──────────────────────────────────── */
-    #sidebar {
-      width: var(--sidebar-w);
-      background: var(--bg-surface);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      flex-shrink: 0;
-    }
-
-    #sidebar .section-title {
-      padding: 12px 14px 6px;
-      font-size: 11px;
-      font-weight: 600;
+    .control-label {
+      font-family: system-ui, sans-serif;
+      font-size: 10px;
+      letter-spacing: 0.12em;
       text-transform: uppercase;
-      letter-spacing: 0.8px;
-      color: var(--text-muted);
+      color: var(--muted);
+      white-space: nowrap;
     }
 
-    /* Stats */
-    #stats-panel { padding: 0 14px 12px; border-bottom: 1px solid var(--border); }
-    .stat-row {
+    .chips {
       display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 5px 0;
+      gap: 6px;
+      flex-wrap: wrap;
     }
-    .stat-label { display: flex; align-items: center; gap: 8px; color: var(--text-muted); }
-    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .dot.episodic   { background: var(--episodic); }
-    .dot.semantic   { background: var(--semantic); }
-    .dot.procedural { background: var(--procedural); }
-    .dot.edges      { background: var(--accent); border-radius: 2px; }
-    .stat-val { font-variant-numeric: tabular-nums; color: var(--text); }
 
-    /* Search */
-    #search-wrap {
-      padding: 10px 14px;
-      border-bottom: 1px solid var(--border);
+    .chip {
+      border: 0;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-family: system-ui, sans-serif;
+      font-size: 12px;
+      color: #b8c8ef;
+      background: rgba(22, 28, 49, 0.92);
+      cursor: pointer;
+      transition: 0.18s ease;
+      box-shadow: inset 0 0 0 1px rgba(129, 157, 226, 0.10);
     }
+
+    .chip.active {
+      background: var(--accent-soft);
+      color: #dcebff;
+      box-shadow: inset 0 0 0 1px rgba(135, 183, 255, 0.22), 0 0 20px rgba(84, 129, 255, 0.16);
+    }
+
+    .chip.mode-dynamic.active {
+      color: #d35b3d;
+      background: rgba(255, 141, 92, 0.14);
+      box-shadow: inset 0 0 0 1px rgba(255, 141, 92, 0.18);
+    }
+
+    #search-wrap {
+      position: relative;
+      min-width: 220px;
+    }
+
     #search {
       width: 100%;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 6px 10px;
+      border: 0;
+      outline: 0;
+      border-radius: 999px;
+      padding: 10px 14px;
+      background: rgba(11, 16, 31, 0.94);
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
       color: var(--text);
-      font-size: 12px;
-      outline: none;
-      transition: border-color 0.15s;
+      box-shadow: inset 0 0 0 1px rgba(129, 157, 226, 0.12);
     }
-    #search:focus { border-color: var(--accent); }
-    #search::placeholder { color: var(--text-muted); }
 
-    /* Node list */
-    #node-list {
-      flex: 1;
-      overflow-y: auto;
-      scrollbar-width: thin;
-      scrollbar-color: var(--border) transparent;
+    #search-results {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      right: 0;
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 260px;
+      overflow: auto;
+      padding: 10px;
+      border-radius: 18px;
+      z-index: 11;
     }
-    .node-item {
-      padding: 8px 14px;
+
+    #search-results.visible { display: flex; }
+
+    .search-item {
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(12, 18, 34, 0.94);
+      border: 1px solid rgba(125, 151, 226, 0.10);
       cursor: pointer;
-      border-left: 2px solid transparent;
-      transition: all 0.12s;
-      display: flex;
-      align-items: center;
-      gap: 8px;
+      transition: 0.18s ease;
     }
-    .node-item:hover { background: rgba(255,255,255,0.04); }
-    .node-item.selected {
-      background: rgba(88,166,255,0.08);
-      border-left-color: var(--accent);
-    }
-    .node-item .node-summary {
-      font-size: 11px;
-      line-height: 1.4;
-      color: var(--text);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .node-item .node-id { font-size: 10px; color: var(--text-muted); }
 
-    /* ── Canvas Area ──────────────────────────────── */
-    #canvas-wrap {
-      flex: 1;
-      position: relative;
-      overflow: hidden;
+    .search-item:hover {
+      transform: translateY(-1px);
+      background: rgba(16, 22, 42, 0.98);
     }
-    #sigma-container {
+
+    .search-title {
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    .search-subtitle {
+      margin-top: 4px;
+      font-family: system-ui, sans-serif;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    #drawer {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: var(--drawer-w);
+      height: 100%;
+      padding: 18px 18px 18px 14px;
+      z-index: 9;
+      pointer-events: none;
+    }
+
+    #drawer-panel {
       width: 100%;
       height: 100%;
+      border-radius: 28px 0 0 28px;
+      overflow: auto;
+      padding: 22px 20px 24px;
+      pointer-events: auto;
+      background: linear-gradient(180deg, rgba(9, 13, 26, 0.78), rgba(8, 12, 24, 0.88));
     }
 
-    /* Hover tooltip */
-    #tooltip {
-      position: absolute;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 12px;
+    .eyebrow {
+      font-family: system-ui, sans-serif;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.13em;
+      color: var(--muted);
+    }
+
+    #node-title {
+      margin-top: 10px;
+      font-size: 28px;
+      line-height: 1.1;
+      letter-spacing: -0.03em;
+    }
+
+    .badges {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+      margin-bottom: 20px;
+    }
+
+    .badge {
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-family: system-ui, sans-serif;
       font-size: 12px;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.15s;
-      max-width: 260px;
-      z-index: 50;
+      background: rgba(15, 21, 40, 0.88);
+      border: 1px solid rgba(125, 151, 226, 0.10);
+      color: #c3d1f3;
     }
-    #tooltip.visible { opacity: 1; }
-    #tooltip .tt-id   { font-size: 10px; color: var(--text-muted); margin-bottom: 2px; }
-    #tooltip .tt-role { font-size: 10px; font-weight: 600; margin-bottom: 4px; }
-    #tooltip .tt-role.episodic   { color: var(--episodic); }
-    #tooltip .tt-role.semantic   { color: var(--semantic); }
-    #tooltip .tt-role.procedural { color: var(--procedural); }
-    #tooltip .tt-sum  { color: var(--text); line-height: 1.4; }
 
-    /* Layout running spinner overlay */
-    #layout-overlay {
+    .section {
+      margin-top: 14px;
+      padding: 16px;
+      border-radius: var(--panel-radius);
+      background: rgba(12, 18, 34, 0.74);
+      border: 1px solid rgba(125, 151, 226, 0.10);
+    }
+
+    .section h3 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      font-family: system-ui, sans-serif;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.10em;
+    }
+
+    .summary {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.65;
+      font-family: system-ui, sans-serif;
+      color: #d9e6ff;
+    }
+
+    .meta-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .meta-row {
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(16, 22, 42, 0.92);
+    }
+
+    .meta-key {
+      font-family: system-ui, sans-serif;
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .meta-value {
+      margin-top: 4px;
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .jump-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .jump-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 0;
+      background: rgba(16, 22, 42, 0.92);
+      cursor: pointer;
+      text-align: left;
+      transition: 0.18s ease;
+    }
+
+    .jump-item:hover {
+      transform: translateY(-1px);
+      background: rgba(22, 30, 56, 0.96);
+    }
+
+    .jump-title {
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    .jump-subtitle {
+      margin-top: 4px;
+      font-family: system-ui, sans-serif;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .jump-cta {
+      font-family: system-ui, sans-serif;
+      font-size: 12px;
+      color: var(--accent);
+      white-space: nowrap;
+    }
+
+    .rail {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 4px;
+    }
+
+    .rail-item {
+      position: relative;
+      padding-left: 22px;
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
+      color: #d4e2ff;
+    }
+
+    .rail-item::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 6px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(146, 169, 231, 0.34);
+      box-shadow: 0 0 0 4px rgba(94, 126, 216, 0.12);
+    }
+
+    .rail-item.active::before {
+      background: var(--evolution);
+      box-shadow: 0 0 0 5px rgba(255, 141, 92, 0.14);
+    }
+
+    .rail-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin-bottom: 3px;
+    }
+
+    #loading {
       position: absolute;
       inset: 0;
       display: flex;
       align-items: center;
       justify-content: center;
-      background: rgba(14,17,23,0.7);
-      z-index: 10;
-      transition: opacity 0.3s;
-    }
-    #layout-overlay.hidden { opacity: 0; pointer-events: none; }
-    .spinner {
-      width: 32px; height: 32px;
-      border: 3px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* ── Diff Legend ──────────────────────────────── */
-    #diff-legend {
-      position: absolute;
-      bottom: 14px;
-      left: 14px;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 14px;
-      display: none;
-      gap: 12px;
-      flex-direction: column;
-      z-index: 20;
-      font-size: 11px;
-    }
-    #diff-legend.visible { display: flex; }
-    .legend-row { display: flex; align-items: center; gap: 8px; }
-    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-
-    /* Always-visible edge type legend */
-    #edge-legend {
-      position: absolute;
-      bottom: 14px;
-      left: 14px;
-      background: rgba(22,27,34,0.85);
-      backdrop-filter: blur(6px);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 14px;
-      display: flex;
-      gap: 8px;
-      flex-direction: column;
-      z-index: 19;
-      font-size: 11px;
-      color: var(--text-muted);
-      pointer-events: none;
-    }
-    #diff-legend.visible ~ #edge-legend { bottom: 130px; }
-
-    /* ── Detail Drawer ────────────────────────────── */
-    #drawer {
-      width: 0;
-      min-width: 0;
-      background: var(--bg-surface);
-      border-left: 1px solid transparent;
-      flex-shrink: 0;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-                  border-color 0.25s,
-                  min-width 0.25s;
-    }
-    #drawer.open {
-      width: var(--drawer-w);
-      min-width: var(--drawer-w);
-      border-left-color: var(--border);
-    }
-
-    #drawer-header {
-      padding: 14px 18px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
-      flex-shrink: 0;
-    }
-    #drawer-header .info { flex: 1; min-width: 0; }
-    #drawer-header .badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 12px;
-      font-size: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 6px;
-    }
-    .badge.episodic   { background: rgba(63,185,80,0.18); color: var(--episodic); }
-    .badge.semantic   { background: rgba(188,140,255,0.18); color: var(--semantic); }
-    .badge.procedural { background: rgba(255,166,87,0.18); color: var(--procedural); }
-    #drawer-title {
+      font-family: system-ui, sans-serif;
       font-size: 14px;
-      font-weight: 600;
-      line-height: 1.4;
-      color: var(--text);
-    }
-    #drawer-close {
-      background: transparent;
-      border: none;
-      color: var(--text-muted);
-      cursor: pointer;
-      font-size: 18px;
-      padding: 0;
-      line-height: 1;
-      flex-shrink: 0;
-      transition: color 0.15s;
-    }
-    #drawer-close:hover { color: var(--text); }
-
-    #drawer-body {
-      flex: 1;
-      overflow-y: auto;
-      padding: 14px 18px;
-      scrollbar-width: thin;
-      scrollbar-color: var(--border) transparent;
+      color: var(--muted);
+      background: rgba(5, 8, 16, 0.72);
+      backdrop-filter: blur(4px);
+      z-index: 12;
     }
 
-    .drawer-section { margin-bottom: 20px; }
-    .drawer-section-title {
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-      color: var(--text-muted);
-      margin-bottom: 10px;
+    @media (max-width: 1080px) {
+      :root { --drawer-w: 320px; }
+      #control-cluster {
+        flex-direction: column;
+        align-items: flex-start;
+      }
     }
-
-    /* Score bars */
-    .score-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 8px;
-      gap: 10px;
-    }
-    .score-label { width: 40px; color: var(--text-muted); flex-shrink: 0; }
-    .score-bar-wrap {
-      flex: 1;
-      height: 4px;
-      background: rgba(255,255,255,0.06);
-      border-radius: 4px;
-      overflow: hidden;
-    }
-    .score-bar {
-      height: 100%;
-      border-radius: 4px;
-      transition: width 0.4s ease;
-    }
-    .score-bar.hit    { background: var(--accent); }
-    .score-bar.adopt  { background: var(--episodic); }
-    .score-bar.harm   { background: var(--diff-rem); }
-    .score-val { width: 36px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
-
-    /* Tags */
-    .tags { display: flex; flex-wrap: wrap; gap: 5px; }
-    .tag {
-      padding: 2px 8px;
-      background: rgba(255,255,255,0.06);
-      border-radius: 12px;
-      font-size: 11px;
-      color: var(--text-muted);
-      border: 1px solid var(--border);
-    }
-
-    /* Source ref link */
-    .source-ref {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 10px;
-      background: var(--bg-card);
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      font-family: "SF Mono", "Fira Code", monospace;
-      font-size: 11px;
-      color: var(--accent);
-      word-break: break-all;
-    }
-
-    /* Linked nodes */
-    .linked-node {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 7px 10px;
-      border-radius: 8px;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      cursor: pointer;
-      transition: border-color 0.15s;
-      margin-bottom: 6px;
-    }
-    .linked-node:hover { border-color: var(--accent); }
-    .linked-node .lbl {
-      font-size: 10px;
-      color: var(--text-muted);
-      flex-shrink: 0;
-    }
-    .linked-node .lsum {
-      font-size: 11px;
-      color: var(--text);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    /* Empty state */
-    .empty-state {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-      gap: 10px;
-      color: var(--text-muted);
-      font-size: 13px;
-    }
-    .empty-state .icon { font-size: 36px; opacity: 0.4; }
-
-    /* Diff mode banner */
-    #diff-banner {
-      position: absolute;
-      top: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(210,153,34,0.15);
-      border: 1px solid var(--diff-mod);
-      border-radius: 8px;
-      padding: 6px 16px;
-      font-size: 12px;
-      color: var(--diff-mod);
-      display: none;
-      z-index: 30;
-      white-space: nowrap;
-    }
-    #diff-banner.visible { display: block; }
   </style>
 </head>
 <body>
+  <div id="scene"></div>
+  <div id="loading">Loading 3D memory graph demo...</div>
 
-<!-- Topbar -->
-<div id="topbar">
-  <div class="logo">🧠 MemoryGraph <span>V8 Neuro-Symbolic</span></div>
-  <div class="divider"></div>
-  <div class="chips">
-    <button class="chip active" data-layer="all">All</button>
-    <button class="chip" data-layer="episodic">Episodic</button>
-    <button class="chip" data-layer="semantic">Semantic</button>
-    <button class="chip" data-layer="procedural">Procedural</button>
-  </div>
-  <div class="divider"></div>
-  <div id="status">
-    <div id="status-dot"></div>
-    <span id="status-text">Loading…</span>
-  </div>
-  <div id="diff-toggle">
-    <label>
-      <span>Diff View</span>
-      <div class="switch"><input type="checkbox" id="diff-check" /><div class="slider"></div></div>
-    </label>
-  </div>
-</div>
-
-<!-- Main layout -->
-<div id="main">
-
-  <!-- Sidebar -->
-  <div id="sidebar">
-    <div class="section-title">Graph Stats</div>
-    <div id="stats-panel">
-      <div class="stat-row">
-        <div class="stat-label"><div class="dot episodic"></div>Episodic</div>
-        <div class="stat-val" id="stat-ep">—</div>
-      </div>
-      <div class="stat-row">
-        <div class="stat-label"><div class="dot semantic"></div>Semantic</div>
-        <div class="stat-val" id="stat-sm">—</div>
-      </div>
-      <div class="stat-row">
-        <div class="stat-label"><div class="dot procedural"></div>Procedural</div>
-        <div class="stat-val" id="stat-pr">—</div>
-      </div>
-      <div class="stat-row">
-        <div class="stat-label"><div class="dot edges"></div>Edges</div>
-        <div class="stat-val" id="stat-ed">—</div>
+  <div id="control-cluster" class="glass">
+    <div class="control-group">
+      <div class="control-label">Layer</div>
+      <div class="chips" id="layer-chips">
+        <button class="chip active" data-layer="all">all</button>
+        <button class="chip" data-layer="episodic">episodic</button>
+        <button class="chip" data-layer="semantic">semantic</button>
+        <button class="chip" data-layer="procedural">procedural</button>
       </div>
     </div>
 
-    <div id="search-wrap">
-      <input id="search" type="text" placeholder="Search nodes…" autocomplete="off" spellcheck="false" />
-    </div>
-
-    <div class="section-title">Nodes</div>
-    <div id="node-list"></div>
-  </div>
-
-  <!-- Canvas area -->
-  <div id="canvas-wrap">
-    <div id="sigma-container"></div>
-
-    <div id="layout-overlay">
-      <div class="spinner"></div>
-    </div>
-
-    <div id="tooltip">
-      <div class="tt-id" id="tt-id"></div>
-      <div id="tt-role" class="tt-role"></div>
-      <div class="tt-sum" id="tt-sum"></div>
-    </div>
-
-    <div id="diff-banner">⚡ Diff Mode — green = added, red = removed, orange = changed</div>
-
-    <div id="diff-legend">
-      <div class="legend-row"><div class="legend-dot" style="background:var(--diff-add)"></div>Added</div>
-      <div class="legend-row"><div class="legend-dot" style="background:var(--diff-rem)"></div>Removed</div>
-      <div class="legend-row"><div class="legend-dot" style="background:var(--diff-mod)"></div>Changed edges</div>
-    </div>
-
-    <!-- Always-visible edge legend -->
-    <div id="edge-legend">
-      <div class="legend-row">
-        <svg width="36" height="4" style="flex-shrink:0"><line x1="0" y1="2" x2="36" y2="2" stroke="rgba(255,255,255,0.45)" stroke-width="1"/></svg>
-        Associative (thin=weak)
+    <div class="control-group">
+      <div class="control-label">View</div>
+      <div class="chips" id="view-chips">
+        <button class="chip active" data-view="hybrid">hybrid</button>
+        <button class="chip" data-view="semantic">semantic</button>
+        <button class="chip" data-view="evolution">evolution</button>
       </div>
-      <div class="legend-row">
-        <svg width="36" height="6" style="flex-shrink:0"><line x1="0" y1="3" x2="36" y2="3" stroke="rgba(188,140,255,0.8)" stroke-width="3"/></svg>
-        Structural
+    </div>
+
+    <div class="control-group">
+      <div class="control-label">Mode</div>
+      <div class="chips" id="mode-chips">
+        <button class="chip active" data-mode="static">static</button>
+        <button class="chip mode-dynamic" data-mode="dynamic">dynamic</button>
       </div>
-      <div class="legend-row">
-        <svg width="36" height="6" style="flex-shrink:0"><line x1="0" y1="3" x2="36" y2="3" stroke="rgba(248,81,73,0.8)" stroke-width="4"/></svg>
-        Supersession
-      </div>
-      <div class="legend-row" style="margin-top:4px;padding-top:6px;border-top:1px solid var(--border);color:var(--text-muted);font-size:10px;">
-        Line thickness ∝ strength
+    </div>
+
+    <div class="control-group">
+      <div class="control-label">Search</div>
+      <div id="search-wrap">
+        <input id="search" type="text" placeholder="find node / memory" />
+        <div id="search-results" class="glass"></div>
       </div>
     </div>
   </div>
 
-  <!-- Detail Drawer -->
-  <div id="drawer">
-    <div id="drawer-header">
-      <div class="info">
-        <div id="drawer-badge" class="badge">—</div>
-        <div id="drawer-title">Select a node</div>
-      </div>
-      <button id="drawer-close">✕</button>
+  <aside id="drawer">
+    <div id="drawer-panel" class="glass">
+      <div class="eyebrow">Selected Node</div>
+      <div id="node-title">Memory Graph</div>
+      <div class="badges" id="badges"></div>
+
+      <section class="section">
+        <h3>Semantic Summary</h3>
+        <p class="summary" id="semantic-summary">
+          Select a node to inspect its memory meaning, evidence context, evolution position, and related jumps.
+        </p>
+      </section>
+
+      <section class="section">
+        <h3>Evidence &amp; Memory</h3>
+        <div class="meta-list" id="memory-meta"></div>
+      </section>
+
+      <section class="section">
+        <h3>Related Connections</h3>
+        <div class="jump-list" id="jump-list"></div>
+      </section>
+
+      <section class="section">
+        <h3>State / Evolution Context</h3>
+        <div class="rail" id="state-rail"></div>
+      </section>
     </div>
-    <div id="drawer-body">
-      <div class="empty-state">
-        <div class="icon">🕸️</div>
-        <div>Click any node to inspect it</div>
-      </div>
-    </div>
-  </div>
-</div>
+  </aside>
 
-<script>
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
+  <script type="module">
+    import * as THREE from "https://unpkg.com/three@0.170.0/build/three.module.js";
+    import { OrbitControls } from "https://unpkg.com/three@0.170.0/examples/jsm/controls/OrbitControls.js";
 
-const COLORS = {
-  episodic:   '#3fb950',
-  semantic:   '#bc8cff',
-  procedural: '#ffa657',
-};
+    const sceneEl = document.getElementById("scene");
+    const loadingEl = document.getElementById("loading");
+    const searchEl = document.getElementById("search");
+    const searchResultsEl = document.getElementById("search-results");
+    const badgesEl = document.getElementById("badges");
+    const titleEl = document.getElementById("node-title");
+    const summaryEl = document.getElementById("semantic-summary");
+    const memoryMetaEl = document.getElementById("memory-meta");
+    const jumpListEl = document.getElementById("jump-list");
+    const stateRailEl = document.getElementById("state-rail");
 
-const statusDot  = document.getElementById('status-dot');
-const statusText = document.getElementById('status-text');
+    const colorByLayer = {
+      episodic: 0x4fbf84,
+      semantic: 0x6b8cff,
+      procedural: 0xb487ff,
+      unknown: 0xa8b2c9,
+    };
 
-function setStatus(state, msg) {
-  statusText.textContent = msg;
-  statusDot.className = state; // '', 'live', 'err'
-}
+    const state = {
+      layer: "all",
+      view: "hybrid",
+      mode: "static",
+      selectedNodeId: null,
+      graph: null,
+      nodeMeshes: new Map(),
+      glowMeshes: new Map(),
+      labelLookup: new Map(),
+      lineGroups: {},
+      relatedByNode: new Map(),
+      evolutionGraph: { next: new Map(), prev: new Map() },
+      animationClock: 0,
+    };
 
-// ─── DATA LOADING ─────────────────────────────────────────────────────────────
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    sceneEl.appendChild(renderer.domElement);
 
-let graphData = null;    // {nodes, edges, manifest}
-let activeLayer = 'all'; // current filter
-let diffMode   = false;
-let selectedId = null;
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x040811, 0.00028);
 
-async function fetchGraph() {
-  const res = await fetch('/api/graph');
-  if (!res.ok) throw new Error('Failed to load /api/graph');
-  return res.json();
-}
+    const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 4000);
+    camera.position.set(-18, 106, 286);
 
-// ─── SIGMA / GRAPHOLOGY ───────────────────────────────────────────────────────
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.minDistance = 60;
+    controls.maxDistance = 800;
+    controls.target.set(0, 0, 0);
 
-let sigmaInstance = null;
-let graphInstance = null;
+    const ambient = new THREE.AmbientLight(0xbfd0ff, 0.74);
+    const keyLight = new THREE.DirectionalLight(0xf1f5ff, 1.5);
+    keyLight.position.set(140, 180, 120);
+    const fillLight = new THREE.PointLight(0x5f87ff, 2.4, 1200);
+    fillLight.position.set(-170, 20, 260);
+    const warmLight = new THREE.PointLight(0xff8d5b, 1.6, 900);
+    warmLight.position.set(180, -40, 360);
+    scene.add(ambient, keyLight, fillLight, warmLight);
 
-function buildGraphology(nodes, edges, layerFilter) {
-  const g = new graphology.Graph({ multi: false, type: 'directed' });
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2(-2, -2);
+    const graphGroup = new THREE.Group();
+    const starField = new THREE.Group();
+    scene.add(starField, graphGroup);
 
-  nodes.forEach(n => {
-    if (layerFilter !== 'all' && n.layer !== layerFilter) return;
-    g.addNode(n.id, {
-      label:   n.summary ? n.summary.substring(0, 38) + (n.summary.length > 38 ? '…' : '') : n.id,
-      // 3px base + up to 4px for high-importance nodes (importance 0–1)
-      // hit/adopt are 0 for most real nodes so we use importance instead
-      size:    3 + (n.importance || 0.5) * 4,
-      color:   COLORS[n.layer] || '#7d8590',
-      _raw: n,
-    });
-  });
-
-  edges.forEach(e => {
-    if (!g.hasNode(e.source) || !g.hasNode(e.target)) return;
-    const edgeId = `${e.source}->${e.target}`;
-    if (g.hasEdge(edgeId)) return;
-    const w = e.weight || 0.5;
-    // Thickness: 0.5px (weak) → 5px (strong), linear scale
-    const thickness = 0.5 + w * 4.5;
-    g.addDirectedEdgeWithKey(edgeId, e.source, e.target, {
-      weight: w,
-      color:  e.type === 'supersession' ? 'rgba(248,81,73,0.7)'  :
-              e.type === 'structural'   ? 'rgba(188,140,255,0.55)' :
-                                         'rgba(255,255,255,0.22)',
-      size:   thickness,
-    });
-  });
-
-  return g;
-}
-
-// Self-contained force-directed layout (no UMD bundle required)
-// Spring-repulsion algorithm — fast enough for < 2k nodes at 300 iterations
-function applyForceLayout(g, onDone) {
-  const overlay = document.getElementById('layout-overlay');
-  overlay.classList.remove('hidden');
-
-  const nodes = g.nodes();
-  const edges = g.edges();
-  const n = nodes.length;
-  if (n === 0) { overlay.classList.add('hidden'); if (onDone) onDone(); return; }
-
-  // Initialise positions randomly in a circle
-  const pos = {};
-  nodes.forEach((id, i) => {
-    const angle = (2 * Math.PI * i) / n;
-    // Large initial radius so 300+ nodes start spread out → repulsion has room to work
-    const r = 200 + Math.random() * 80;
-    pos[id] = { x: Math.cos(angle) * r, y: Math.sin(angle) * r, vx: 0, vy: 0 };
-  });
-
-  const ITER    = 300;
-  const REPULSE = 5;    // was 0.5 — stronger push so nodes don't clump
-  const ATTRACT = 0.04; // slightly softer pull
-  const DAMP    = 0.88;
-  const GRAV    = 0.02; // weaker gravity so nodes spread further
-
-  for (let it = 0; it < ITER; it++) {
-    // Repulsion between all pairs (O(n²) — fine for <2k nodes)
-    for (let i = 0; i < nodes.length; i++) {
-      const a = pos[nodes[i]];
-      for (let j = i + 1; j < nodes.length; j++) {
-        const b = pos[nodes[j]];
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const dist2 = Math.max(dx*dx + dy*dy, 0.01);
-        const force = REPULSE / dist2;
-        a.vx -= dx * force; a.vy -= dy * force;
-        b.vx += dx * force; b.vy += dy * force;
-      }
+    function hashNumber(input) {
+      const text = String(input || "");
+      let h = 0;
+      for (let i = 0; i < text.length; i += 1) h = (h * 31 + text.charCodeAt(i)) % 1000003;
+      return h;
     }
-    // Spring attraction along edges
-    edges.forEach(eid => {
-      const src = g.source(eid), tgt = g.target(eid);
-      if (!pos[src] || !pos[tgt]) return;
-      const dx = pos[tgt].x - pos[src].x;
-      const dy = pos[tgt].y - pos[src].y;
-      pos[src].vx += dx * ATTRACT; pos[src].vy += dy * ATTRACT;
-      pos[tgt].vx -= dx * ATTRACT; pos[tgt].vy -= dy * ATTRACT;
-    });
-    // Gravity toward center + damping
-    nodes.forEach(id => {
-      const p = pos[id];
-      p.vx += -p.x * GRAV;
-      p.vy += -p.y * GRAV;
-      p.vx *= DAMP; p.vy *= DAMP;
-      p.x  += p.vx; p.y  += p.vy;
-    });
-  }
 
-  // Write final positions back to graphology
-  nodes.forEach(id => {
-    g.setNodeAttribute(id, 'x', pos[id].x);
-    g.setNodeAttribute(id, 'y', pos[id].y);
-  });
-
-  overlay.classList.add('hidden');
-  if (onDone) onDone();
-}
-
-function initSigma(g) {
-  const container = document.getElementById('sigma-container');
-  if (sigmaInstance) { sigmaInstance.kill(); sigmaInstance = null; }
-
-  sigmaInstance = new Sigma(g, container, {
-    renderEdgeLabels: false,
-    defaultEdgeType: 'arrow',
-    labelFont: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    labelSize: 11,
-    labelWeight: '400',
-    labelColor: { color: '#7d8590' },
-    // Only show labels when node is large enough on screen (after zooming in)
-    labelRenderedSizeThreshold: 10,
-    zIndex: true,
-    defaultNodeType: 'circle',
-    minCameraRatio: 0.02,  // allow zooming way out
-    maxCameraRatio: 10,    // allow zooming way in to read labels
-  });
-
-  // ── Hover tooltip
-  const tooltip = document.getElementById('tooltip');
-  sigmaInstance.on('enterNode', ({ node }) => {
-    const raw = g.getNodeAttribute(node, '_raw');
-    if (!raw) return;
-    document.getElementById('tt-id').textContent    = raw.id;
-    document.getElementById('tt-role').textContent  = raw.role || raw.layer;
-    document.getElementById('tt-role').className    = `tt-role ${raw.layer}`;
-    document.getElementById('tt-sum').textContent   = raw.summary || '';
-    tooltip.classList.add('visible');
-  });
-
-  sigmaInstance.on('moveBody', (e) => {
-    if (!tooltip.classList.contains('visible')) return;
-    const { x, y } = e.event;
-    tooltip.style.left = (x + 14) + 'px';
-    tooltip.style.top  = (y + 14) + 'px';
-  });
-
-  sigmaInstance.on('leaveNode', () => tooltip.classList.remove('visible'));
-
-  // Track mouse for tooltip position
-  document.getElementById('sigma-container').addEventListener('mousemove', (e) => {
-    tooltip.style.left = (e.offsetX + 14) + 'px';
-    tooltip.style.top  = (e.offsetY + 14) + 'px';
-  });
-
-  // ── Click → open drawer
-  sigmaInstance.on('clickNode', ({ node }) => {
-    selectNode(node, g);
-  });
-
-  // ── Click background → close drawer
-  sigmaInstance.on('clickStage', () => {
-    if (selectedId) {
-      g.setNodeAttribute(selectedId, 'highlighted', false);
-      selectedId = null;
+    function layerOffset(layer) {
+      if (layer === "episodic") return new THREE.Vector3(-118, -22, -46);
+      if (layer === "semantic") return new THREE.Vector3(18, 8, 0);
+      if (layer === "procedural") return new THREE.Vector3(138, 18, 54);
+      return new THREE.Vector3();
     }
-    closeDrawer();
-    refreshNodeListSelection(null);
-  });
-}
 
-function selectNode(id, g) {
-  if (selectedId && g.hasNode(selectedId)) {
-    g.setNodeAttribute(selectedId, 'highlighted', false);
-  }
-  selectedId = id;
-  g.setNodeAttribute(id, 'highlighted', true);
-  const raw = g.getNodeAttribute(id, '_raw');
-  openDrawer(raw, id, g);
-  refreshNodeListSelection(id);
-  // Do NOT animate camera with raw graph coords — they are not screen coords.
-  // Sigma handles its own camera; moving it aggressively sends the view to infinity.
-  // A light zoom-to-fit on the selected node can be done later via sigmaInstance's
-  // built-in graph-to-viewport projection if needed.
-}
-
-// ─── SIDEBAR NODE LIST ────────────────────────────────────────────────────────
-
-function buildNodeList(nodes) {
-  const list = document.getElementById('node-list');
-  list.innerHTML = '';
-  nodes.forEach(n => {
-    const item = document.createElement('div');
-    item.className = 'node-item';
-    item.dataset.id = n.id;
-    const dot = document.createElement('div');
-    dot.className = `dot ${n.layer}`;
-    const texts = document.createElement('div');
-    texts.style.minWidth = '0';
-    const id   = document.createElement('div');
-    id.className = 'node-id';
-    id.textContent = n.id;
-    const sum = document.createElement('div');
-    sum.className = 'node-summary';
-    sum.textContent = n.summary || '';
-    texts.appendChild(id);
-    texts.appendChild(sum);
-    item.appendChild(dot);
-    item.appendChild(texts);
-    item.addEventListener('click', () => {
-      if (graphInstance && graphInstance.hasNode(n.id)) {
-        selectNode(n.id, graphInstance);
+    function buildEvolutionDepth(nodes, edges) {
+      const next = new Map();
+      const prev = new Map();
+      for (const edge of edges) {
+        const listNext = next.get(edge.source) || [];
+        listNext.push(edge.target);
+        next.set(edge.source, listNext);
+        const listPrev = prev.get(edge.target) || [];
+        listPrev.push(edge.source);
+        prev.set(edge.target, listPrev);
       }
-    });
-    list.appendChild(item);
-  });
-}
 
-function refreshNodeListSelection(id) {
-  document.querySelectorAll('.node-item').forEach(el => {
-    el.classList.toggle('selected', el.dataset.id === id);
-  });
-}
+      const depth = new Map();
+      const queue = [];
+      for (const node of nodes) {
+        if (!prev.has(node.id)) {
+          depth.set(node.id, 0);
+          queue.push(node.id);
+        }
+      }
+      while (queue.length) {
+        const current = queue.shift();
+        const base = depth.get(current) || 0;
+        for (const target of next.get(current) || []) {
+          if (!depth.has(target) || depth.get(target) < base + 1) {
+            depth.set(target, base + 1);
+            queue.push(target);
+          }
+        }
+      }
 
-// Search
-document.getElementById('search').addEventListener('input', (e) => {
-  const q = e.target.value.toLowerCase();
-  document.querySelectorAll('.node-item').forEach(el => {
-    const match = el.dataset.id.toLowerCase().includes(q) ||
-      el.querySelector('.node-summary').textContent.toLowerCase().includes(q);
-    el.style.display = match ? '' : 'none';
-  });
-});
+      state.evolutionGraph = { next, prev };
+      return depth;
+    }
 
-// ─── DETAIL DRAWER ────────────────────────────────────────────────────────────
+    function buildPositions(nodes, evolutionEdges) {
+      const depthMap = buildEvolutionDepth(nodes, evolutionEdges);
+      const positions = new Map();
+      const armBiasByLayer = {
+        episodic: -1.35,
+        semantic: -0.2,
+        procedural: 0.95,
+      };
 
-function openDrawer(raw, nodeId, g) {
-  const drawer = document.getElementById('drawer');
-  drawer.classList.add('open');
+      for (const node of nodes) {
+        const base = layerOffset(node.layer);
+        const h1 = hashNumber(node.id);
+        const h2 = hashNumber(node.summary || node.id);
+        const evoDepth = depthMap.get(node.id) || 0;
+        const swirl = evoDepth * 0.34;
+        const angle = armBiasByLayer[node.layer] + ((h1 % 240) / 240) * Math.PI * 1.2 + swirl;
+        const roleAngle = (((h2 % 180) + 20) / 180) * Math.PI;
+        const radius = 34 + (node.importance ?? 0.5) * 52 + (h1 % 58);
+        const jitter = ((h2 % 19) - 9) * 2.2;
+        const z = evoDepth * 82 + ((h1 % 21) - 10) * 5.4;
+        const x = base.x + Math.cos(angle) * radius + Math.sin(roleAngle) * 34;
+        const y = base.y + Math.sin(angle) * radius * 0.42 + Math.cos(roleAngle) * 22 + jitter;
+        positions.set(node.id, new THREE.Vector3(x, y, z));
+      }
 
-  document.getElementById('drawer-badge').textContent = raw.role || raw.layer;
-  document.getElementById('drawer-badge').className   = `badge ${raw.layer}`;
-  document.getElementById('drawer-title').textContent = raw.summary || nodeId;
+      for (const edge of evolutionEdges) {
+        const a = positions.get(edge.source);
+        const b = positions.get(edge.target);
+        if (a && b && Math.abs(a.z - b.z) < 24) b.z = a.z + 78;
+      }
+      return positions;
+    }
 
-  const body = document.getElementById('drawer-body');
-  body.innerHTML = '';
-
-  // Scores
-  if (raw.hit !== undefined || raw.adopt !== undefined || raw.harm !== undefined) {
-    const sect = section('Scores');
-    sect.appendChild(scoreBar('hit',   raw.hit  ?? 0, 'hit'));
-    sect.appendChild(scoreBar('adopt', raw.adopt ?? 0, 'adopt'));
-    sect.appendChild(scoreBar('harm',  raw.harm  ?? 0, 'harm'));
-    body.appendChild(sect);
-  }
-
-  // Source ref
-  if (raw.sourceRef) {
-    const sect = section('Source');
-    const ref = document.createElement('div');
-    ref.className = 'source-ref';
-    ref.textContent = '📄 ' + raw.sourceRef;
-    sect.appendChild(ref);
-    body.appendChild(sect);
-  }
-
-  // Tags
-  if (raw.tags && raw.tags.length) {
-    const sect = section('Tags');
-    const tags = document.createElement('div');
-    tags.className = 'tags';
-    raw.tags.forEach(t => {
-      const tag = document.createElement('span');
-      tag.className = 'tag';
-      tag.textContent = t;
-      tags.appendChild(tag);
-    });
-    sect.appendChild(tags);
-    body.appendChild(sect);
-  }
-
-  // Timestamp
-  if (raw.timestamp) {
-    const sect = section('Recorded');
-    const ts = document.createElement('div');
-    ts.style.color = '#7d8590';
-    ts.style.fontSize = '12px';
-    ts.textContent = new Date(raw.timestamp).toLocaleString();
-    sect.appendChild(ts);
-    body.appendChild(sect);
-  }
-
-  // Linked nodes (neighbors)
-  if (g) {
-    const neighbors = [];
-    g.forEachNeighbor(nodeId, (nbId, attrs) => {
-      if (nbId !== nodeId) neighbors.push({ id: nbId, ...attrs });
-    });
-    if (neighbors.length) {
-      const sect = section(`Linked Nodes (${neighbors.length})`);
-      neighbors.forEach(nb => {
-        const item = document.createElement('div');
-        item.className = 'linked-node';
-        const dot = document.createElement('div');
-        dot.className = `dot ${nb._raw?.layer || ''}`;
-        const lbl = document.createElement('span');
-        lbl.className = 'lbl';
-        lbl.textContent = nb._raw?.id || nb.id;
-        const sum = document.createElement('span');
-        sum.className = 'lsum';
-        sum.textContent = nb._raw?.summary || nb.label || '';
-        item.appendChild(dot);
-        item.appendChild(lbl);
-        item.appendChild(sum);
-        item.addEventListener('click', () => selectNode(nb.id, g));
-        sect.appendChild(item);
+    function makeGlowSprite(hexColor) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext("2d");
+      const gradient = ctx.createRadialGradient(64, 64, 10, 64, 64, 64);
+      const color = new THREE.Color(hexColor);
+      const rgb = `${Math.round(color.r * 255)}, ${Math.round(color.g * 255)}, ${Math.round(color.b * 255)}`;
+      gradient.addColorStop(0, `rgba(${rgb},0.96)`);
+      gradient.addColorStop(0.36, `rgba(${rgb},0.44)`);
+      gradient.addColorStop(0.62, `rgba(${rgb},0.12)`);
+      gradient.addColorStop(1, `rgba(${rgb},0)`);
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 128, 128);
+      const texture = new THREE.CanvasTexture(canvas);
+      return new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
       });
-      body.appendChild(sect);
     }
-  }
-}
 
-function closeDrawer() {
-  document.getElementById('drawer').classList.remove('open');
-}
+    function addAtmosphere() {
+      const starGeom = new THREE.BufferGeometry();
+      const starCount = 420;
+      const positions = new Float32Array(starCount * 3);
+      for (let i = 0; i < starCount; i += 1) {
+        positions[i * 3] = (Math.random() - 0.5) * 1400;
+        positions[i * 3 + 1] = (Math.random() - 0.5) * 760;
+        positions[i * 3 + 2] = (Math.random() - 0.5) * 2000;
+      }
+      starGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      const starMat = new THREE.PointsMaterial({
+        color: 0xbfd0ff,
+        size: 1.3,
+        transparent: true,
+        opacity: 0.34,
+        depthWrite: false,
+      });
+      starField.add(new THREE.Points(starGeom, starMat));
 
-document.getElementById('drawer-close').addEventListener('click', () => {
-  if (selectedId && graphInstance && graphInstance.hasNode(selectedId)) {
-    graphInstance.setNodeAttribute(selectedId, 'highlighted', false);
-  }
-  selectedId = null;
-  closeDrawer();
-  refreshNodeListSelection(null);
-});
+      const mistGeom = new THREE.BufferGeometry();
+      const mistCount = 160;
+      const mist = new Float32Array(mistCount * 3);
+      for (let i = 0; i < mistCount; i += 1) {
+        mist[i * 3] = (Math.random() - 0.5) * 760;
+        mist[i * 3 + 1] = (Math.random() - 0.5) * 360;
+        mist[i * 3 + 2] = (Math.random() - 0.5) * 1200;
+      }
+      mistGeom.setAttribute("position", new THREE.BufferAttribute(mist, 3));
+      const mistMat = new THREE.PointsMaterial({
+        color: 0x456bff,
+        size: 18,
+        transparent: true,
+        opacity: 0.045,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      starField.add(new THREE.Points(mistGeom, mistMat));
 
-function section(title) {
-  const wrap = document.createElement('div');
-  wrap.className = 'drawer-section';
-  const h = document.createElement('div');
-  h.className = 'drawer-section-title';
-  h.textContent = title;
-  wrap.appendChild(h);
-  return wrap;
-}
-
-function scoreBar(label, val, cls) {
-  const row = document.createElement('div');
-  row.className = 'score-row';
-  const lbl = document.createElement('div');
-  lbl.className = 'score-label';
-  lbl.textContent = label;
-  const barWrap = document.createElement('div');
-  barWrap.className = 'score-bar-wrap';
-  const bar = document.createElement('div');
-  bar.className = `score-bar ${cls}`;
-  bar.style.width = '0%';
-  barWrap.appendChild(bar);
-  const valEl = document.createElement('div');
-  valEl.className = 'score-val';
-  valEl.textContent = val.toFixed(2);
-  row.appendChild(lbl);
-  row.appendChild(barWrap);
-  row.appendChild(valEl);
-  // animate bar
-  setTimeout(() => { bar.style.width = (val * 100) + '%'; }, 30);
-  return row;
-}
-
-// ─── LAYER FILTER ─────────────────────────────────────────────────────────────
-
-document.querySelectorAll('.chip').forEach(chip => {
-  chip.addEventListener('click', () => {
-    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
-    chip.classList.add('active');
-    activeLayer = chip.dataset.layer;
-    if (graphData) renderGraph(graphData.nodes, graphData.edges);
-  });
-});
-
-// ─── STATS ────────────────────────────────────────────────────────────────────
-
-function updateStats(nodes, edges) {
-  const ep = nodes.filter(n => n.layer === 'episodic').length;
-  const sm = nodes.filter(n => n.layer === 'semantic').length;
-  const pr = nodes.filter(n => n.layer === 'procedural').length;
-  document.getElementById('stat-ep').textContent = ep;
-  document.getElementById('stat-sm').textContent = sm;
-  document.getElementById('stat-pr').textContent = pr;
-  document.getElementById('stat-ed').textContent = edges.length;
-}
-
-// ─── RENDER ───────────────────────────────────────────────────────────────────
-
-function renderGraph(nodes, edges) {
-  const filtered = activeLayer === 'all' ? nodes : nodes.filter(n => n.layer === activeLayer);
-  const g = buildGraphology(filtered, edges, activeLayer);
-  graphInstance = g;
-  applyForceLayout(g, () => {
-    initSigma(g);
-    buildNodeList(filtered);
-    updateStats(nodes, edges);
-    setStatus('live', `${filtered.length} nodes · ${g.size} edges`);
-  });
-}
-
-// ─── DIFF MODE ────────────────────────────────────────────────────────────────
-
-document.getElementById('diff-check').addEventListener('change', async (e) => {
-  diffMode = e.target.checked;
-  const legend   = document.getElementById('diff-legend');
-  const banner   = document.getElementById('diff-banner');
-
-  if (!diffMode) {
-    legend.classList.remove('visible');
-    banner.classList.remove('visible');
-    if (graphData) renderGraph(graphData.nodes, graphData.edges);
-    return;
-  }
-
-  // Try fetching snapshots
-  try {
-    const snaps = await fetch('/api/snapshots').then(r => r.json());
-    if (!snaps.length) {
-      // Generate synthetic diff from fixture data for demo
-      applySyntheticDiff();
-    } else {
-      const diffData = await fetch(`/api/diff/${snaps[snaps.length - 1]}`).then(r => r.json());
-      applyDiff(diffData.pre, diffData.post);
+      const nebulaPalette = [0x4e6fff, 0x7a63ff, 0xff8c54];
+      const nebulaOffsets = [
+        new THREE.Vector3(12, 0, 40),
+        new THREE.Vector3(108, 18, 182),
+        new THREE.Vector3(-124, -18, -32),
+      ];
+      nebulaPalette.forEach((color, index) => {
+        const sprite = new THREE.Sprite(makeGlowSprite(color));
+        sprite.position.copy(nebulaOffsets[index]);
+        sprite.scale.set(index === 0 ? 420 : 280, index === 0 ? 280 : 220, 1);
+        sprite.material.opacity = index === 0 ? 0.22 : 0.16;
+        starField.add(sprite);
+      });
     }
-    legend.classList.add('visible');
-    banner.classList.add('visible');
-  } catch (err) {
-    applySyntheticDiff();
-    legend.classList.add('visible');
-    banner.classList.add('visible');
-  }
-});
 
-function applySyntheticDiff() {
-  if (!graphInstance) return;
-  const nodes = graphInstance.nodes();
-  nodes.forEach((id, i) => {
-    const roll = (i + 1) % 4;
-    if (roll === 0) {
-      // "removed" → red glow
-      graphInstance.setNodeAttribute(id, 'color', 'rgba(248,81,73,0.5)');
-      graphInstance.setNodeAttribute(id, 'borderColor', '#f85149');
-    } else if (roll === 1) {
-      // "added" → green glow
-      graphInstance.setNodeAttribute(id, 'color', 'rgba(46,160,67,0.8)');
+    function buildLineSegments(edges, positions, options) {
+      const vertices = [];
+      const colors = [];
+      const colorA = new THREE.Color(options.colorA);
+      const colorB = new THREE.Color(options.colorB ?? options.colorA);
+
+      for (const edge of edges) {
+        const source = positions.get(edge.source);
+        const target = positions.get(edge.target);
+        if (!source || !target) continue;
+        vertices.push(source.x, source.y, source.z, target.x, target.y, target.z);
+        colors.push(colorA.r, colorA.g, colorA.b, colorB.r, colorB.g, colorB.b);
+      }
+
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+      geom.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+
+      const mat = new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: options.opacity,
+        depthWrite: false,
+      });
+      return new THREE.LineSegments(geom, mat);
     }
-    // else unchanged
-  });
-  if (sigmaInstance) sigmaInstance.refresh();
-}
 
-function applyDiff(pre, post) {
-  if (!graphInstance || !pre || !post) return;
-  const preIds  = new Set(pre.nodes.map(n => n.id));
-  const postIds = new Set(post.nodes.map(n => n.id));
+    function buildEvolutionTrails(edges, positions, options) {
+      const group = new THREE.Group();
+      group.userData.materials = [];
+      const color = new THREE.Color(options.colorA);
 
-  graphInstance.nodes().forEach(id => {
-    if (!preIds.has(id) && postIds.has(id)) {
-      graphInstance.setNodeAttribute(id, 'color', '#2ea043');
-    } else if (preIds.has(id) && !postIds.has(id)) {
-      graphInstance.setNodeAttribute(id, 'color', 'rgba(248,81,73,0.5)');
+      for (const edge of edges) {
+        const source = positions.get(edge.source);
+        const target = positions.get(edge.target);
+        if (!source || !target) continue;
+
+        const seed = hashNumber(`${edge.source}:${edge.target}`);
+        const midpoint = source.clone().lerp(target, 0.5);
+        midpoint.y += 18 + Math.abs(target.z - source.z) * 0.08;
+        midpoint.x += ((seed % 17) - 8) * 2.2;
+        midpoint.z += 10;
+
+        const curve = new THREE.CatmullRomCurve3([source, midpoint, target]);
+        const points = curve.getPoints(22);
+        const geom = new THREE.BufferGeometry().setFromPoints(points);
+        const mat = new THREE.LineBasicMaterial({
+          color,
+          transparent: true,
+          opacity: options.opacity,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        });
+        const line = new THREE.Line(geom, mat);
+        group.userData.materials.push(mat);
+        group.add(line);
+      }
+
+      return group;
     }
-  });
-  if (sigmaInstance) sigmaInstance.refresh();
-}
 
-// ─── BOOT ─────────────────────────────────────────────────────────────────────
+    function setGroupOpacity(group, opacity) {
+      if (!group) return;
+      if (group.userData?.materials?.length) {
+        for (const mat of group.userData.materials) mat.opacity = opacity;
+        return;
+      }
+      if (group.material) group.material.opacity = opacity;
+    }
 
-(async () => {
-  try {
-    setStatus('', 'Fetching graph…');
-    const data = await fetchGraph();
-    graphData = data;
-    renderGraph(data.nodes, data.edges);
-  } catch (err) {
-    setStatus('err', 'Failed to load — is serve.mjs running?');
-    document.getElementById('layout-overlay').classList.add('hidden');
-    console.error(err);
-  }
-})();
-</script>
+    function clearGraph() {
+      while (graphGroup.children.length) {
+        const child = graphGroup.children.pop();
+        child.geometry?.dispose?.();
+        child.material?.dispose?.();
+      }
+      state.nodeMeshes.clear();
+      state.glowMeshes.clear();
+      state.labelLookup.clear();
+      state.relatedByNode.clear();
+    }
+
+    function populateDrawer(node) {
+      if (!node) {
+        titleEl.textContent = "Memory Graph";
+        badgesEl.innerHTML = "";
+        summaryEl.textContent = "Select a node to inspect its memory meaning, evidence context, evolution position, and related jumps.";
+        memoryMetaEl.innerHTML = "";
+        jumpListEl.innerHTML = "";
+        stateRailEl.innerHTML = "";
+        return;
+      }
+
+      const layerColor = node.layer in colorByLayer ? colorByLayer[node.layer] : colorByLayer.unknown;
+      const layerHex = `#${new THREE.Color(layerColor).getHexString()}`;
+      titleEl.textContent = node.summary || node.id;
+      badgesEl.innerHTML = [
+        `<span class="badge" style="color:${layerHex}; background:${layerHex}18;">${node.layer}</span>`,
+        `<span class="badge">${node.role || "memory"}</span>`,
+        `<span class="badge">importance ${(node.importance ?? 0.5).toFixed(2)}</span>`,
+      ].join("");
+
+      summaryEl.textContent = node.summary || "No summary available.";
+
+      const tags = Array.isArray(node.tags) && node.tags.length ? node.tags.join(", ") : "none";
+      const metaRows = [
+        ["Node ID", node.id],
+        ["Memory Source", node.sourceRef || "(unknown)"],
+        ["Tags", tags],
+        ["Scores", `hit ${Number(node.hit || 0).toFixed(2)} / adopt ${Number(node.adopt || 0).toFixed(2)} / harm ${Number(node.harm || 0).toFixed(2)}`],
+      ];
+      memoryMetaEl.innerHTML = metaRows.map(([k, v]) => `<div class="meta-row"><div class="meta-key">${k}</div><div class="meta-value">${v}</div></div>`).join("");
+
+      const related = (state.relatedByNode.get(node.id) || []).slice(0, 6);
+      jumpListEl.innerHTML = related.length
+        ? related.map((item) => `<button class="jump-item" data-target="${item.targetId}"><div><div class="jump-title">${item.title}</div><div class="jump-subtitle">${item.subtitle}</div></div><div class="jump-cta">jump</div></button>`).join("")
+        : `<div class="meta-row"><div class="meta-value">No related jumps available.</div></div>`;
+
+      const prev = state.evolutionGraph.prev.get(node.id) || [];
+      const next = state.evolutionGraph.next.get(node.id) || [];
+      const railItems = [];
+      if (prev.length) {
+        for (const prevId of prev.slice(0, 3)) {
+          const prevNode = state.labelLookup.get(prevId);
+          railItems.push(`<div class="rail-item"><div class="rail-label">previous</div>${prevNode?.summary || prevId}</div>`);
+        }
+      }
+      railItems.push(`<div class="rail-item active"><div class="rail-label">current</div>${node.summary || node.id}</div>`);
+      if (next.length) {
+        for (const nextId of next.slice(0, 3)) {
+          const nextNode = state.labelLookup.get(nextId);
+          railItems.push(`<div class="rail-item"><div class="rail-label">next</div>${nextNode?.summary || nextId}</div>`);
+        }
+      }
+      if (!prev.length && !next.length) {
+        railItems.push(`<div class="rail-item"><div class="rail-label">state line</div>No explicit evolution line in current data.</div>`);
+      }
+      stateRailEl.innerHTML = railItems.join("");
+    }
+
+    function buildRelatedConnections(nodes, edges) {
+      const byNode = new Map(nodes.map((node) => [node.id, []]));
+      for (const edge of edges) {
+        const sourceNode = state.labelLookup.get(edge.source);
+        const targetNode = state.labelLookup.get(edge.target);
+        if (!sourceNode || !targetNode) continue;
+        const subtitle = edge.type === "supersession" ? "same evolution line" : edge.type === "structural" ? "related memory" : "semantic neighbor";
+        const pushItem = (nodeId, targetId) => {
+          const list = byNode.get(nodeId) || [];
+          list.push({
+            targetId,
+            title: (state.labelLookup.get(targetId)?.summary || targetId).slice(0, 120),
+            subtitle,
+          });
+          byNode.set(nodeId, list);
+        };
+        pushItem(edge.source, edge.target);
+        pushItem(edge.target, edge.source);
+      }
+      state.relatedByNode = byNode;
+    }
+
+    function focusNode(nodeId, smooth = true) {
+      const mesh = state.nodeMeshes.get(nodeId);
+      const node = state.labelLookup.get(nodeId);
+      if (!mesh || !node) return;
+      state.selectedNodeId = nodeId;
+      populateDrawer(node);
+      updateVisualState();
+      const target = mesh.position.clone();
+      if (smooth) controls.target.lerp(target, 0.22);
+      else controls.target.copy(target);
+    }
+
+    function updateVisualState() {
+      const selectedId = state.selectedNodeId;
+      const selectedPrev = selectedId ? new Set(state.evolutionGraph.prev.get(selectedId) || []) : new Set();
+      const selectedNext = selectedId ? new Set(state.evolutionGraph.next.get(selectedId) || []) : new Set();
+
+      for (const [nodeId, mesh] of state.nodeMeshes.entries()) {
+        const node = state.labelLookup.get(nodeId);
+        const visible = state.layer === "all" || node.layer === state.layer;
+        mesh.visible = visible;
+        const glow = state.glowMeshes.get(nodeId);
+        if (glow) glow.visible = visible;
+
+        const isSelected = nodeId === selectedId;
+        const onSelectedLine = selectedPrev.has(nodeId) || selectedNext.has(nodeId);
+        const baseScale = mesh.userData.baseScale;
+        mesh.scale.setScalar(isSelected ? baseScale * 1.92 : onSelectedLine ? baseScale * 1.34 : baseScale);
+        mesh.material.opacity = state.view === "evolution" && !onSelectedLine && !isSelected ? 0.38 : 1;
+        if (glow) {
+          glow.scale.setScalar(isSelected ? mesh.userData.glowScale * 1.12 : onSelectedLine ? mesh.userData.glowScale * 1.02 : mesh.userData.glowScale);
+          glow.material.opacity = isSelected ? 0.74 : onSelectedLine ? 0.46 : 0.22;
+        }
+      }
+
+      if (state.lineGroups.semantic) {
+        state.lineGroups.semantic.visible = state.view !== "evolution";
+        setGroupOpacity(state.lineGroups.semantic, state.view === "semantic" ? 0.48 : 0.24);
+      }
+      if (state.lineGroups.structural) {
+        state.lineGroups.structural.visible = state.view !== "evolution";
+        setGroupOpacity(state.lineGroups.structural, state.view === "semantic" ? 0.34 : 0.16);
+      }
+      if (state.lineGroups.evolution) {
+        state.lineGroups.evolution.visible = state.view !== "semantic";
+        setGroupOpacity(state.lineGroups.evolution, state.view === "evolution" ? 0.96 : 0.72);
+      }
+    }
+
+    function renderGraph(graphData) {
+      clearGraph();
+      state.graph = graphData;
+      const nodes = graphData.nodes || [];
+      const edges = graphData.edges || [];
+      const evolutionEdges = edges.filter((edge) => edge.type === "supersession");
+      const structuralEdges = edges.filter((edge) => edge.type === "structural");
+      const semanticEdges = edges.filter((edge) => edge.type === "associative");
+
+      for (const node of nodes) state.labelLookup.set(node.id, node);
+      buildRelatedConnections(nodes, edges);
+
+      const positions = buildPositions(nodes, evolutionEdges);
+      state.lineGroups.semantic = buildLineSegments(semanticEdges, positions, { colorA: 0x7b98ff, colorB: 0xb7d7ff, opacity: 0.24 });
+      state.lineGroups.structural = buildLineSegments(structuralEdges, positions, { colorA: 0x58d2ab, colorB: 0x7ce9d3, opacity: 0.16 });
+      state.lineGroups.evolution = buildEvolutionTrails(evolutionEdges, positions, { colorA: 0xff9d63, opacity: 0.72 });
+      graphGroup.add(state.lineGroups.semantic, state.lineGroups.structural, state.lineGroups.evolution);
+
+      for (const node of nodes) {
+        const pos = positions.get(node.id);
+        const layerColor = colorByLayer[node.layer] || colorByLayer.unknown;
+        const size = 8.8 + (node.importance ?? 0.5) * 8.8 + (node.role === "architecture" ? 2.6 : 0);
+        const geom = new THREE.SphereGeometry(size, 24, 24);
+        const mat = new THREE.MeshPhongMaterial({
+          color: layerColor,
+          transparent: true,
+          opacity: 1,
+          shininess: 150,
+          emissive: new THREE.Color(layerColor).multiplyScalar(0.58),
+        });
+        const mesh = new THREE.Mesh(geom, mat);
+        mesh.position.copy(pos);
+        mesh.userData = { id: node.id, baseScale: 1, glowScale: size * 4.6 };
+        state.nodeMeshes.set(node.id, mesh);
+        graphGroup.add(mesh);
+
+        const glow = new THREE.Sprite(makeGlowSprite(layerColor));
+        glow.position.copy(pos);
+        glow.scale.setScalar(size * 4.6);
+        glow.material.opacity = 0.22;
+        glow.userData = { id: node.id };
+        state.glowMeshes.set(node.id, glow);
+        graphGroup.add(glow);
+      }
+
+      graphGroup.position.set(-40, -6, -64);
+
+      updateVisualState();
+      const preferredId = evolutionEdges[0]?.target || evolutionEdges[0]?.source;
+      const firstNode = (preferredId && nodes.find((node) => node.id === preferredId))
+        || nodes.find((node) => node.layer === "semantic")
+        || nodes[0];
+      if (firstNode) focusNode(firstNode.id, false);
+    }
+
+    function updateChipGroup(containerId, key, value) {
+      document.querySelectorAll(`#${containerId} .chip`).forEach((chip) => {
+        chip.classList.toggle("active", chip.dataset[key] === value);
+      });
+    }
+
+    document.getElementById("layer-chips").addEventListener("click", (event) => {
+      const chip = event.target.closest(".chip");
+      if (!chip) return;
+      state.layer = chip.dataset.layer;
+      updateChipGroup("layer-chips", "layer", state.layer);
+      updateVisualState();
+    });
+
+    document.getElementById("view-chips").addEventListener("click", (event) => {
+      const chip = event.target.closest(".chip");
+      if (!chip) return;
+      state.view = chip.dataset.view;
+      updateChipGroup("view-chips", "view", state.view);
+      updateVisualState();
+    });
+
+    document.getElementById("mode-chips").addEventListener("click", (event) => {
+      const chip = event.target.closest(".chip");
+      if (!chip) return;
+      state.mode = chip.dataset.mode;
+      updateChipGroup("mode-chips", "mode", state.mode);
+    });
+
+    searchEl.addEventListener("input", () => {
+      const query = searchEl.value.trim().toLowerCase();
+      if (!query || !state.graph) {
+        searchResultsEl.classList.remove("visible");
+        searchResultsEl.innerHTML = "";
+        return;
+      }
+
+      const results = state.graph.nodes
+        .map((node) => {
+          const haystack = [node.id, node.summary, node.sourceRef, ...(node.tags || [])].join(" ").toLowerCase();
+          const score = haystack.includes(query) ? (haystack.startsWith(query) ? 2 : 1) : 0;
+          return { node, score };
+        })
+        .filter((item) => item.score > 0)
+        .sort((a, b) => b.score - a.score || (b.node.importance || 0) - (a.node.importance || 0))
+        .slice(0, 8);
+
+      if (!results.length) {
+        searchResultsEl.classList.remove("visible");
+        searchResultsEl.innerHTML = "";
+        return;
+      }
+
+      searchResultsEl.innerHTML = results.map(({ node }) => `<div class="search-item" data-node-id="${node.id}"><div class="search-title">${node.summary || node.id}</div><div class="search-subtitle">${node.layer} / ${node.role || "memory"}</div></div>`).join("");
+      searchResultsEl.classList.add("visible");
+    });
+
+    searchResultsEl.addEventListener("click", (event) => {
+      const item = event.target.closest(".search-item");
+      if (!item) return;
+      focusNode(item.dataset.nodeId, true);
+      searchResultsEl.classList.remove("visible");
+      searchResultsEl.innerHTML = "";
+      searchEl.value = "";
+    });
+
+    jumpListEl.addEventListener("click", (event) => {
+      const button = event.target.closest(".jump-item");
+      if (!button) return;
+      focusNode(button.dataset.target, true);
+    });
+
+    window.addEventListener("click", (event) => {
+      if (!event.target.closest("#search-wrap")) searchResultsEl.classList.remove("visible");
+    });
+
+    function onPointerMove(event) {
+      pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
+      pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    }
+
+    function onPointerClick() {
+      raycaster.setFromCamera(pointer, camera);
+      const intersects = raycaster.intersectObjects(Array.from(state.nodeMeshes.values()));
+      if (!intersects.length) return;
+      focusNode(intersects[0].object.userData.id, true);
+    }
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("click", onPointerClick);
+
+    function onResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    window.addEventListener("resize", onResize);
+
+    async function loadGraph() {
+      const response = await fetch("/api/graph");
+      if (!response.ok) throw new Error("Failed to load graph data.");
+      return response.json();
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      state.animationClock += 0.008;
+
+      if (state.mode === "static") {
+        const azimuth = Math.sin(state.animationClock * 0.22) * 0.00065;
+        camera.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), azimuth);
+      }
+
+      if (state.mode === "dynamic" && state.lineGroups.evolution) {
+        const pulse = 0.58 + (Math.sin(state.animationClock * 4.2) + 1) * 0.18;
+        state.lineGroups.evolution.material.opacity = state.view === "semantic" ? 0 : pulse;
+      }
+
+      const selectedId = state.selectedNodeId;
+      for (const [nodeId, glow] of state.glowMeshes.entries()) {
+        const phase = (hashNumber(nodeId) % 100) * 0.013;
+        const wave = 1 + Math.sin(state.animationClock * 2.4 + phase) * 0.04;
+        const base = glow.userData.id === selectedId ? 1.28 : 1;
+        glow.scale.setScalar((state.nodeMeshes.get(nodeId)?.userData.glowScale || 18) * wave * base);
+      }
+
+      starField.rotation.y += 0.0003;
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    addAtmosphere();
+    populateDrawer(null);
+
+    loadGraph()
+      .then((graphData) => {
+        renderGraph(graphData);
+        loadingEl.style.display = "none";
+      })
+      .catch((error) => {
+        loadingEl.textContent = error.message;
+        console.error(error);
+      });
+
+    animate();
+  </script>
 </body>
 </html>

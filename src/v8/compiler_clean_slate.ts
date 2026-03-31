@@ -19,7 +19,7 @@ import { loadNarrativeRecords } from "./architecture/narrative-source.js";
 import { unitizeNarrativeRecordsParallel } from "./architecture/unitizer.js";
 import { extractEvidenceSpans } from "./architecture/evidence.js";
 import { extractMemoryItems } from "./architecture/ir-extractor.js";
-import { buildLlmIrJobs, loadLlmIrItems, writeIrLlmJobs } from "./architecture/ir-llm.js";
+import { buildLlmIrJobs, loadLlmIrArtifacts, writeIrLlmJobs } from "./architecture/ir-llm.js";
 import { materializeGraph } from "./architecture/graph-materializer.js";
 import { buildRuntimeProjections } from "./architecture/runtime-projection.js";
 import { buildRelationPlanningArtifacts } from "./architecture/relation-planning.js";
@@ -32,10 +32,10 @@ import {
     writeRelationReviewJobsMarkdown,
 } from "./architecture/relation-review-llm.js";
 import { readJsonl, writeJsonl } from "./architecture/io.js";
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { runCommandChain } from "./review/command-runner.js";
 import type {
     V8EvidenceSpan,
     V8GraphLayer,
@@ -210,7 +210,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     let allNarrativeDocs = loadedNarrativeDocs;
     logStage(`narratives loaded (${allNarrativeDocs.length})`);
     if (startAt === "narrative" && allNarrativeDocs.length === 0) {
-        throw new Error("No narrative docs found in .memory/raw/observations/assembled.");
+        throw new Error("No narrative docs found in .memory/raw/assembled.");
     }
     const isPartialBuild = typeof options?.maxNarrativeDocs === "number";
     if (options?.maxNarrativeDocs && allNarrativeDocs.length > options.maxNarrativeDocs) {
@@ -318,6 +318,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         llmCacheEntries: 0,
         irRuleItems: 0,
         irLlmItems: 0,
+        irPendingItems: 0,
         irFallbackItems: 0,
         irFallbackApplied: false,
         relationEntityPostings: 0,
@@ -581,25 +582,31 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     logStage("llm jobs persisted");
     const llmStatus =
         llmJobs.length > 0
-            ? maybeRunIrLlm({
-                  command: options?.llmCommand,
-                  jobsPath: store.irLlmJobs,
-                  itemsMdPath: store.irLlmItemsMd,
-                  itemsJsonlPath: store.irLlmItems,
-                  timeoutMs: options?.llmCommandTimeoutMs,
-              })
+              ? maybeRunIrLlm({
+                    command: options?.llmCommand,
+                    jobsPath: store.irLlmJobs,
+                    itemsMdPath: store.irLlmItemsMd,
+                    itemsJsonlPath: store.irLlmItems,
+                    pendingJsonlPath: store.irLlmPending,
+                    timeoutMs: options?.llmCommandTimeoutMs,
+                })
             : buildStats.llmCacheHitUnits > 0
               ? "skipped(cache_hit)"
               : "skipped(no_hot_jobs)";
     logStage(`llm step finished (${llmStatus})`);
-    const freshLlmItems =
+    const freshLlmArtifacts =
         llmJobs.length > 0
-            ? loadLlmIrItems(
-                  { mdPath: store.irLlmItemsMd, jsonlPath: store.irLlmItems },
+            ? loadLlmIrArtifacts(
+                  {
+                      mdPath: store.irLlmItemsMd,
+                      jsonlPath: store.irLlmItems,
+                      jobsPath: store.irLlmJobs,
+                  },
                   llmUnitsForExtraction,
                   hotEvidenceSpans
               )
-            : [];
+            : { items: [], units: [], evidenceSpans: [] };
+    const freshLlmItems = freshLlmArtifacts.items;
     const llmItems = dedupeMemoryItems([...cachedLlmItems, ...freshLlmItems]);
     const nextLlmUnitCacheEntries = mergeLlmUnitCacheEntries({
         existing: llmUnitCacheEntries,
@@ -613,28 +620,63 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         ruleIrMode === "micro_light"
             ? extractMemoryItems(hotUnitsPhaseFiltered, hotEvidenceSpans)
             : [];
-    const fallbackRuleItems = buildMicroFallbackItems({
-        units: hotUnitsPhaseFiltered,
-        evidenceSpans: hotEvidenceSpans,
-        existingItems: [...ruleItems, ...llmItems],
-    });
     buildStats.irRuleItems = ruleItems.length;
     buildStats.irLlmItems = llmItems.length;
-    buildStats.irFallbackItems = fallbackRuleItems.length;
-    buildStats.irFallbackApplied = fallbackRuleItems.length > 0;
+    buildStats.irPendingItems = countJsonlRecords(store.irLlmPending);
+    buildStats.irFallbackItems = 0;
+    buildStats.irFallbackApplied = false;
     const resolvedLlmStatus = llmStatus;
-    const hotMemoryItems = [...ruleItems, ...llmItems, ...fallbackRuleItems];
+    const hotMemoryItems = [...ruleItems, ...llmItems];
+    const persistedUnitById = new Map(readJsonl<V8Unit>(store.units).map((unit) => [unit.id, unit]));
+    const persistedSpanById = new Map(
+        readJsonl<V8EvidenceSpan>(store.evidenceSpans).map((span) => [span.id, span])
+    );
+    const cachedDerivedUnits = Array.from(
+        new Set(cachedLlmItems.flatMap((item) => item.unitIds || []))
+    )
+        .map((id) => persistedUnitById.get(id))
+        .filter((unit): unit is V8Unit => Boolean(unit));
+    const cachedDerivedEvidenceSpans = Array.from(
+        new Set(cachedLlmItems.flatMap((item) => item.evidenceSpanIds || []))
+    )
+        .map((id) => persistedSpanById.get(id))
+        .filter((span): span is V8EvidenceSpan => Boolean(span));
+    const hotPersistedUnits =
+        ruleItems.length > 0
+            ? dedupeUnits([...hotUnitsPhaseFiltered, ...cachedDerivedUnits, ...freshLlmArtifacts.units])
+            : dedupeUnits([...cachedDerivedUnits, ...freshLlmArtifacts.units]);
+    const hotPersistedEvidenceSpans =
+        ruleItems.length > 0
+            ? dedupeEvidenceSpans([
+                  ...hotEvidenceSpans,
+                  ...cachedDerivedEvidenceSpans,
+                  ...freshLlmArtifacts.evidenceSpans,
+              ])
+            : dedupeEvidenceSpans([
+                  ...cachedDerivedEvidenceSpans,
+                  ...freshLlmArtifacts.evidenceSpans,
+              ]);
+    const persistedUnits = [
+        ...cached.units,
+        ...streamMacroCarry.units,
+        ...hotPersistedUnits,
+    ];
+    const persistedEvidenceSpans = [
+        ...cached.evidenceSpans,
+        ...streamMacroCarry.evidenceSpans,
+        ...hotPersistedEvidenceSpans,
+    ];
     const memoryItems = [
         ...cached.memoryItems,
         ...streamMacroCarry.memoryItems,
         ...hotMemoryItems,
     ];
     logStage(
-        `memory items extracted hot(rule=${ruleItems.length}, llm=${llmItems.length}, fallback=${fallbackRuleItems.length}) total=${memoryItems.length}`
+        `memory items extracted hot(rule=${ruleItems.length}, llm=${llmItems.length}, fallback=0) total=${memoryItems.length}`
     );
     if (options?.stopAfter === "memory_ir") {
-        writeJsonl(store.units, units);
-        writeJsonl(store.evidenceSpans, evidenceSpans);
+        writeJsonl(store.units, persistedUnits);
+        writeJsonl(store.evidenceSpans, persistedEvidenceSpans);
         writeJsonl(store.memoryItems, memoryItems);
         clearJsonlFiles([
             store.graphNodes,
@@ -667,8 +709,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         }
         persistRunReport({
             llmStatus: resolvedLlmStatus,
-            units: units.length,
-            evidenceSpans: evidenceSpans.length,
+            units: persistedUnits.length,
+            evidenceSpans: persistedEvidenceSpans.length,
             memoryItems: memoryItems.length,
             nodes: 0,
             edges: 0,
@@ -678,8 +720,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
         });
         return {
             narrativeDocs: allNarrativeDocs,
-            units,
-            evidenceSpans,
+            units: persistedUnits,
+            evidenceSpans: persistedEvidenceSpans,
             memoryItems,
             llmJobs,
             llmItems,
@@ -694,7 +736,11 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             scopePreview,
         };
     }
-    const { nodes, edges: baseEdges } = materializeGraph(memoryItems, units, evidenceSpans);
+    const { nodes, edges: baseEdges } = materializeGraph(
+        memoryItems,
+        persistedUnits,
+        persistedEvidenceSpans
+    );
     logStage(`graph materialized (nodes=${nodes.length} edges=${baseEdges.length})`);
     const reviewedRelationsInput = readJsonl<V8ReviewedRelation>(store.reviewedRelations);
     const existingHypothesisEdges = readJsonl<V8HypothesisEdge>(store.hypothesisEdges);
@@ -718,7 +764,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const relationPlanning = buildRelationPlanningArtifacts({
         nodes,
         edges: initialEdges,
-        evidenceSpans,
+        evidenceSpans: persistedEvidenceSpans,
         anchorNarrativeRecordIds:
             compilePhase === "stream" ? Array.from(scope.hotDocIds) : undefined,
         searchFeedbackSignals: existingSearchFeedbackSignals,
@@ -742,7 +788,7 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
             plans: relationPlanning.relationSearchPlans,
             candidateHits: relationPlanning.relationCandidateHits,
             nodes,
-            evidenceSpans,
+            evidenceSpans: persistedEvidenceSpans,
         });
     }
     const relationReviewLlmStatus = relationReviewLlmEnabled
@@ -796,9 +842,9 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     const projections = buildRuntimeProjections({
         nodes,
         edges,
-        evidenceSpans,
+        evidenceSpans: persistedEvidenceSpans,
     });
-    logStage("runtime projections built");
+    logStage("runtime compatibility projections built");
     buildStats.relationReviewedAccepted = reviewedOverlayFinal.stats.accepted;
     buildStats.relationReviewedHypothesis = reviewedOverlayFinal.stats.hypothesis;
     buildStats.relationReviewedRejected = reviewedOverlayFinal.stats.rejected;
@@ -819,8 +865,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     buildStats.learningEvents = mergedLearningEvents.length;
     buildStats.searchFeedbackSignals = mergedSearchFeedbackSignals.length;
     logStage("relation planning artifacts built");
-    writeJsonl(store.units, units);
-    writeJsonl(store.evidenceSpans, evidenceSpans);
+    writeJsonl(store.units, persistedUnits);
+    writeJsonl(store.evidenceSpans, persistedEvidenceSpans);
     writeJsonl(store.memoryItems, memoryItems);
     writeJsonl(store.graphNodes, nodes);
     writeJsonl(store.graphEdges, edges);
@@ -855,8 +901,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
     }
     persistRunReport({
         llmStatus: resolvedLlmStatus,
-        units: units.length,
-        evidenceSpans: evidenceSpans.length,
+        units: persistedUnits.length,
+        evidenceSpans: persistedEvidenceSpans.length,
         memoryItems: memoryItems.length,
         nodes: nodes.length,
         edges: edges.length,
@@ -867,8 +913,8 @@ export async function buildCleanSlateGraph(options?: CleanSlateBuildOptions) {
 
     return {
         narrativeDocs: allNarrativeDocs,
-        units,
-        evidenceSpans,
+        units: persistedUnits,
+        evidenceSpans: persistedEvidenceSpans,
         memoryItems,
         llmJobs,
         llmItems,
@@ -963,6 +1009,7 @@ interface BuildReport {
         llmCacheEntries: number;
         irRuleItems: number;
         irLlmItems: number;
+        irPendingItems: number;
         irFallbackItems: number;
         irFallbackApplied: boolean;
         relationEntityPostings: number;
@@ -1000,7 +1047,7 @@ interface BuildReport {
     };
 }
 
-const LLM_UNIT_CACHE_VERSION = 1;
+const LLM_UNIT_CACHE_VERSION = 2;
 
 interface LlmUnitCacheEntry {
     cacheKey: string;
@@ -1186,6 +1233,34 @@ function dedupeMemoryItems(items: V8MemoryItem[]): V8MemoryItem[] {
     return output;
 }
 
+function dedupeUnits(units: V8Unit[]): V8Unit[] {
+    const byId = new Map<string, V8Unit>();
+    for (const unit of units) {
+        byId.set(unit.id, unit);
+    }
+    return Array.from(byId.values()).sort(
+        (a, b) =>
+            a.narrativeRecordId.localeCompare(b.narrativeRecordId) ||
+            a.charStart - b.charStart ||
+            a.charEnd - b.charEnd ||
+            a.id.localeCompare(b.id)
+    );
+}
+
+function dedupeEvidenceSpans(spans: V8EvidenceSpan[]): V8EvidenceSpan[] {
+    const byId = new Map<string, V8EvidenceSpan>();
+    for (const span of spans) {
+        byId.set(span.id, span);
+    }
+    return Array.from(byId.values()).sort(
+        (a, b) =>
+            a.narrativeRecordId.localeCompare(b.narrativeRecordId) ||
+            a.charStart - b.charStart ||
+            a.charEnd - b.charEnd ||
+            a.id.localeCompare(b.id)
+    );
+}
+
 function buildMicroFallbackItems(input: {
     units: V8Unit[];
     evidenceSpans: V8EvidenceSpan[];
@@ -1241,7 +1316,7 @@ function buildMicroFallbackItems(input: {
             itemType: "discourse_unit",
             originType: "aggregated",
             layer: "micro",
-            subject: unit.speaker || "unknown",
+            subject: unit.role || "unknown",
             predicate: "summarizes",
             object,
             label: object,
@@ -1680,7 +1755,7 @@ function renderBuildReportMarkdown(report: BuildReport): string {
         `- llmCache: hitUnits=${report.buildStats.llmCacheHitUnits}, missUnits=${report.buildStats.llmCacheMissUnits}, entries=${report.buildStats.llmCacheEntries}`
     );
     lines.push(
-        `- irExtraction: rule=${report.buildStats.irRuleItems}, llm=${report.buildStats.irLlmItems}, fallback=${report.buildStats.irFallbackItems}, fallbackApplied=${String(report.buildStats.irFallbackApplied)}`
+        `- irExtraction: rule=${report.buildStats.irRuleItems}, llm=${report.buildStats.irLlmItems}, pending=${report.buildStats.irPendingItems}, fallback=${report.buildStats.irFallbackItems}, fallbackApplied=${String(report.buildStats.irFallbackApplied)}`
     );
     lines.push(
         `- relationPlanning: entityPostings=${report.buildStats.relationEntityPostings}, scopeCards=${report.buildStats.relationScopeCards}, groupSummaries=${report.buildStats.relationGroupSummaries}, searchPlans=${report.buildStats.relationSearchPlans}, shardSelections=${report.buildStats.relationShardSelections}, candidateHits=${report.buildStats.relationCandidateHits}, reviewJobs=${report.buildStats.relationReviewJobs}`
@@ -1846,16 +1921,13 @@ function hashNarrative(narrative: V8NarrativeRecord): string {
         .digest("hex");
 }
 
-function hasReusableArtifacts(store: ReturnType<typeof ensureV8StoreDirs>): boolean {
+export function hasReusableArtifacts(store: ReturnType<typeof ensureV8StoreDirs>): boolean {
     return (
         fs.existsSync(store.units) &&
         fs.existsSync(store.evidenceSpans) &&
         fs.existsSync(store.memoryItems) &&
         fs.existsSync(store.graphNodes) &&
         fs.existsSync(store.graphEdges) &&
-        fs.existsSync(store.ignitionNodes) &&
-        fs.existsSync(store.ignitionEdges) &&
-        fs.existsSync(store.recallBundles) &&
         fs.existsSync(store.entityPostings) &&
         fs.existsSync(store.entityScopeCards) &&
         fs.existsSync(store.groupSummaries) &&
@@ -1988,7 +2060,7 @@ function persistAssembledObservationMarkdown(
     if (!records.length) {
         return { writtenFiles: 0, skippedFiles: 0 };
     }
-    const outDir = path.join(rawDir, "observations", "assembled");
+    const outDir = path.join(rawDir, "assembled");
     fs.mkdirSync(outDir, { recursive: true });
     return persistSessionNarratives(outDir, records, sourceSyncStatePath);
 }
@@ -2329,7 +2401,7 @@ interface NarrativeEntry {
     sessionId: string;
     sourceRef: string;
     sourceCategory: string;
-    speaker: V8NarrativeRecord["speaker"];
+    role: V8NarrativeRecord["role"];
     timestamp: string | null;
     text: string;
     toolName?: string;
@@ -2420,7 +2492,7 @@ function persistSessionNarratives(
             sessionId,
             sourceRef: record.sourceRef,
             sourceCategory,
-            speaker: record.speaker,
+            role: record.role,
             timestamp: record.timestamp,
             text:
                 sourceCategory === "operation"
@@ -2708,12 +2780,11 @@ function renderSessionNarrative(
 function renderNarrativeTimelineEntries(entries: NarrativeEntry[]): string {
     const lines: string[] = [];
     for (const entry of entries) {
-        const speakerLabel = formatSpeakerLabel(entry);
-        const metaParts = buildEntryMeta(entry);
-        const header =
-            metaParts.length > 0
-                ? `### ${speakerLabel} (${metaParts.join(" · ")})`
-                : `### ${speakerLabel}`;
+        const roleLabel = entry.sourceCategory === "operation" ? "tool" : entry.role || "unknown";
+        const shortTs = formatTimestampShort(entry.timestamp);
+        const header = shortTs
+            ? `### ${shortTs} ${roleLabel}:`
+            : `### ${roleLabel}:`;
         lines.push(header.trim());
         lines.push(entry.text);
         lines.push("");
@@ -2748,7 +2819,7 @@ function persistNarrativeUnitPreview(
     }
 
     if (sessions.size === 0) return;
-    const outDir = path.join(rawDir, "observations", "assembled");
+    const outDir = path.join(rawDir, "assembled");
     fs.mkdirSync(outDir, { recursive: true });
 
     for (const [sessionId, recordMap] of sessions.entries()) {
@@ -2762,38 +2833,17 @@ function persistNarrativeUnitPreview(
         records.sort((a, b) => a.source.id.localeCompare(b.source.id));
         for (const entry of records) {
             const record = entry.source;
-            const text = (record.cleanText || record.rawText || "").trim();
             lines.push(`## ${record.id}`);
             if (record.metadata?.narrativeLabel) {
                 lines.push(`label: ${record.metadata.narrativeLabel}`);
             }
-            const originLabel = formatOriginLabel({
-                sessionId: record.metadata?.sessionId || "default",
-                sourceRef: record.sourceRef,
-                sourceCategory: record.metadata?.sourceCategory || "conversation",
-                speaker: record.speaker,
-                timestamp: record.timestamp,
-                text,
-                originKind: record.metadata?.sourceOrigin || record.metadata?.originRuntime,
-                originSessionKey: record.metadata?.originSessionKey,
-                originSessionId: record.metadata?.originSessionId,
-                originAgentId: record.metadata?.originAgentId,
-                originLabel: record.metadata?.originLabel,
-            });
-            if (originLabel) {
-                lines.push(`origin: ${originLabel}`);
-            }
-            if (record.speaker) {
-                lines.push(`speaker: ${record.speaker}`);
+            if (record.role) {
+                lines.push(`role: ${record.role}`);
             }
             if (record.timestamp) {
                 lines.push(`timestamp: ${formatTimestampShort(record.timestamp) || record.timestamp}`);
             }
-            if (text) {
-                lines.push("");
-                lines.push(text);
-                lines.push("");
-            }
+            lines.push("");
 
             const byLayer = new Map<V8Unit["layer"], V8Unit[]>();
             for (const unit of entry.units) {
@@ -2809,9 +2859,20 @@ function persistNarrativeUnitPreview(
                 lines.push(`### ${layer} units`);
                 for (const unit of bucket) {
                     const unitText = unit.text.trim();
-                    lines.push(`- ${unit.id}: ${unitText}`);
+                    const meta: string[] = [];
+                    if (unit.timestamp) meta.push(unit.timestamp);
+                    if (unit.role) meta.push(unit.role);
+                    const header =
+                        layer === "micro" && meta.length > 0 ? `### ${meta.join(" ")}:` : "";
+                    lines.push(`- ${unit.id}`);
+                    if (header) {
+                        lines.push(header);
+                    }
+                    if (unitText) {
+                        lines.push(unitText);
+                    }
+                    lines.push("");
                 }
-                lines.push("");
             }
         }
 
@@ -2828,27 +2889,6 @@ function persistNarrativeUnitPreview(
     }
 }
 
-function buildEntryMeta(entry: NarrativeEntry): string[] {
-    const parts: string[] = [];
-    const originLabel = formatOriginLabel(entry);
-    if (originLabel) parts.push(originLabel);
-    const shortTs = formatTimestampShort(entry.timestamp);
-    if (shortTs) parts.push(shortTs);
-    return parts;
-}
-
-function formatOriginLabel(entry: NarrativeEntry): string | null {
-    const originKind = entry.originKind?.trim();
-    const originLabel = entry.originLabel?.trim();
-    if (!originKind && !originLabel && !entry.originSessionKey) return null;
-
-    const kind = originKind || inferOriginKind(entry.originSessionKey);
-    if (originLabel) {
-        return kind ? `${kind} ${originLabel}` : originLabel;
-    }
-    return kind || null;
-}
-
 function inferOriginKind(originKey?: string | null): string | null {
     if (!originKey) return null;
     if (originKey.includes(":acp:")) return "acp";
@@ -2856,14 +2896,6 @@ function inferOriginKind(originKey?: string | null): string | null {
     return null;
 }
 
-
-function formatSpeakerLabel(entry: NarrativeEntry): string {
-    if (entry.sourceCategory === "operation") {
-        return "assistant (tool)";
-    }
-    if (entry.speaker) return entry.speaker;
-    return "unknown";
-}
 
 function stripOperationHeading(text: string): string {
     const lines = text.split("\n");
@@ -2892,6 +2924,7 @@ function maybeRunIrLlm(input: {
     jobsPath: string;
     itemsMdPath: string;
     itemsJsonlPath: string;
+    pendingJsonlPath?: string;
     timeoutMs?: number;
 }): string {
     const command = (input.command || "").trim();
@@ -2901,18 +2934,28 @@ function maybeRunIrLlm(input: {
         .replace(/\{items_md\}/g, input.itemsMdPath)
         .replace(/\{items_jsonl\}/g, input.itemsJsonlPath)
         .replace(/\{items\}/g, input.itemsMdPath);
+    const logPath = `${input.itemsMdPath}.invocation.log`;
     try {
-        const result = spawnSync(interpolated, {
-            shell: true,
-            encoding: "utf-8",
-            timeout: input.timeoutMs ?? 30 * 60 * 1000,
+        const result = runCommandChain(interpolated, {
+            timeoutMs: input.timeoutMs ?? 30 * 60 * 1000,
             env: {
                 ...process.env,
                 V8_IR_JOBS: input.jobsPath,
                 V8_IR_ITEMS: input.itemsMdPath,
                 V8_IR_ITEMS_MD: input.itemsMdPath,
                 V8_IR_ITEMS_JSONL: input.itemsJsonlPath,
+                ...(input.pendingJsonlPath
+                    ? { V8_IR_PENDING_JSONL: input.pendingJsonlPath }
+                    : {}),
             },
+        });
+        persistInvocationLog(logPath, {
+            command: interpolated,
+            status: result.status ?? null,
+            signal: result.signal ?? null,
+            stdout: result.stdout || "",
+            stderr: result.stderr || "",
+            error: result.error ? result.error.message : null,
         });
         if (result.error) {
             return `failed: ${result.error.message}`;
@@ -2922,6 +2965,14 @@ function maybeRunIrLlm(input: {
         }
         return "completed";
     } catch (err) {
+        persistInvocationLog(logPath, {
+            command: interpolated,
+            status: null,
+            signal: null,
+            stdout: "",
+            stderr: "",
+            error: err instanceof Error ? err.message : "unknown error",
+        });
         return `failed: ${err instanceof Error ? err.message : "unknown error"}`;
     }
 }
@@ -2941,10 +2992,8 @@ function maybeRunRelationReviewLlm(input: {
         .replace(/\{output_md\}/g, input.outputMdPath)
         .replace(/\{output_jsonl\}/g, input.outputJsonlPath);
     try {
-        const result = spawnSync(interpolated, {
-            shell: true,
-            encoding: "utf-8",
-            timeout: input.timeoutMs ?? 30 * 60 * 1000,
+        const result = runCommandChain(interpolated, {
+            timeoutMs: input.timeoutMs ?? 30 * 60 * 1000,
             env: {
                 ...process.env,
                 V8_REL_REVIEW_JOBS: input.jobsPath,
@@ -2963,3 +3012,33 @@ function maybeRunRelationReviewLlm(input: {
         return `failed: ${err instanceof Error ? err.message : "unknown error"}`;
     }
 }
+
+function persistInvocationLog(
+    filePath: string,
+    payload: {
+        command: string;
+        status: number | null;
+        signal: NodeJS.Signals | null;
+        stdout: string;
+        stderr: string;
+        error: string | null;
+    }
+): void {
+    try {
+        fs.writeFileSync(
+            filePath,
+            JSON.stringify(
+                {
+                    generatedAt: new Date().toISOString(),
+                    ...payload,
+                },
+                null,
+                2
+            ),
+            "utf-8"
+        );
+    } catch {
+        // ignore invocation-log persistence failures
+    }
+}
+

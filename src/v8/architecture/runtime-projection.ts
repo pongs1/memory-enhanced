@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJson } from "../../utils.js";
+import { collectNodeSpanIdsFromItems } from "../node-evidence.js";
 import type {
     V8EdgeCatalogEntry,
     V8EvidenceSpan,
@@ -8,6 +9,7 @@ import type {
     V8GraphNode,
     V8IgnitionEdgeProjection,
     V8IgnitionNodeProjection,
+    V8MemoryItem,
     V8RecallBundleProjection,
 } from "../types_v8.js";
 
@@ -131,15 +133,6 @@ function resolveSourceRef(
     return null;
 }
 
-const CONTROL_MEMORY_TYPES = new Set([
-    "preference",
-    "goal",
-    "constraint",
-    "decision",
-    "open_question",
-    "conversation_act",
-]);
-
 function isStateMemoryType(memoryType: string): boolean {
     return (
         memoryType.endsWith("_state") ||
@@ -148,15 +141,27 @@ function isStateMemoryType(memoryType: string): boolean {
     );
 }
 
-function isControlMemoryType(memoryType: string): boolean {
-    return CONTROL_MEMORY_TYPES.has(memoryType);
+function isProjectionCandidate(
+    node: V8GraphNode,
+    allowDiscourseUnitFallback: boolean
+): boolean {
+    if (node.memoryType === "evidence") return false;
+    if (node.primaryLayer !== "micro") return false;
+    if (node.id.startsWith("node_edge_")) {
+        if (!isStateMemoryType(node.memoryType)) {
+            return false;
+        }
+    }
+    if (node.memoryType === "discourse_unit") {
+        return allowDiscourseUnitFallback;
+    }
+    return true;
 }
 
 function resolvePackType(
     memoryType: string
 ): V8RecallBundleProjection["packType"] {
     if (isStateMemoryType(memoryType)) return "state";
-    if (isControlMemoryType(memoryType)) return "summary";
     return "raw_evidence";
 }
 
@@ -164,12 +169,14 @@ export function buildRuntimeProjections(input: {
     nodes: V8GraphNode[];
     edges: V8GraphEdge[];
     evidenceSpans: V8EvidenceSpan[];
+    memoryItems?: V8MemoryItem[];
 }): {
     ignitionNodes: V8IgnitionNodeProjection[];
     ignitionEdges: V8IgnitionEdgeProjection[];
     recallBundles: V8RecallBundleProjection[];
 } {
     const spanById = new Map(input.evidenceSpans.map((span) => [span.id, span]));
+    const itemsById = new Map((input.memoryItems || []).map((item) => [item.id, item]));
     const nodeById = new Map(input.nodes.map((node) => [node.id, node]));
     const edgeKinds = loadEdgeCatalog();
 
@@ -187,21 +194,21 @@ export function buildRuntimeProjections(input: {
         searchText: string;
         packType: V8RecallBundleProjection["packType"];
     }> = [];
+    const candidateNodes = input.nodes.filter((node) => isProjectionCandidate(node, false));
+    const effectiveCandidateNodes =
+        candidateNodes.length > 0
+            ? candidateNodes
+            : input.nodes.filter((node) => isProjectionCandidate(node, true));
 
-    for (const node of input.nodes) {
-        if (node.memoryType === "evidence") continue;
-        if (node.memoryType === "discourse_unit") continue;
-        if (node.primaryLayer !== "micro") continue;
-        if (node.id.startsWith("node_edge_")) {
-            if (!isControlMemoryType(node.memoryType) && !isStateMemoryType(node.memoryType)) {
-                continue;
-            }
-        }
+    for (const node of effectiveCandidateNodes) {
 
-        const spanIds = node.evidenceSpanIds || [];
-        const bestSpanIds = node.bestEvidenceSpanIds || [];
+        const spanIds = collectNodeSpanIdsFromItems(node, itemsById);
+        const bestSpanIds =
+            node.bestEvidenceSpanIds && node.bestEvidenceSpanIds.length > 0
+                ? node.bestEvidenceSpanIds
+                : spanIds.slice(0, 1);
         const { kind, dayKey } = classifyKind(spanIds, spanById);
-        const anchorUnitId = resolveAnchorUnitId(node, spanById);
+        const anchorUnitId = resolveAnchorUnitId(node, spanById, itemsById);
         const sourceRef = resolveSourceRef(spanIds, spanById);
         const label = node.canonicalLabel || "";
         const aliases = node.aliases || [];
@@ -224,16 +231,15 @@ export function buildRuntimeProjections(input: {
     const microBundleIdByNodeId = new Map<string, string>();
     const candidatesByMicroBundle = new Map<string, typeof candidates>();
     for (const candidate of candidates) {
-        const bundleId = candidate.anchorUnitId
-            ? `micro_${candidate.anchorUnitId}`
-            : `micro_${candidate.node.id}`;
+        const bundleId = candidate.anchorUnitId || `compat_${candidate.node.id}`;
+
         microBundleIdByNodeId.set(candidate.node.id, bundleId);
         const list = candidatesByMicroBundle.get(bundleId) || [];
         list.push(candidate);
         candidatesByMicroBundle.set(bundleId, list);
     }
 
-    const groupedBundles = buildBundlesFromCandidates(candidates, input.edges, edgeKinds, spanById);
+    const groupedBundles = buildBundlesFromCandidates(candidates, input.edges, edgeKinds, spanById, itemsById);
     const groupBundleIdsByNode = new Map<string, string[]>();
     for (const bundle of groupedBundles) {
         for (const nodeId of bundle.nodeIds) {
@@ -253,7 +259,7 @@ export function buildRuntimeProjections(input: {
         const summaryText = stateLine?.summaryText || unique(labelTop).join(" | ") || title;
         const sourceRefs = unique(sorted.map((item) => item.sourceRef || "").filter(Boolean));
         const evidenceSpanIds = unique(
-            sorted.flatMap((item) => item.node.evidenceSpanIds || [])
+            sorted.flatMap((item) => collectNodeSpanIdsFromItems(item.node, itemsById))
         ).slice(0, 80);
         const bestEvidenceSpanIds = selectBestSpans(evidenceSpanIds, spanById, 8);
         recallBundles.push({
@@ -284,9 +290,12 @@ export function buildRuntimeProjections(input: {
 
     for (const candidate of candidates) {
         const primaryBundleId =
-            microBundleIdByNodeId.get(candidate.node.id) || `micro_${candidate.node.id}`;
+            microBundleIdByNodeId.get(candidate.node.id) || `compat_${candidate.node.id}`;
         const linkedGroupIds = (groupBundleIdsByNode.get(candidate.node.id) || []).slice(0, 4);
         const bundleIds = unique([primaryBundleId, ...linkedGroupIds]);
+        const bestEvidenceSpanIds = Array.isArray(candidate.node.bestEvidenceSpanIds)
+            ? candidate.node.bestEvidenceSpanIds
+            : [];
         ignitionNodes.push({
             nodeId: candidate.node.id,
             bundleId: primaryBundleId,
@@ -301,11 +310,11 @@ export function buildRuntimeProjections(input: {
             summary: candidate.label,
             searchText: candidate.searchText,
             sourceRef: candidate.sourceRef,
-            evidenceSpanIds: candidate.node.evidenceSpanIds,
+            evidenceSpanIds: collectNodeSpanIdsFromItems(candidate.node, itemsById),
             bestEvidenceSpanIds:
-                candidate.node.bestEvidenceSpanIds.length > 0
-                    ? candidate.node.bestEvidenceSpanIds
-                    : candidate.node.evidenceSpanIds.slice(0, 1),
+                bestEvidenceSpanIds.length > 0
+                    ? bestEvidenceSpanIds
+                    : collectNodeSpanIdsFromItems(candidate.node, itemsById).slice(0, 1),
             dayKey: candidate.dayKey,
         });
     }
@@ -337,11 +346,12 @@ export function buildRuntimeProjections(input: {
 
 function resolveAnchorUnitId(
     node: V8GraphNode,
-    spanById: Map<string, V8EvidenceSpan>
+    spanById: Map<string, V8EvidenceSpan>,
+    itemsById: Map<string, V8MemoryItem>
 ): string | null {
     const spanOrder = [
         ...(node.bestEvidenceSpanIds || []),
-        ...(node.evidenceSpanIds || []),
+        ...collectNodeSpanIdsFromItems(node, itemsById),
     ];
     for (const spanId of spanOrder) {
         const span = spanById.get(spanId);
@@ -365,7 +375,8 @@ function buildBundlesFromCandidates(
     }>,
     edges: V8GraphEdge[],
     edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>,
-    spanById: Map<string, V8EvidenceSpan>
+    spanById: Map<string, V8EvidenceSpan>,
+    itemsById: Map<string, V8MemoryItem>
 ): Array<{
     bundleId: string;
     title: string;
@@ -448,7 +459,7 @@ function buildBundlesFromCandidates(
                     .filter(Boolean)
             );
             const evidenceSpanIds = unique(
-                sorted.flatMap((item) => item.node.evidenceSpanIds || [])
+                sorted.flatMap((item) => collectNodeSpanIdsFromItems(item.node, itemsById))
             );
             const bestEvidenceSpanIds = selectBestSpans(evidenceSpanIds, spanById, 8);
             bundles.push({

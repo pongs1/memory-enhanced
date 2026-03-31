@@ -6,6 +6,22 @@ import { buildCleanSlateGraph } from "../dist/v8/compiler_clean_slate.js";
 import { searchArchiveSpans } from "../dist/v8/archive-search.js";
 import { v8StorePaths } from "../dist/v8/paths_v8.js";
 import { V8GraphScanner } from "../dist/v8/scanner.js";
+import { assembleRecallPrompts, loadRecallAssemblyContext } from "../dist/v8/recall.js";
+import { validateBenchmarkRunIdentity } from "../dist/v8/review/benchmark-run-identity.js";
+import { combineRecallPrompts, runBenchmarkAnswerCommandAsync } from "../dist/v8/review/benchmark-answering.js";
+import {
+    buildBenchmarkQuerySignals,
+    buildSearchAnswerHits,
+    choosePreferredBenchmarkAnswer,
+    mergeBenchmarkHits,
+    scoreBenchmarkAnswerSupport,
+} from "../dist/v8/review/benchmark-runtime.js";
+import { buildBenchmarkScorecard } from "../dist/v8/review/benchmark-scorecard.js";
+import { evaluateGrounding } from "../dist/v8/review/grounding-eval.js";
+import { evaluateWorkflowAttribution } from "../dist/v8/review/workflow-attribution.js";
+import { classifyBenchmarkFailure } from "../dist/v8/review/failure-taxonomy.js";
+import { writeBenchmarkReviewMarkdown } from "../dist/v8/review/markdown-writer.js";
+import { runWithConcurrency } from "../dist/v8/review/async-pool.js";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const DEFAULT_TMP = path.join(ROOT, ".tmp", "benchmark-run");
@@ -22,26 +38,39 @@ async function main() {
     const benchmark = inferBenchmark(preparedSampleDir);
     const topK = Math.max(1, Number(args.top_k || 8));
     const outRoot = path.resolve(String(args.out || DEFAULT_TMP));
-    const workspace = path.join(outRoot, benchmark, sampleId);
+    const existingWorkspace = args.existing_workspace
+        ? path.resolve(String(args.existing_workspace))
+        : null;
+    const workspace = existingWorkspace || path.join(outRoot, benchmark, sampleId);
     const irLlmCommand = args.ir_llm_command ? String(args.ir_llm_command) : undefined;
+    const answerLlmCommand = args.answer_llm_command ? String(args.answer_llm_command) : undefined;
+    const questionConcurrency = Math.max(1, Number(args.question_concurrency || 20));
     const ruleIrMode = args.rule_ir_mode ? String(args.rule_ir_mode) : "off";
     const hypothesis = args.hypothesis ? String(args.hypothesis) : null;
+    const evaluationPath = args.evaluation_path ? String(args.evaluation_path) : null;
 
-    prepareWorkspace({
-        preparedSampleDir,
-        workspace,
-        sampleId,
-    });
+    if (existingWorkspace) {
+        syncBenchmarkInputs({
+            preparedSampleDir,
+            workspace,
+        });
+    } else {
+        prepareWorkspace({
+            preparedSampleDir,
+            workspace,
+            sampleId,
+        });
 
-    await buildCleanSlateGraph({
-        workspace,
-        startAt: "narrative",
-        compilePhase: "final",
-        ruleIrMode,
-        rebuildMode: "full",
-        emitUnitPreview: false,
-        llmCommand: irLlmCommand,
-    });
+        await buildCleanSlateGraph({
+            workspace,
+            startAt: "source",
+            compilePhase: "final",
+            ruleIrMode,
+            rebuildMode: "full",
+            emitUnitPreview: false,
+            llmCommand: irLlmCommand,
+        });
+    }
 
     const store = v8StorePaths(workspace);
     const questions = readJsonl(path.join(preparedSampleDir, "questions.jsonl"));
@@ -54,7 +83,7 @@ async function main() {
     const verticalTriggerCards = readJsonl(path.join(store.runtimeDir, "vertical_trigger_cards.jsonl"));
     const narrativeShardSelections = readJsonl(store.narrativeShardSelections);
     const buildReport = readJsonFile(store.buildReport);
-    const results = questions.map((question) =>
+    const results = await runWithConcurrency(questions, questionConcurrency, async (question) =>
         evaluateQuestion({
             workspace,
             benchmark,
@@ -68,23 +97,64 @@ async function main() {
             verticalTriggerCards,
             narrativeShardSelections,
             topK,
+            answerLlmCommand,
         })
     );
+
+    const runIdentity = validateBenchmarkRunIdentity({
+        benchmark,
+        sampleId,
+        evaluationPath: requireEvaluationPath(evaluationPath),
+        executedWorkflows: {
+            backgroundCompile: true,
+            compiledRecall: true,
+            frontSearchEscalation: false,
+            backendRelationMining: false,
+        },
+    });
+    const sampleEvaluations = results.map((result) =>
+        buildSampleEvaluation({
+            result,
+            evaluationPath: runIdentity.evaluationPath,
+            executedWorkflows: runIdentity.executedWorkflows,
+        })
+    );
+    const scorecard = buildBenchmarkScorecard({
+        runId: `${benchmark}_${sampleId}`,
+        dataset: benchmark,
+        evaluationPath: runIdentity.evaluationPath,
+        executedWorkflows: runIdentity.executedWorkflows,
+        samples: sampleEvaluations.map((sample) => ({
+            correctness: sample.correctness,
+            grounding: sample.grounding,
+            attribution: sample.attribution,
+            latencyMs: 0,
+            promptTokens: 0,
+            completionTokens: 0,
+        })),
+    });
 
     const summary = {
         benchmark,
         sample_id: sampleId,
         evaluation_profile: "compiled_memory_recall_proxy",
+        evaluation_path: runIdentity.evaluationPath,
+        executed_workflows: runIdentity.executedWorkflows,
         hypothesis,
         ir_llm_command: irLlmCommand || null,
+        answer_llm_command: answerLlmCommand || null,
         rule_ir_mode: ruleIrMode,
         compiler_loop_executed: true,
-        online_loop_probe: "scanner_replay_on_compiled_memory",
+        online_loop_probe: answerLlmCommand
+            ? "scanner_replay_with_memory_injected_answering"
+            : "scanner_replay_on_compiled_memory",
         measures: [
             "offline compile artifact quality",
             "raw archive retrieval quality on compiled memory",
             "ignition-guided retrieval quality on compiled memory",
-            "support-pack completeness under replayed text signals",
+            answerLlmCommand
+                ? "llm answer quality after memory injection and search augmentation"
+                : "support-pack completeness under replayed text signals",
         ],
         does_not_measure: [
             "true live lag between hot recall and background compile",
@@ -101,19 +171,44 @@ async function main() {
         build_relation_scope_cards: buildReport?.buildStats?.relationScopeCards ?? null,
         relation_search_plan_count: relationSearchPlans.length,
         result_count: results.length,
+        scorecard,
         raw_hit_at_k: results.filter((item) => item.raw_hit).length,
         raw_full_support_hit_at_k: results.filter((item) => item.raw_full_support_hit).length,
         static_guided_hit_at_k: results.filter((item) => item.static_guided_hit).length,
         static_guided_full_support_hit_at_k: results.filter((item) => item.static_guided_full_support_hit).length,
         ignition_guided_hit_at_k: results.filter((item) => item.ignition_guided_hit).length,
         ignition_guided_full_support_hit_at_k: results.filter((item) => item.ignition_guided_full_support_hit).length,
-        results,
+        results: sampleEvaluations,
     };
 
     const summaryPath = path.join(workspace, "benchmark_eval_summary.json");
     fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2), "utf-8");
     const markdownPath = path.join(workspace, "benchmark_eval_summary.md");
     fs.writeFileSync(markdownPath, renderSummaryMarkdown(summary), "utf-8");
+    writeBenchmarkReviewMarkdown({
+        outputPath: path.join(store.runtimeDir, "review", "benchmark_review.md"),
+        runContext: {
+            runId: `${benchmark}_${sampleId}`,
+            dataset: benchmark,
+            evaluationPath: runIdentity.evaluationPath,
+        },
+        scorecard,
+        failedSamples: [{
+            sampleId,
+            topFailures: sampleEvaluations
+                .filter((item) => item.failureCategory !== null)
+                .slice(0, 12)
+                .map((item) => ({
+                    questionId: item.question_id,
+                    verdict: item.failureCategory,
+                    question: item.question,
+                    expectedAnswer: item.answer,
+                    producedAnswer: item.proxy_answer,
+                    selectedUnitIds: item.selected_unit_ids,
+                    selectedUnitExcerpts: item.selected_unit_excerpts,
+                })),
+        }].filter((entry) => entry.topFailures.length > 0),
+    });
 
     console.log(`workspace=${workspace}`);
     console.log(`summary=${summaryPath}`);
@@ -123,6 +218,91 @@ async function main() {
     console.log(`static_guided_full_support_hit_at_${topK}=${summary.static_guided_full_support_hit_at_k}/${summary.question_count}`);
     console.log(`ignition_guided_hit_at_${topK}=${summary.ignition_guided_hit_at_k}/${summary.question_count}`);
     console.log(`ignition_guided_full_support_hit_at_${topK}=${summary.ignition_guided_full_support_hit_at_k}/${summary.question_count}`);
+}
+
+function requireEvaluationPath(value) {
+    const text = typeof value === "string" ? value.trim() : "";
+    if (!text) {
+        throw new Error("--evaluation-path is required for every benchmark run");
+    }
+    return text;
+}
+
+function buildSampleEvaluation({ result, evaluationPath, executedWorkflows }) {
+    const correctness = evaluateCorrectnessFromProxy(result);
+    const grounding = evaluateGrounding({
+        answer: result.answer || "",
+        selectedUnitIds: result.ignition_guided_bundle_ids || [],
+        selectedUnitExcerpts: (result.ignition_guided_top_hits || []).map((hit) => hit.span_text || hit.raw_text || ""),
+        supportingSourceRefs: (result.ignition_guided_top_hits || []).map((hit) => hit.span_id || "").filter(Boolean),
+        supportingMemoryItems: (result.ignition_guided_top_hits || []).map((hit) => ({
+            id: hit.span_id || "span",
+            evidenceSpans: hit.span_id ? [{ id: hit.span_id }] : [],
+        })),
+    });
+    const attribution = evaluateWorkflowAttribution({
+        evaluationPath,
+        executedWorkflows,
+    });
+    const failureCategory =
+        correctness.verdict === "correct" && grounding.verdict === "grounded" && !attribution.mismatch
+            ? null
+            : classifyBenchmarkFailure({
+                  correctnessVerdict: correctness.verdict,
+                  groundingVerdict: grounding.verdict,
+                  attributionMismatch: attribution.mismatch,
+                  evaluationError: false,
+                  workflowStage: evaluationPath,
+              });
+
+    return {
+        ...result,
+        proxy_answer: choosePreferredBenchmarkAnswer({
+            llmMemoryAnswer: result.llm_memory_answer,
+            llmMemoryStatus: result.llm_memory_status,
+            llmSearchAnswer: result.llm_search_answer,
+            llmSearchStatus: result.llm_search_status,
+            fallbackText: (result.ignition_guided_top_hits || [])[0]?.span_text || "",
+        }),
+        selected_unit_ids: result.ignition_guided_bundle_ids || [],
+        selected_unit_excerpts: (result.ignition_guided_top_hits || []).map((hit) => hit.span_text || hit.raw_text || ""),
+        correctness,
+        grounding,
+        attribution,
+        failureCategory,
+    };
+}
+
+function evaluateCorrectnessFromProxy(result) {
+    const produced = normalizeAnswerText(
+        choosePreferredBenchmarkAnswer({
+            llmMemoryAnswer: result.llm_memory_answer,
+            llmMemoryStatus: result.llm_memory_status,
+            llmSearchAnswer: result.llm_search_answer,
+            llmSearchStatus: result.llm_search_status,
+            fallbackText: result.proxy_answer || "",
+        })
+    );
+    const expected = normalizeAnswerText(result.answer || "");
+    if (produced && expected) {
+        if (produced === expected || produced.includes(expected) || expected.includes(produced)) {
+            return { verdict: "correct" };
+        }
+        const expectedTokens = tokenSet(expected);
+        const producedTokens = tokenSet(produced);
+        const overlap = overlapRatio(expectedTokens, producedTokens);
+        if (overlap >= 0.6) {
+            return { verdict: "partial" };
+        }
+        return { verdict: "wrong" };
+    }
+    if (result.ignition_guided_full_support_hit) {
+        return { verdict: "correct" };
+    }
+    if (result.ignition_guided_hit || result.static_guided_hit || result.raw_hit) {
+        return { verdict: "partial" };
+    }
+    return { verdict: "wrong" };
 }
 
 function prepareWorkspace({ preparedSampleDir, workspace, sampleId }) {
@@ -138,6 +318,10 @@ function prepareWorkspace({ preparedSampleDir, workspace, sampleId }) {
     }
     fs.writeFileSync(dstNarrative, content, "utf-8");
 
+    syncBenchmarkInputs({ preparedSampleDir, workspace });
+}
+
+function syncBenchmarkInputs({ preparedSampleDir, workspace }) {
     for (const name of ["questions.jsonl", "turn_map.jsonl", "metadata.json"]) {
         const src = path.join(preparedSampleDir, name);
         if (fs.existsSync(src)) {
@@ -148,7 +332,7 @@ function prepareWorkspace({ preparedSampleDir, workspace, sampleId }) {
     }
 }
 
-function evaluateQuestion({
+async function evaluateQuestion({
     workspace,
     benchmark,
     question,
@@ -161,7 +345,9 @@ function evaluateQuestion({
     verticalTriggerCards,
     narrativeShardSelections,
     topK,
+    answerLlmCommand,
 }) {
+    const startedAt = Date.now();
     const rawHits = searchArchiveSpans({
         workspace,
         query: String(question.question || ""),
@@ -169,6 +355,7 @@ function evaluateQuestion({
         mode: "hybrid",
         windowChars: 260,
     });
+    const afterRawSearchAt = Date.now();
     const selectedPlans = selectPlansForQuestion(question, relationSearchPlans, 3);
     const staticGuidedHits = selectedPlans.length > 0
         ? searchArchiveSpans({
@@ -190,6 +377,7 @@ function evaluateQuestion({
               ),
           })
         : [];
+    const afterStaticSearchAt = Date.now();
 
     const ignitionGuided = runIgnitionGuidedSearch({
         question,
@@ -203,6 +391,7 @@ function evaluateQuestion({
         workspace,
         topK,
     });
+    const afterIgnitionAt = Date.now();
 
     const rawMatch = findFirstMatch({ benchmark, question, turnMap, hits: rawHits });
     const staticGuidedMatch = findFirstMatch({
@@ -229,6 +418,56 @@ function evaluateQuestion({
         question,
         turnMap,
         hits: ignitionGuided.hits,
+    });
+    const recallContext = loadRecallAssemblyContext(workspace);
+    const recallPrompts = assembleRecallPrompts(
+        {
+            workspace,
+            bundles: ignitionGuided.activatedBundles || [],
+            goal: String(question.question || ""),
+            activeTask: "benchmark_answering",
+            latestUserRequest: String(question.question || ""),
+            mode: "profile",
+        },
+        recallContext
+    );
+    const combinedRecallPrompt = combineRecallPrompts(recallPrompts);
+    const searchAnswerHits = buildSearchAnswerHits({
+        staticGuidedHits,
+        ignitionGuidedHits: ignitionGuided.hits,
+        rawHits,
+        topK,
+    });
+    const [memoryAnswer, searchAnswer] = answerLlmCommand
+        ? await Promise.all([
+              runBenchmarkAnswerCommandAsync({
+                  command: answerLlmCommand,
+                  workspace,
+                  mode: "memory",
+                  question: String(question.question || ""),
+                  memoryPrompt: combinedRecallPrompt,
+              }),
+              runBenchmarkAnswerCommandAsync({
+                  command: answerLlmCommand,
+                  workspace,
+                  mode: "search",
+                  question: String(question.question || ""),
+                  memoryPrompt: combinedRecallPrompt,
+                  searchHits: searchAnswerHits.slice(0, topK),
+              }),
+          ])
+        : [
+              { answer: "", commandStatus: "skipped" },
+              { answer: "", commandStatus: "skipped" },
+          ];
+    const afterAnswerAt = Date.now();
+    const ignitionDirectAnswerSupport = scoreBenchmarkAnswerSupport({
+        answer: question.answer,
+        hits: ignitionGuided.hits,
+    });
+    const combinedDirectAnswerSupport = scoreBenchmarkAnswerSupport({
+        answer: question.answer,
+        hits: searchAnswerHits,
     });
     return {
         question_id: question.question_id,
@@ -271,6 +510,19 @@ function evaluateQuestion({
         ignition_guided_support_coverage: round4(ignitionGuidedSupport.coverage),
         ignition_guided_support_hits: ignitionGuidedSupport.hits,
         ignition_guided_full_support_hit: ignitionGuidedSupport.fullHit,
+        ignition_direct_answer_support: round4(ignitionDirectAnswerSupport),
+        combined_direct_answer_support: round4(combinedDirectAnswerSupport),
+        timings_ms: {
+            raw_search: afterRawSearchAt - startedAt,
+            static_search: afterStaticSearchAt - afterRawSearchAt,
+            ignition_guided: afterIgnitionAt - afterStaticSearchAt,
+            answer_llm: afterAnswerAt - afterIgnitionAt,
+            total: afterAnswerAt - startedAt,
+        },
+        llm_memory_answer: memoryAnswer.answer,
+        llm_memory_status: memoryAnswer.commandStatus,
+        llm_search_answer: searchAnswer.answer,
+        llm_search_status: searchAnswer.commandStatus,
         raw_top_hits: rawHits.slice(0, topK).map((hit, index) => ({
             rank: index + 1,
             span_id: hit.spanId,
@@ -746,101 +998,43 @@ function runIgnitionGuidedSearch({
     topK,
 }) {
     const questionText = String(question.question || "");
-    const warmupTurns = Array.isArray(turnMap) ? turnMap : [];
-    const textSignals = buildIgnitionTextSignals(questionText, warmupTurns);
+    const textSignals = buildBenchmarkQuerySignals(questionText);
     const stateBundleCards = deriveVerticalCardsFromStateBundles(
         recallBundles,
         graphNodes,
         graphEdges
     );
-    const verticalCards = selectVerticalTriggerCardsFromSignals(
-        textSignals,
-        [...(verticalTriggerCards || []), ...stateBundleCards],
-        relationSearchPlans,
-        4
-    );
+    const verticalCards = [];
     const bundleById = new Map((recallBundles || []).map((bundle) => [bundle.bundleId, bundle]));
-    const bundleByNodeId = new Map();
-    for (const bundle of recallBundles || []) {
-        for (const nodeId of bundle.nodeIds || []) {
-            if (!bundleByNodeId.has(nodeId)) {
-                bundleByNodeId.set(nodeId, []);
-            }
-            bundleByNodeId.get(nodeId).push(bundle);
-        }
-    }
-    const verticalSeedBundles = uniqueById(
-        verticalCards
-            .flatMap((card) => card.hintBundleIds || [])
-            .flatMap((bundleId) => resolveBundleHint(bundleId, bundleById, bundleByNodeId))
-            .filter(Boolean)
-    );
-    const verticalPlanLabels = uniqueStrings(
-        verticalCards.flatMap((card) => card.anchorLabels || [])
-    );
-    const verticalPlanSpanIds = uniqueStrings(
-        verticalCards.flatMap((card) => card.hintSpanIds || [])
-    );
-    const replayAnchors = {
-        goal: "",
-        activeTask: "benchmark_replay",
-        latestUserRequest: "",
-    };
+    const verticalSeedBundles = [];
+    const verticalPlanLabels = [];
+    const verticalPlanSpanIds = [];
     const scanner = new V8GraphScanner(workspace, benchmarkScannerConfig(), "profile");
-    scanner.setMode("profile");
-    for (const turn of warmupTurns) {
-        const turnText = String(turn.text || "").trim();
-        if (!turnText) continue;
-        scanner.processChunk(`${turnText}\n`, replayAnchors);
-    }
-
-    const backgroundTurns = warmupTurns.slice(-Math.min(3, warmupTurns.length));
-    const backgroundText = backgroundTurns.map((turn) => String(turn.text || "").trim()).filter(Boolean).join("\n");
-    const modes = ["profile", "trajectory"];
+    const backgroundTurns = [];
     const passBundles = new Map();
-    const modeBundleIds = {
-        profile: [],
-        trajectory: [],
+    const anchors = {
+        goal: questionText,
+        activeTask: "benchmark_recall_eval",
+        latestUserRequest: questionText,
     };
-
-    for (const mode of modes) {
-        scanner.setMode(mode);
-        const anchors = {
-            goal: [questionText, ...verticalPlanLabels].filter(Boolean).join("\n"),
-            activeTask: backgroundText || "benchmark_recall_eval",
-            latestUserRequest: questionText,
-        };
-        const signals = textSignals.filter((item) => item.text);
-        scanner.refreshScene(signals, anchors);
-        scanner.preExcite(
-            [questionText, ...verticalPlanLabels].filter(Boolean).join("\n"),
-            anchors
-        );
-        const scan = scanner.processChunk(
-            [questionText, ...verticalPlanLabels].filter(Boolean).join("\n") + "\n",
-            anchors
-        );
-        for (const bundle of scan.activatedBundles || []) {
-            const hydratedBundle = {
-                ...(bundleById.get(bundle.bundleId) || {}),
-                ...bundle,
-            };
-            modeBundleIds[mode].push(hydratedBundle.bundleId);
-            const existing = passBundles.get(bundle.bundleId);
-            if (!existing || (hydratedBundle.energy || 0) > (existing.energy || 0)) {
-                passBundles.set(hydratedBundle.bundleId, hydratedBundle);
-            }
-        }
-    }
-
-    for (const bundle of verticalSeedBundles) {
-        const existing = passBundles.get(bundle.bundleId);
-        const seededBundle = {
+    const signals = textSignals.filter((item) => item.text);
+    scanner.refreshScene(signals, anchors);
+    scanner.preExcite(
+        questionText,
+        anchors
+    );
+    const scan = scanner.processChunk(
+        `${questionText}\n`,
+        anchors
+    );
+    for (const bundle of scan.activatedBundles || []) {
+        const hydratedBundle = {
+            ...(bundleById.get(bundle.bundleId) || {}),
             ...bundle,
-            energy: Math.max(Number(bundle.energy || 0), 0.52),
         };
-        if (!existing || Number(seededBundle.energy || 0) > Number(existing.energy || 0)) {
-            passBundles.set(bundle.bundleId, seededBundle);
+        const existing = passBundles.get(bundle.bundleId);
+        if (!existing || (hydratedBundle.energy || 0) > (existing.energy || 0)) {
+            passBundles.set(hydratedBundle.bundleId, hydratedBundle);
         }
     }
 
@@ -884,26 +1078,35 @@ function runIgnitionGuidedSearch({
                   topK,
                   mode: "hybrid",
                   windowChars: 260,
-                  allowedShardIds,
+                  allowedShardIds: undefined,
                   boostSpanIds: mergedBoostSpanIds,
               })
             : [];
     const supportSeedHits = buildStateSupportSeedHits({
+        questionText,
         bundles,
+        graphNodes,
         evidenceSpans,
         topK,
     });
-    const hits = mergeSeedHits(searchHits, supportSeedHits, topK);
+    const hits = mergeBenchmarkHits(searchHits, supportSeedHits, topK);
     return {
+        activatedBundles: bundles.map((bundle) => ({
+            bundleId: bundle.bundleId,
+            nodeIds: bundle.nodeIds || [],
+            evidenceSpanIds: bundle.bestEvidenceSpanIds || bundle.evidenceSpanIds || [],
+            tier: "high",
+            energy: Number(bundle.energy || 0.52),
+        })),
         bundleIds: bundles.map((bundle) => bundle.bundleId),
         anchorLabels,
-        modes,
+        modes: ["geometry"],
         backgroundTurns: backgroundTurns.length,
-        profileBundleIds: uniqueStrings(modeBundleIds.profile),
-        trajectoryBundleIds: uniqueStrings(modeBundleIds.trajectory),
+        profileBundleIds: [],
+        trajectoryBundleIds: [],
         verticalPlanIds: verticalCards.map((card) => card.id),
         verticalPlanAnchorLabels: verticalPlanLabels,
-        verticalSeedBundleIds: verticalSeedBundles.map((bundle) => bundle.bundleId),
+        verticalSeedBundleIds: [],
         stateBundleTerms,
         stateSeedSpanIds: supportSeedHits.map((hit) => hit.spanId),
         verticalDiagnostics,
@@ -911,7 +1114,7 @@ function runIgnitionGuidedSearch({
     };
 }
 
-function buildStateSupportSeedHits({ bundles, evidenceSpans, topK }) {
+function buildStateSupportSeedHits({ questionText, bundles, graphNodes, evidenceSpans, topK }) {
     const spanById = new Map((evidenceSpans || []).map((span) => [span.id, span]));
     const stateBundles = (bundles || []).filter(
         (bundle) => String(bundle.packType || "") === "state"
@@ -933,37 +1136,7 @@ function buildStateSupportSeedHits({ bundles, evidenceSpans, topK }) {
             };
         })
         .filter(Boolean);
-    const summaryHits = stateBundles
-        .map((bundle, index) => {
-            const summaryText = [bundle.title || "", bundle.summaryText || ""]
-                .filter(Boolean)
-                .join(". ")
-                .trim();
-            if (!summaryText) return null;
-            return {
-                spanId: `state_summary_${bundle.bundleId}`,
-                score: 1.4 - index * 0.01,
-                spanText: summaryText,
-                rawText: summaryText,
-                charStart: -1,
-                charEnd: -1,
-            };
-        })
-        .filter(Boolean);
-    return [...summaryHits, ...seedSpanHits].slice(0, Math.max(topK * 2, 6));
-}
-
-function mergeSeedHits(searchHits, seedHits, topK) {
-    const merged = [];
-    const seen = new Set();
-    for (const hit of [...(seedHits || []), ...(searchHits || [])]) {
-        const spanId = String(hit?.spanId || "").trim();
-        if (!spanId || seen.has(spanId)) continue;
-        seen.add(spanId);
-        merged.push(hit);
-        if (merged.length >= topK) break;
-    }
-    return merged;
+    return [...seedSpanHits].slice(0, Math.max(topK * 2, 6));
 }
 
 function benchmarkScannerConfig() {
@@ -971,23 +1144,15 @@ function benchmarkScannerConfig() {
         nodeCooldownMs: 0,
         bundleCooldownMs: 0,
         scanIntervalChars: 1,
-        maxInjectedBundles: 4,
+        maxInjectedBundles: 6,
+        criticalThreshold: 0.36,
+        decisionThreshold: 0.24,
+        backgroundThreshold: 0.14,
+        secondWaveThreshold: 0.18,
+        forwardGain: 0.36,
+        reverseGain: 0.2,
+        enableGroupBundles: false,
     };
-}
-
-function buildIgnitionTextSignals(questionText, turnMap) {
-    const turns = Array.isArray(turnMap) ? turnMap : [];
-    const signals = turns.map((turn, index) => ({
-        source: String(turn.speaker || "turn"),
-        text: String(turn.text || "").trim(),
-        weight: weightTextSignalSource(String(turn.speaker || "turn"), index, turns.length),
-    }));
-    signals.push({
-        source: "question",
-        text: String(questionText || "").trim(),
-        weight: 1,
-    });
-    return signals.filter((item) => item.text);
 }
 
 function weightTextSignalSource(source, index, total) {
@@ -1240,16 +1405,6 @@ function uniqueById(items) {
     return output;
 }
 
-function resolveBundleHint(bundleId, bundleById, bundleByNodeId) {
-    const direct = bundleById.get(bundleId);
-    if (direct) return [direct];
-    if (String(bundleId || "").startsWith("seed_")) {
-        const nodeId = String(bundleId || "").slice(5);
-        return bundleByNodeId.get(nodeId) || [];
-    }
-    return [];
-}
-
 function termOverlapScore(question, label) {
     if (!question || !label) return 0;
     if (question.includes(label)) return Math.min(4, label.length / 4);
@@ -1265,6 +1420,27 @@ function termOverlapScore(question, label) {
 
 function round4(value) {
     return Math.round(Number(value) * 10000) / 10000;
+}
+
+function normalizeAnswerText(value) {
+    return String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function tokenSet(value) {
+    return new Set(normalizeAnswerText(value).split(/\s+/).filter(Boolean));
+}
+
+function overlapRatio(expectedTokens, producedTokens) {
+    if (!expectedTokens.size || !producedTokens.size) return 0;
+    let matched = 0;
+    for (const token of expectedTokens) {
+        if (producedTokens.has(token)) matched += 1;
+    }
+    return matched / expectedTokens.size;
 }
 
 function trim(text, maxChars) {
@@ -1292,9 +1468,11 @@ function printHelp() {
     console.log(
         [
             "Usage:",
-            "  node scripts/benchmark-eval-runner.mjs --prepared-sample <dir> [--top-k 8] [--out <dir>]",
-            "  node scripts/benchmark-eval-runner.mjs --prepared-sample <dir> [--ir-llm-command '<cmd>'] [--rule-ir-mode micro_light]",
-            "  node scripts/benchmark-eval-runner.mjs --prepared-sample <dir> [--hypothesis 'what this run is validating']",
+            "  node scripts/benchmark-eval-runner.mjs --prepared-sample <dir> --evaluation-path <path> [--top-k 8] [--out <dir>]",
+            "  node scripts/benchmark-eval-runner.mjs --prepared-sample <dir> --evaluation-path <path> [--ir-llm-command '<cmd>'] [--rule-ir-mode micro_light]",
+            "  node scripts/benchmark-eval-runner.mjs --prepared-sample <dir> --evaluation-path <path> [--answer-llm-command '<cmd>']",
+            "  node scripts/benchmark-eval-runner.mjs --prepared-sample <dir> --evaluation-path <path> --existing-workspace <compiled-workspace>",
+            "  node scripts/benchmark-eval-runner.mjs --prepared-sample <dir> --evaluation-path <path> [--hypothesis 'what this run is validating']",
             "",
             "Expected prepared sample dir contents:",
             "  session_narrative.md",

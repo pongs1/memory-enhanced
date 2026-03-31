@@ -1,6 +1,6 @@
 # V8 Schema and Pipeline
 
-Status: rewrite target  
+Status: active pipeline target  
 Depends on: [V8_ARCHITECTURE.md](./V8_ARCHITECTURE.md)
 
 Interface and migration companion:
@@ -8,49 +8,74 @@ Interface and migration companion:
 - [V8_TYPES_AND_MIGRATION.md](./V8_TYPES_AND_MIGRATION.md)
 
 This document defines the implementable V8 data flow.
-It replaces the older `event/md -> bundle/node/edge` pipeline with an evidence-backed memory pipeline while preserving V8's online ignition layer as a first-class design concern.
+It describes how V8 builds memory products in the background and how the runtime recalls them during generation.
 
 ## 1. Pipeline Overview
 
-The new write path is:
+V8 has two coupled loops that share the same compiled memory products.
 
-`raw or curated source -> source normalization -> unitization -> evidence span extraction -> memory IR extraction -> graph materialization + summary/state materialization`
+### 1.0 Contract glossary
 
-The new read path is:
+- `compiled memory products`
+  - outputs of the background write loop that the online loop can consume directly
+  - graph objects, packs, runtime projections, and retrieval indexes
+- `runtime projection`
+  - ignition-facing view derived from graph + packs, not from the current scanner pass
+- `bundle`
+  - runtime grouping of related graph objects used for ranking and delivery
+- `activated bundle`
+  - bundle whose runtime energy is high enough to enter recall delivery consideration
+- `pack`
+  - delivery-form memory payload built from bundle evidence, summary, state, or raw slices
+- `state family`
+  - grouping key that binds multiple state items into one evolving line
+- `state line`
+  - ordered chain of states connected by supersession, refinement, or event-driven change
+- `active text signals`
+  - cleaned user, assistant, tool, subagent, feedback, and working-state text seen by the online loop
+- `active background`
+  - compact carry-over from prior activations and current control state
+- `control anchor`
+  - explicit goal/task/request signals coming from the control plane
+- `scene`
+  - rolling local semantic field computed from recent live signals for overlap scoring
+- `search escalation`
+  - runtime fallback from active pack hints to narrative spans, then nearby narrative, then raw archive
+- `full support`
+  - enough evidence coverage to recover not only the right answer fragment, but the necessary supporting state/trajectory context
 
-`query -> graph/state/summary retrieval -> evidence backtrace -> context assembly`
+### 1.1 Background write loop
 
-The new live-generation fast path is:
+`raw messages + runtime observations -> narrative -> unitization -> evidence span extraction -> memory IR extraction -> graph/state/summary materialization`
 
-`stream window + control anchors + scene signals -> ignition scan -> graph propagation -> activated bundles -> context assembly`
+This loop is asynchronous.
+It can run incrementally during a session and run more complete consolidation later.
 
-The new observation/feedback side path is:
+### 1.2 Online recall loop
 
-`recall delivery + user/model/tool outcomes -> runtime observation ledger -> attribution -> flash/scene/durable updates + optional source promotion`
+`active text signals + control anchors + active background -> ignition scan over prebuilt runtime projections -> graph/state activation -> bundle ranking -> context assembly -> optional search escalation`
 
-This side path is not a return to the old `event` system.
-It is an append-only runtime trace used for attribution, correction, and fact validation.
+This loop is the fast path used during generation.
 
-The architecture has six write-path stages:
+### 1.3 Search escalation path
 
-1. `source ingestion`
-2. `source normalization`
-3. `unitization`
-4. `evidence span extraction`
-5. `memory IR extraction`
-6. `product materialization`
+When the active graph products are not enough, recall escalates in steps:
 
-And four read-path stages:
+1. activated bundle/state hints
+2. activated narrative spans
+3. nearby narrative slices around those spans
+4. raw archive slices when narrative evidence is still insufficient
 
-1. `ignition scan`
-2. `graph propagation`
-3. `bundle ranking`
-4. `context assembly`
+### 1.4 Feedback side path
 
-## 2. Source Policy (Clean-Slate Mode)
+`recall delivery + user/model/tool outcomes -> runtime observation ledger -> attribution -> flash/scene/durable updates`
 
-V8 runs in **clean-slate mode** by default.
-Only raw session/log evidence is ingested.
+This side path exists to support attribution, correction, and later recompilation.
+
+## 2. Source Policy
+
+V8 builds memory from raw messages and runtime observations, but the default authoritative recall surface is the normalized narrative assembled from them.
+Raw archive remains available as the lower-level fallback surface.
 
 ### 2.1 Raw evidence sources
 
@@ -64,16 +89,16 @@ Examples:
 
 Rules:
 
-- authoritative
 - append-only
 - offsets must remain valid
 - never discarded after higher-level products are built
 - transcript-level tool records are useful but may be incomplete; missing execution metadata must be recovered from runtime observation hooks instead of assumed from the transcript alone
+- raw records are the fallback archive, not the default recall surface
 
 ### 2.2 Runtime observation channels
 
 OpenClaw exposes runtime hooks that are not equivalent to plain conversation messages.
-V8 should treat them as append-only raw observation channels, not as derived `event` artifacts.
+V8 should treat them as append-only raw observation channels.
 
 Primary observation surfaces:
 
@@ -92,26 +117,10 @@ Rules:
 - observation records are raw runtime traces and stay append-only
 - when live hooks are unavailable, session transcript replay may backfill observations, but hook records remain the preferred source
 
-### 2.3 Curated sources (disabled)
+### 2.3 Knowledge and skill products
 
-Curated documents are not ingested in clean-slate mode.
-They are treated as post-hoc outputs (packs), not sources.
-
-Examples:
-
-- `memory/knowledge/*.md`
-- `memory/skills/verified/*.md`
-- `memory/skills/drafts/*.md`
-
-### 2.4 Legacy derived sources (disabled)
-
-Legacy artifacts are not ingested:
-
-- `.memory/events/*.jsonl`
-- old bundle-like draft records
-- older graph-derived files
-
-Do not emit new `event` artifacts. Episodic views should be derived from the canonical graph or assembled at runtime.
+`memory/knowledge/*.md` and `memory/skills/*.md` are output products derived from graph neighborhoods.
+They are reusable summaries of activated node clusters plus evidence, not source inputs.
 
 ## 3. Narrative Normalization Policy
 
@@ -145,9 +154,8 @@ Rules:
 
 Downgrade these into non-authoritative hints:
 
-- legacy event type labels
-- old node roles
-- old prompt-injected summaries
+- old node-role labels
+- prompt-injected summaries
 - historical scaffolding strings
 - prompt noise and control boilerplate
 
@@ -301,8 +309,8 @@ Example:
 ```json
 {
   "narrative_record_id": "narr_20260312_001",
-  "source_class": "raw|curated|legacy",
-  "source_type": "session_trace|session_narrative|daily_log|knowledge_md|skill_md",
+  "source_class": "raw_archive|narrative",
+  "source_type": "session_trace|runtime_observation|assembled_narrative|daily_log",
   "source_ref": "/home/pongs/.openclaw/agents/main/sessions/...jsonl#142",
   "speaker": "user",
   "timestamp": "2026-03-12T09:11:02.000Z",
@@ -777,7 +785,7 @@ For raw conversational sources, common item types are:
 - `conversation_act`
 - `session_state`
 
-For curated knowledge sources:
+Knowledge products usually summarize item families such as:
 
 - `concept`
 - `claim`
@@ -786,7 +794,7 @@ For curated knowledge sources:
 - `method`
 - `discourse_unit`
 
-For curated skill sources:
+Skill products usually summarize item families such as:
 
 - `method`
 - `workflow_step`
@@ -1422,6 +1430,15 @@ The practical runtime loop is:
 
 Direct chunk injection should remain explicit.
 
+The ignition scan should not score against the entire graph blindly.
+It should first match candidate nodes through ignition-facing views that expose:
+
+- names
+- aliases
+- trigger terms
+- short summary text
+- bundle membership
+
 Recommended form:
 
 `u_i = baseGain * (a * g_lex + b * max(g_scene, g_ctrl) + c * g_time)`
@@ -1433,6 +1450,10 @@ Where:
 - `g_ctrl` comes from overlap with control anchors
 - `g_time` encodes temporal availability and episodic day locality
 - `baseGain` is higher during initial prompt pre-excitation
+
+This score only describes how the current input lights nodes in the current round.
+Cross-round continuation should not come from a separate `g_bg` term.
+It should come from node residual energy preserved by the propagation layer.
 
 The current implementation is already close to this contract:
 
@@ -1452,19 +1473,39 @@ This separation is important because V8 uses both immediate lexical ignition and
 
 ### 10.5 Propagation
 
-Propagation should remain sparse:
+Propagation should remain sparse and use leaky residual ignition:
 
 - stronger forward spread for likely continuation
 - weaker reverse spread for reminder and backtracking
 - hub or degree penalty to suppress generic nodes
 - decay over time
+- node residual energy carried across rounds until it falls below threshold
+
+The runtime should preserve this round shape:
+
+1. decay previous node energy
+2. add current-round ignition energy
+3. run one forward spread
+4. run one weaker reverse spread
+5. zero nodes whose residual energy falls below `stopThreshold`
+
+The core update can be written as:
+
+`Energy_i_pre = decayLambda * Energy_i_prev`
+
+`Energy_i_post = Energy_i_pre + u_i`
+
+`ΔEnergy_target = Energy_source × SynapseWeight × DirectionGain × (1 / √Degree_target) × CooldownFactor`
+
+`Energy_i_next = Energy_i_post + ΔEnergy_i_forward + ΔEnergy_i_reverse`
 
 The runtime should also preserve:
 
 - `topKEdges` restriction in both directions
 - distinct node and bundle cooldown windows
 - separate scene-bias decay from activation decay
-- second-wave recall after one propagation pass
+- one forward pass and one weaker reverse pass per round
+- `second-wave recall` only through the next round's fresh ignition, not through unbounded same-round chaining
 
 The current implementation gives useful defaults:
 
@@ -1474,8 +1515,10 @@ The current implementation gives useful defaults:
 - `topKEdges = 6`
 - `decayLambda = 0.95`
 - `sceneDecayLambda = 0.985`
+- `stopThreshold` should be implementation-defined and tuned experimentally
 
-Second-wave recall should remain in the architecture because many relevant memories are one sparse hop away from the direct lexical match.
+Residual energy is node-local.
+Bundles do not store energy; they aggregate the highest-energy nodes of the current round.
 
 ### 10.6 Episodic gating
 
@@ -1499,7 +1542,7 @@ That is how V8 preserves coherent source-backed recall instead of spraying isola
 
 Bundle or pack selection should follow this order:
 
-1. aggregate node activation and scene bias to bundle energy
+1. aggregate node activation, node residual energy, and scene bias to bundle energy
 2. classify bundle tier after aggregation
 3. apply per-tier thresholds
 4. suppress bundles still inside cooldown
@@ -1515,6 +1558,7 @@ The current implementation exposes the right architectural defaults:
 
 Tier remains a recall insertion policy.
 It must not leak backward into graph ontology.
+Bundle itself still does not store energy.
 
 ### 10.8 New graph interface alignment
 
@@ -1531,7 +1575,7 @@ New model:
 - runtime materialization groups them into ignition bundles or recall packs
 - packs carry evidence refs, source refs, best summary text, and the node ids that made them hot
 
-This keeps the graph canonical while preserving the old V8 runtime strength.
+This keeps the graph canonical while preserving bundle-first runtime recall.
 
 ### 10.9 Recall trace and review window
 
@@ -1903,23 +1947,15 @@ It is not used for:
 - replacing evidence-backed IR
 - replacing the online ignition layer
 
-## 14. Migration Notes
+## 14. Implementation Notes
 
-The old V8 pipeline treated these as first-class compilers:
-
-- `compile-event`
-- `compile-knowledge-md`
-- `compile-skill-md`
-
-The new V8 should instead use:
+The implementation should use:
 
 - source adapters
 - unitizers
 - evidence extractors
 - IR extractors
 - graph and summary/state materializers
-
-Legacy `event` inputs may still be read during migration, but only as secondary hints.
 
 ## 15. Non-Goals
 

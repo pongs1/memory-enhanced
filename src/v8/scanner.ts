@@ -1,24 +1,29 @@
-import * as fs from "node:fs";
+﻿import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJson } from "../utils.js";
-import { loadEdgeRuntimePolicy } from "./edge-runtime-policy.js";
+import { dimensionWeight, edgeDirectionDimension, familyWeight, policyDirectionForDimension, scopeGate, trajectoryAffinity } from "./geometry-runtime.js";
 import { getNodeFeedbackBias, refreshFeedbackStore } from "./feedback-store.js";
 import { loadHypothesisEdges } from "./hypothesis-store.js";
+import { resolveUnitBundles } from "./unit-bundle-resolver.js";
+import { collectNodeSpanIdsFromItems } from "./node-evidence.js";
 import { v8StorePaths } from "./paths_v8.js";
 import type {
     V8ActivatedBundle,
     V8ControlAnchors,
     V8EdgeCatalogEntry,
-    V8EdgeRuntimePolicyEntry,
     V8EvidenceSpan,
     V8GraphEdge,
     V8GraphNode,
     V8HypothesisEdge,
     V8IgnitionEdgeProjection,
     V8IgnitionNodeProjection,
-    V8RecallBundleProjection,
+    V8MemoryItem,
+    V8RecallBias,
     V8RecallMode,
+    V8Unit,
+    V8PropagationDimension,
+    V8RecallBundleProjection,
     V8ScanResult,
     V8ScannerConfig,
     V8SceneSignal,
@@ -41,17 +46,22 @@ interface LoadedGraphData {
     nodeKinds: Map<string, "episodic" | "semantic" | "procedural">;
     nodeDayKeys: Map<string, Set<string>>;
     edgeKinds: Map<string, V8EdgeCatalogEntry["kind"]>;
-    policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
     groupBundles: V8RecallBundleProjection[];
     groupBundleById: Map<string, V8RecallBundleProjection>;
     groupBundleIrTokens: Map<string, Set<string>>;
     hypothesisEdges: V8HypothesisEdge[];
+    itemsById: Map<string, V8MemoryItem>;
+    unitsById: Map<string, V8Unit>;
+    tokenWeights: Map<string, number>;
 }
 
 interface RuntimeEdge {
     edge: V8GraphEdge;
     weight: number;
-    direction: V8EdgeRuntimePolicyEntry["direction"];
+    forwardDirection: "up" | "down" | "bidirectional" | "none";
+    reverseDirection: "up" | "down" | "bidirectional" | "none";
+    forwardDimension: V8PropagationDimension;
+    reverseDimension: V8PropagationDimension;
 }
 
 interface ReweightEdge {
@@ -126,6 +136,66 @@ function symmetricOverlapScore(left: Set<string>, right: Set<string>): number {
     return (lr + rl) / 2;
 }
 
+function buildTokenWeights(tokenSets: Iterable<Set<string>>): Map<string, number> {
+    const documentFrequency = new Map<string, number>();
+    let totalDocs = 0;
+    for (const tokens of tokenSets) {
+        if (!tokens || tokens.size === 0) continue;
+        totalDocs += 1;
+        for (const token of tokens) {
+            documentFrequency.set(token, (documentFrequency.get(token) || 0) + 1);
+        }
+    }
+
+    const weights = new Map<string, number>();
+    for (const [token, df] of documentFrequency.entries()) {
+        const rarity = Math.log((totalDocs + 1) / (df + 0.5));
+        weights.set(token, Math.max(0.2, rarity));
+    }
+    return weights;
+}
+
+function tokenWeight(token: string, weights: Map<string, number>): number {
+    return weights.get(token) || 1;
+}
+
+function weightedOverlapScore(
+    tokens: Set<string>,
+    referenceTokens: Set<string>,
+    weights: Map<string, number>
+): number {
+    if (tokens.size === 0 || referenceTokens.size === 0) {
+        return 0;
+    }
+
+    let matchedWeight = 0;
+    let totalWeight = 0;
+    for (const token of referenceTokens) {
+        const weight = tokenWeight(token, weights);
+        totalWeight += weight;
+        if (tokens.has(token)) {
+            matchedWeight += weight;
+        }
+    }
+    if (totalWeight <= 0) {
+        return 0;
+    }
+    return matchedWeight / totalWeight;
+}
+
+function weightedSymmetricOverlapScore(
+    left: Set<string>,
+    right: Set<string>,
+    weights: Map<string, number>
+): number {
+    if (left.size === 0 || right.size === 0) {
+        return 0;
+    }
+    const lr = weightedOverlapScore(left, right, weights);
+    const rl = weightedOverlapScore(right, left, weights);
+    return (lr + rl) / 2;
+}
+
 function nowMs(): number {
     return Date.now();
 }
@@ -160,8 +230,11 @@ function loadEdgeCatalog(): Map<string, V8EdgeCatalogEntry["kind"]> {
     return map;
 }
 
-function policyKey(kind: string, mode: V8RecallMode): string {
-    return `${kind}:${mode}`;
+function normalizeRecallBias(value: V8RecallBias | V8RecallMode): V8RecallBias {
+    if (value === "trajectory" || value === "audit" || value === "historical_trace") {
+        return "historical_trace";
+    }
+    return "current_state";
 }
 
 function toDayKey(timestamp: string): string | null {
@@ -171,19 +244,21 @@ function toDayKey(timestamp: string): string | null {
     return parsed.toISOString().slice(0, 10);
 }
 
-function buildPolicyMap(entries: V8EdgeRuntimePolicyEntry[]): Map<string, V8EdgeRuntimePolicyEntry> {
-    const map = new Map<string, V8EdgeRuntimePolicyEntry>();
-    for (const entry of entries) {
-        map.set(policyKey(entry.kind, entry.mode), entry);
-    }
-    return map;
-}
-
 function scoreTier(energy: number, config: V8ScannerConfig): V8ActivatedBundle["tier"] | null {
     if (energy >= config.criticalThreshold) return "critical";
     if (energy >= config.decisionThreshold) return "decision";
     if (energy >= config.backgroundThreshold) return "background";
     return null;
+}
+
+function lastTrajectoryIsRepeatedSemantic(
+    recentTrajectory: V8PropagationDimension[],
+    candidate: V8PropagationDimension
+): boolean {
+    if (candidate !== "H") return false;
+    const last = recentTrajectory[recentTrajectory.length - 1];
+    const secondLast = recentTrajectory[recentTrajectory.length - 2];
+    return last === "H" && secondLast === "H";
 }
 
 export const DEFAULT_V8_SCANNER_CONFIG: V8ScannerConfig = {
@@ -212,17 +287,31 @@ export const DEFAULT_V8_SCANNER_CONFIG: V8ScannerConfig = {
     sceneDecayLambda: 0.985,
     sceneTopKNodes: 10,
     sceneOverlapThreshold: 0.12,
+    supersededNodePenalty: 0.28,
+    repeatedSemanticStepPenalty: 0.72,
+    enableGroupBundles: true,
     groupTriggerScoreThreshold: 0.27,
     groupAllowSemanticFallback: true,
     groupEnergyGain: 0.88,
+    dimensionWeights: {
+        H: 1.0,
+        V_up: 0.45,
+        V_down: 0.25,
+        T_forward: 1.1,
+        T_backward: 0.5,
+        O_up: 0.7,
+        O_down: 0.55,
+    },
+    scopeGateFloor: 0.15,
 };
 
 const GRAPH_REFRESH_INTERVAL_MS = 2000;
+const sharedGraphCache = new Map<string, { signature: number; graph: LoadedGraphData }>();
 
 export class V8GraphScanner {
     private readonly workspace: string;
     private readonly config: V8ScannerConfig;
-    private mode: V8RecallMode;
+    private recallBias: V8RecallBias;
     private graph: LoadedGraphData;
     private graphLoadSignature = 0;
     private lastGraphCheckAt = 0;
@@ -231,36 +320,40 @@ export class V8GraphScanner {
     private readonly bundleCooldowns = new Map<string, number>();
     private readonly sceneBiases = new Map<string, number>();
     private readonly runtimeEdgeCache = new Map<
-        V8RecallMode,
+        "default" | "oblique",
         { outgoing: Map<string, RuntimeEdge[]>; incoming: Map<string, RuntimeEdge[]> }
     >();
-    private readonly runtimeReweightCache = new Map<V8RecallMode, ReweightEdge[]>();
+    private readonly runtimeReweightCache = new Map<"current_state" | "historical_trace", ReweightEdge[]>();
     private activeScopeIds: Set<string> | null = null;
     private activeDayKeys: Set<string> | null = null;
     private recentWindow = "";
     private charsSinceLastScan = 0;
+    private recentTrajectory: Array<"H" | "V_up" | "V_down" | "T_forward" | "T_backward" | "O_up" | "O_down" | "gate" | "none"> = [];
 
-    constructor(workspace: string, config: Partial<V8ScannerConfig> = {}, mode: V8RecallMode = "profile") {
+    constructor(
+        workspace: string,
+        config: Partial<V8ScannerConfig> = {},
+        recallBias: V8RecallBias | V8RecallMode = "current_state"
+    ) {
         this.workspace = workspace;
         this.config = { ...DEFAULT_V8_SCANNER_CONFIG, ...config };
-        this.mode = mode;
-        this.graph = this.loadGraph();
+        this.recallBias = normalizeRecallBias(recallBias);
         this.graphLoadSignature = this.computeGraphSignature();
+        this.graph = this.loadGraph(this.graphLoadSignature);
     }
 
-    public setMode(mode: V8RecallMode): void {
-        this.mode = mode;
-    }
 
-    public getMode(): V8RecallMode {
-        return this.mode;
-    }
-
-    private loadGraph(): LoadedGraphData {
+    private loadGraph(signature = this.computeGraphSignature()): LoadedGraphData {
+        const cached = sharedGraphCache.get(this.workspace);
+        if (cached && cached.signature === signature) {
+            return cached.graph;
+        }
         const store = v8StorePaths(this.workspace);
         const nodes = loadJsonl<V8GraphNode>(store.graphNodes);
         const graphEdges = loadJsonl<V8GraphEdge>(store.graphEdges);
         const evidenceSpans = loadJsonl<V8EvidenceSpan>(store.evidenceSpans);
+        const memoryItems = loadJsonl<V8MemoryItem>(store.memoryItems);
+        const units = loadJsonl<V8Unit>(store.units);
         const ignitionNodes = fs.existsSync(store.ignitionNodes)
             ? loadJsonl<V8IgnitionNodeProjection>(store.ignitionNodes)
             : [];
@@ -279,6 +372,7 @@ export class V8GraphScanner {
         const nodesById = new Map<string, V8GraphNode>();
         const nodeTokens = new Map<string, Set<string>>();
         const spanById = new Map(evidenceSpans.map((span) => [span.id, span]));
+        const itemsById = new Map(memoryItems.map((item) => [item.id, item]));
         const nodeKinds = new Map<string, "episodic" | "semantic" | "procedural">();
         const nodeDayKeys = new Map<string, Set<string>>();
         const ignitionNodesById =
@@ -306,9 +400,6 @@ export class V8GraphScanner {
         }
         for (const node of nodes) {
             nodesById.set(node.id, node);
-            if (ignitionNodesById) {
-                continue;
-            }
             if (node.memoryType === "evidence") {
                 continue;
             }
@@ -324,12 +415,13 @@ export class V8GraphScanner {
             const tokens = tokenize(
                 [node.canonicalLabel, ...(node.aliases || [])].join(" ")
             );
-            nodeTokens.set(node.id, new Set(tokens));
+            const existingTokens = nodeTokens.get(node.id);
+            nodeTokens.set(node.id, new Set([...(existingTokens || new Set<string>()), ...tokens]));
 
             let hasCurated = false;
             let hasProcedural = false;
             const dayKeys = new Set<string>();
-            for (const spanId of node.evidenceSpanIds || []) {
+            for (const spanId of collectNodeSpanIdsFromItems(node, itemsById)) {
                 const span = spanById.get(spanId);
                 if (!span) continue;
                 if (span.sourceType === "skill_md") {
@@ -357,6 +449,7 @@ export class V8GraphScanner {
             }
         }
         const groupBundleIrTokens = new Map<string, Set<string>>();
+        const tokenWeights = buildTokenWeights(nodeTokens.values());
         for (const bundle of groupBundles) {
             const merged = new Set<string>();
             for (const nodeId of bundle.nodeIds) {
@@ -367,7 +460,7 @@ export class V8GraphScanner {
                 }
                 const node = nodesById.get(nodeId);
                 if (!node) continue;
-                for (const token of tokenize(`${node.memoryType} ${node.canonicalLabel}`)) {
+                for (const token of tokenize(node.canonicalLabel)) {
                     merged.add(token);
                 }
             }
@@ -375,8 +468,9 @@ export class V8GraphScanner {
         }
 
         const runtimeEdges: V8GraphEdge[] =
-            ignitionEdges.length > 0
-                ? ignitionEdges.map((edge, index) => ({
+            graphEdges.length > 0
+                ? graphEdges
+                : ignitionEdges.map((edge, index) => ({
                       id: edge.edgeId || `edge_runtime_${index + 1}`,
                       type: edge.type,
                       src: edge.srcNodeId,
@@ -391,8 +485,7 @@ export class V8GraphScanner {
                           scope: "session",
                           validity: "active",
                       },
-                  }))
-                : graphEdges;
+                  }));
 
         const adjacency = new Map<string, V8GraphEdge[]>();
         const reverseAdjacency = new Map<string, V8GraphEdge[]>();
@@ -407,7 +500,6 @@ export class V8GraphScanner {
         }
 
         const edgeKinds = loadEdgeCatalog();
-        const policyByKindMode = buildPolicyMap(loadEdgeRuntimePolicy());
         const scopeAnchorsByNode = new Map<string, string[]>();
         const scopeNodes = new Set<string>();
         for (const edge of runtimeEdges) {
@@ -419,7 +511,7 @@ export class V8GraphScanner {
             scopeAnchorsByNode.set(edge.src, list);
         }
 
-        return {
+        const graph = {
             nodesById,
             ignitionNodesById,
             edges: runtimeEdges,
@@ -432,12 +524,16 @@ export class V8GraphScanner {
             nodeKinds,
             nodeDayKeys,
             edgeKinds,
-            policyByKindMode,
             groupBundles,
             groupBundleById,
             groupBundleIrTokens,
             hypothesisEdges,
+            itemsById,
+            unitsById: new Map(units.map((unit) => [unit.id, unit])),
+            tokenWeights,
         };
+        sharedGraphCache.set(this.workspace, { signature, graph });
+        return graph;
     }
 
     private computeGraphSignature(): number {
@@ -464,7 +560,7 @@ export class V8GraphScanner {
             return;
         }
 
-        this.graph = this.loadGraph();
+        this.graph = this.loadGraph(signature);
         this.graphLoadSignature = signature;
         this.runtimeEdgeCache.clear();
         this.runtimeReweightCache.clear();
@@ -479,32 +575,31 @@ export class V8GraphScanner {
         this.charsSinceLastScan = 0;
     }
 
-    private getRuntimeEdges(mode: V8RecallMode) {
-        const cached = this.runtimeEdgeCache.get(mode);
+    private getRuntimeEdges(strategy: "default" | "oblique" = "default") {
+        const cached = this.runtimeEdgeCache.get(strategy);
         if (cached) return cached;
 
         const outgoing = new Map<string, RuntimeEdge[]>();
         const incoming = new Map<string, RuntimeEdge[]>();
 
         for (const edge of this.graph.edges) {
+            const forwardDimension = edgeDirectionDimension(edge, "forward");
+            const reverseDimension = edgeDirectionDimension(edge, "reverse");
             if (
-                edge.state?.validity === "superseded" &&
-                mode !== "trajectory" &&
-                mode !== "audit"
+                (forwardDimension === "none" || forwardDimension === "gate") &&
+                (reverseDimension === "none" || reverseDimension === "gate")
             ) {
                 continue;
             }
-            const kind = this.graph.edgeKinds.get(edge.type) || "semantic";
-            const policy = this.graph.policyByKindMode.get(policyKey(kind, mode));
-            if (!policy || policy.role !== "spread") {
-                continue;
-            }
-            const weight = clamp01(edge.confidence ?? 0.6) * policy.gain;
+            const weight = clamp01(edge.confidence ?? 0.6) * familyWeight(edge);
             if (weight <= 0) continue;
             const entry: RuntimeEdge = {
                 edge,
                 weight,
-                direction: policy.direction,
+                forwardDirection: policyDirectionForDimension(forwardDimension),
+                reverseDirection: policyDirectionForDimension(reverseDimension),
+                forwardDimension,
+                reverseDimension,
             };
             if (!outgoing.has(edge.src)) outgoing.set(edge.src, []);
             outgoing.get(edge.src)!.push(entry);
@@ -520,10 +615,10 @@ export class V8GraphScanner {
             }
         };
 
-        if (mode === "oblique" || mode === "trajectory") {
-            const gain = mode === "trajectory" ? 0.32 : 0.36;
+        if (strategy === "oblique") {
+            const gain = 0.36;
             for (const hypothesis of this.graph.hypothesisEdges) {
-                if (hypothesis.modeHint !== mode) continue;
+                if (hypothesis.modeHint !== "oblique" && hypothesis.modeHint !== "trajectory") continue;
                 const edgeType = this.graph.edgeKinds.has(
                     hypothesis.suggestedType as V8GraphEdge["type"]
                 )
@@ -540,17 +635,20 @@ export class V8GraphScanner {
                     evidenceSpanIds: hypothesis.supportEvidenceSpanIds,
                     qualifiers: { hypothesis: true },
                     confidence: clamp01(hypothesis.confidence),
+                    forwardDimension: "O_up",
+                    reverseDimension: "O_down",
                     state: {
                         scope: "session",
                         validity: "tentative",
                     },
                 };
-                const weight = clamp01(hypothesis.confidence) * gain;
-                if (weight <= 0) continue;
                 const entry: RuntimeEdge = {
                     edge,
-                    weight,
-                    direction: "bidirectional",
+                    weight: clamp01(hypothesis.confidence) * gain,
+                    forwardDirection: "up",
+                    reverseDirection: "down",
+                    forwardDimension: "O_up",
+                    reverseDimension: "O_down",
                 };
                 if (!outgoing.has(edge.src)) outgoing.set(edge.src, []);
                 outgoing.get(edge.src)!.push(entry);
@@ -567,32 +665,33 @@ export class V8GraphScanner {
         limitEdges(incoming);
 
         const result = { outgoing, incoming };
-        this.runtimeEdgeCache.set(mode, result);
+        this.runtimeEdgeCache.set(strategy, result);
         return result;
     }
 
-    private getReweightEdges(mode: V8RecallMode): ReweightEdge[] {
-        const cached = this.runtimeReweightCache.get(mode);
+    private getReweightEdges(): ReweightEdge[] {
+        const cached = this.runtimeReweightCache.get(this.recallBias);
         if (cached) return cached;
 
         const edges: ReweightEdge[] = [];
         for (const edge of this.graph.edges) {
-            if (
-                edge.state?.validity === "superseded" &&
-                mode !== "trajectory" &&
-                mode !== "audit"
-            ) {
-                continue;
-            }
             const kind = this.graph.edgeKinds.get(edge.type) || "semantic";
-            const policy = this.graph.policyByKindMode.get(policyKey(kind, mode));
-            if (!policy || policy.role !== "reweight") {
+            const forwardDimension = edgeDirectionDimension(edge, "forward");
+            const reverseDimension = edgeDirectionDimension(edge, "reverse");
+            const hasTemporalGeometry =
+                forwardDimension === "T_forward" ||
+                forwardDimension === "T_backward" ||
+                reverseDimension === "T_forward" ||
+                reverseDimension === "T_backward";
+            const shouldFallbackReweight =
+                (kind === "change" || hasTemporalGeometry);
+            if (!shouldFallbackReweight) {
                 continue;
             }
             edges.push({ edge });
         }
 
-        this.runtimeReweightCache.set(mode, edges);
+        this.runtimeReweightCache.set(this.recallBias, edges);
         return edges;
     }
 
@@ -619,12 +718,19 @@ export class V8GraphScanner {
         this.updateActiveDays(signalTokens);
 
         for (const [nodeId, tokens] of this.graph.nodeTokens.entries()) {
-            if (this.isNodeSuppressed(nodeId, this.mode)) {
+            if (this.isNodeSuppressed(nodeId)) {
                 continue;
             }
-            const overlap = overlapScore(signalTokens, tokens);
+            const overlap = weightedSymmetricOverlapScore(
+                signalTokens,
+                tokens,
+                this.graph.tokenWeights
+            );
             if (overlap >= this.config.sceneOverlapThreshold) {
-                nextBiases.set(nodeId, overlap * this.config.sceneSignalGain);
+                nextBiases.set(
+                    nodeId,
+                    overlap * this.config.sceneSignalGain * this.supersededPenalty(nodeId)
+                );
             }
         }
 
@@ -642,13 +748,17 @@ export class V8GraphScanner {
 
         const tokens = new Set(tokenize(prompt));
         for (const [nodeId, nodeTokens] of this.graph.nodeTokens.entries()) {
-            if (this.isNodeSuppressed(nodeId, this.mode)) {
+            if (this.isNodeSuppressed(nodeId)) {
                 continue;
             }
-            const overlap = overlapScore(tokens, nodeTokens);
+            const overlap = weightedSymmetricOverlapScore(
+                tokens,
+                nodeTokens,
+                this.graph.tokenWeights
+            );
             if (overlap <= 0) continue;
             const bias = this.sceneBiases.get(nodeId) || 0;
-            this.activate(nodeId, clamp01(overlap + bias));
+            this.activate(nodeId, clamp01((overlap + bias) * this.supersededPenalty(nodeId)));
         }
 
         this.spreadActivation();
@@ -674,14 +784,20 @@ export class V8GraphScanner {
         const tokens = new Set(tokenize(this.recentWindow));
         this.updateActiveDays(tokens);
         for (const [nodeId, nodeTokens] of this.graph.nodeTokens.entries()) {
-            if (this.isNodeSuppressed(nodeId, this.mode)) {
+            if (this.isNodeSuppressed(nodeId)) {
                 continue;
             }
-            const overlap = overlapScore(tokens, nodeTokens);
+            const overlap = weightedSymmetricOverlapScore(
+                tokens,
+                nodeTokens,
+                this.graph.tokenWeights
+            );
             if (overlap <= 0) continue;
             const bias = this.sceneBiases.get(nodeId) || 0;
             const feedbackBias = getNodeFeedbackBias(nodeId);
-            const energy = clamp01(overlap + bias + feedbackBias);
+            const energy = clamp01(
+                (overlap + bias + feedbackBias) * this.supersededPenalty(nodeId)
+            );
             this.activate(nodeId, energy);
         }
 
@@ -706,66 +822,48 @@ export class V8GraphScanner {
         };
 
         const buildBundles = (
-            suppressionMode: V8RecallMode,
+            _strategy: "default" | "oblique",
             minEnergy: number,
             tierOverride?: V8ActivatedBundle["tier"],
             wave?: 2
         ): V8ActivatedBundle[] => {
-            const bundleMap = new Map<
-                string,
-                { energy: number; nodes: Array<{ nodeId: string; energy: number; evidenceSpanIds: string[] }> }
-            >();
-
+            const eligibleActivations = new Map<string, number>();
             for (const [nodeId, energy] of this.activations.entries()) {
                 if (energy < minEnergy) continue;
-                if (this.isNodeSuppressed(nodeId, suppressionMode)) continue;
+                if (this.isNodeSuppressed(nodeId)) continue;
                 const cooldownUntil = this.nodeCooldowns.get(nodeId) || 0;
                 if (cooldownUntil > now) continue;
-                const node = this.graph.nodesById.get(nodeId);
-                if (!node) continue;
-                const projection = this.graph.ignitionNodesById?.get(nodeId) || null;
-                const evidenceSpanIds =
-                    projection?.bestEvidenceSpanIds && projection.bestEvidenceSpanIds.length > 0
-                        ? projection.bestEvidenceSpanIds
-                        : projection?.evidenceSpanIds && projection.evidenceSpanIds.length > 0
-                          ? projection.evidenceSpanIds
-                          : node.bestEvidenceSpanIds.length > 0
-                            ? node.bestEvidenceSpanIds
-                            : node.evidenceSpanIds;
-                const bundleId = projection?.bundleId || nodeId;
-                const bundleCooldownUntil = this.bundleCooldowns.get(bundleId) || 0;
-                if (bundleCooldownUntil > now) continue;
-                const entry = bundleMap.get(bundleId) || { energy: 0, nodes: [] };
-                entry.energy += energy;
-                entry.nodes.push({ nodeId, energy, evidenceSpanIds });
-                bundleMap.set(bundleId, entry);
+                eligibleActivations.set(nodeId, energy * this.supersededPenalty(nodeId));
             }
 
-            const bundles: V8ActivatedBundle[] = [];
-            for (const [bundleId, entry] of bundleMap.entries()) {
-                const energy = clamp01(entry.energy);
-                const tier = tierOverride ?? scoreTier(energy, this.config);
-                if (!tier) continue;
-                const ordered = entry.nodes.sort((a, b) => b.energy - a.energy);
-                const evidenceSpanIds = collectEvidence(ordered, 8);
-                const nodeIds = ordered.map((node) => node.nodeId);
-                bundles.push({
-                    bundleId,
-                    nodeIds,
-                    tier,
-                    energy,
-                    evidenceSpanIds,
-                    ...(wave ? { wave } : {}),
-                });
-            }
+            const bundles = resolveUnitBundles({
+                activations: eligibleActivations,
+                nodesById: this.graph.nodesById,
+                itemsById: this.graph.itemsById,
+                unitsById: this.graph.unitsById,
+                criticalThreshold: tierOverride === "critical" ? minEnergy : this.config.criticalThreshold,
+                decisionThreshold: tierOverride === "decision" ? minEnergy : this.config.decisionThreshold,
+                backgroundThreshold: tierOverride === "background" ? minEnergy : this.config.backgroundThreshold,
+                maxBundles: this.config.maxInjectedBundles * 3,
+            }).filter((bundle) => {
+                const bundleCooldownUntil = this.bundleCooldowns.get(bundle.bundleId) || 0;
+                return bundleCooldownUntil <= now;
+            });
 
             return bundles
+                .map((bundle) => ({
+                    ...bundle,
+                    tier: tierOverride ?? bundle.tier,
+                    ...(wave ? { wave } : {}),
+                }))
                 .sort((a, b) => b.energy - a.energy)
                 .slice(0, this.config.maxInjectedBundles);
         };
 
-        let topBundles = this.selectBundlesWithDiversity(buildBundles(this.mode, 0.05));
-        topBundles = this.mergeGroupBundles(topBundles, now);
+        let topBundles = this.selectBundlesWithDiversity(buildBundles("default", 0.05));
+        if (this.config.enableGroupBundles) {
+            topBundles = this.mergeGroupBundles(topBundles, now);
+        }
 
         if (topBundles.length === 0) {
             this.spreadActivation("oblique");
@@ -775,7 +873,9 @@ export class V8GraphScanner {
                 "background",
                 2
             ));
-            topBundles = this.mergeGroupBundles(topBundles, now);
+            if (this.config.enableGroupBundles) {
+                topBundles = this.mergeGroupBundles(topBundles, now);
+            }
         }
 
         for (const bundle of topBundles) {
@@ -788,6 +888,21 @@ export class V8GraphScanner {
         return { activatedBundles: topBundles, recentWindow: this.recentWindow };
     }
 
+    private collectBundleUnitIds(nodeIds: string[]): string[] {
+        const unitIds = new Set<string>();
+        for (const nodeId of nodeIds) {
+            const node = this.graph.nodesById.get(nodeId);
+            if (!node) continue;
+            for (const itemId of node.sourceItemIds || []) {
+                const item = this.graph.itemsById.get(itemId);
+                if (!item) continue;
+                for (const unitId of item.unitIds || []) {
+                    unitIds.add(unitId);
+                }
+            }
+        }
+        return Array.from(unitIds);
+    }
     private mergeGroupBundles(
         baseBundles: V8ActivatedBundle[],
         now: number
@@ -833,7 +948,11 @@ export class V8GraphScanner {
                 overlapCount /
                 Math.max(1, baseNodeCount + group.nodeIds.length - overlapCount);
             const groupIrTokens = this.graph.groupBundleIrTokens.get(group.bundleId) || new Set<string>();
-            const irSimilarity = symmetricOverlapScore(activeIrTokens, groupIrTokens);
+            const irSimilarity = weightedSymmetricOverlapScore(
+                activeIrTokens,
+                groupIrTokens,
+                this.graph.tokenWeights
+            );
             // Transparent score: overlap coverage + jaccard + IR-group similarity.
             const triggerScore = 0.5 * coverage + 0.3 * jaccard + 0.2 * irSimilarity;
             const hasSemanticFallback =
@@ -850,7 +969,7 @@ export class V8GraphScanner {
             }
             if (
                 group.kind === "episodic" &&
-                this.mode === "profile" &&
+                this.recallBias === "current_state" &&
                 !hasNodeOverlap &&
                 this.activeDayKeys &&
                 this.activeDayKeys.size > 0 &&
@@ -889,6 +1008,7 @@ export class V8GraphScanner {
 
             extraBundles.push({
                 bundleId: group.bundleId,
+                sourceUnitIds: this.collectBundleUnitIds(group.nodeIds),
                 nodeIds:
                     overlapNodeIds.length > 0
                         ? overlapNodeIds
@@ -930,18 +1050,18 @@ export class V8GraphScanner {
             return sorted.slice(0, limit);
         }
 
-        const micros = sorted.filter((b) => b.bundleId.startsWith("micro_"));
-        const groups = sorted.filter((b) => b.bundleId.startsWith("group_"));
+        const unitBundles = sorted.filter((bundle) => !this.graph.groupBundleById.has(bundle.bundleId));
+        const groupBundles = sorted.filter((bundle) => this.graph.groupBundleById.has(bundle.bundleId));
         const selected: V8ActivatedBundle[] = [];
         const seen = new Set<string>();
 
-        if (micros.length > 0) {
-            selected.push(micros[0]!);
-            seen.add(micros[0]!.bundleId);
+        if (unitBundles.length > 0) {
+            selected.push(unitBundles[0]!);
+            seen.add(unitBundles[0]!.bundleId);
         }
-        if (groups.length > 0 && selected.length < limit) {
-            selected.push(groups[0]!);
-            seen.add(groups[0]!.bundleId);
+        if (groupBundles.length > 0 && selected.length < limit) {
+            selected.push(groupBundles[0]!);
+            seen.add(groupBundles[0]!.bundleId);
         }
         for (const bundle of sorted) {
             if (selected.length >= limit) break;
@@ -977,12 +1097,12 @@ export class V8GraphScanner {
         }
     }
 
-    private applyReweight(mode: V8RecallMode): void {
-        const edges = this.getReweightEdges(mode);
+    private applyReweight(): void {
+        const edges = this.getReweightEdges();
         if (edges.length === 0) return;
 
-        const profileMode = mode === "profile" || mode === "oblique";
-        const trajectoryMode = mode === "trajectory" || mode === "audit";
+        const currentStateBias = this.recallBias === "current_state";
+        const historicalTraceBias = this.recallBias === "historical_trace";
         const deltas = new Map<string, number>();
 
         const pushDelta = (nodeId: string, delta: number) => {
@@ -1004,22 +1124,34 @@ export class V8GraphScanner {
 
             switch (edge.type) {
                 case "state_supersedes_state": {
-                    if (profileMode) {
-                        pushDelta(edge.dst, -0.5 * srcEnergy);
-                        pushDelta(edge.src, 0.1 * srcEnergy);
-                    } else if (trajectoryMode) {
-                        pushDelta(edge.dst, 0.3 * srcEnergy);
-                        pushDelta(edge.src, 0.18 * dstEnergy);
+                    const predecessorId =
+                        edge.forwardDimension === "T_forward" ? edge.src : edge.dst;
+                    const successorId =
+                        edge.forwardDimension === "T_forward" ? edge.dst : edge.src;
+                    const predecessorEnergy = this.activations.get(predecessorId) || 0;
+                    const successorEnergy = this.activations.get(successorId) || 0;
+                    if (currentStateBias) {
+                        pushDelta(successorId, 0.65 * predecessorEnergy);
+                        pushDelta(predecessorId, -0.45 * predecessorEnergy);
+                    } else if (historicalTraceBias) {
+                        pushDelta(successorId, 0.18 * predecessorEnergy);
+                        pushDelta(predecessorId, 0.12 * successorEnergy);
                     }
                     break;
                 }
                 case "state_refines_state": {
-                    if (profileMode) {
-                        pushDelta(edge.dst, -0.3 * srcEnergy);
-                        pushDelta(edge.src, 0.08 * srcEnergy);
-                    } else if (trajectoryMode) {
-                        pushDelta(edge.dst, 0.18 * srcEnergy);
-                        pushDelta(edge.src, 0.12 * dstEnergy);
+                    const predecessorId =
+                        edge.forwardDimension === "T_forward" ? edge.src : edge.dst;
+                    const successorId =
+                        edge.forwardDimension === "T_forward" ? edge.dst : edge.src;
+                    const predecessorEnergy = this.activations.get(predecessorId) || 0;
+                    const successorEnergy = this.activations.get(successorId) || 0;
+                    if (currentStateBias) {
+                        pushDelta(successorId, 0.32 * predecessorEnergy);
+                        pushDelta(predecessorId, -0.22 * predecessorEnergy);
+                    } else if (historicalTraceBias) {
+                        pushDelta(successorId, 0.12 * predecessorEnergy);
+                        pushDelta(predecessorId, 0.08 * successorEnergy);
                     }
                     break;
                 }
@@ -1039,18 +1171,19 @@ export class V8GraphScanner {
         }
     }
 
-    private spreadActivation(modeOverride?: V8RecallMode): void {
-        const mode = modeOverride || this.mode;
+    private spreadActivation(strategy: "default" | "oblique" = "default"): void {
         const nextEnergy = new Map<string, number>();
 
         const degree = this.graph.degree;
-        const { outgoing, incoming } = this.getRuntimeEdges(mode);
+        const { outgoing, incoming } = this.getRuntimeEdges(strategy);
 
         for (const [nodeId, energy] of this.activations.entries()) {
-            if (this.isNodeSuppressed(nodeId, mode)) {
+            if (this.isNodeSuppressed(nodeId)) {
                 continue;
             }
             if (energy <= 0.05) continue;
+            const sourceEnergy = energy * this.supersededPenalty(nodeId);
+            if (sourceEnergy <= 0.01) continue;
             const nodePenalty = Math.pow(
                 Math.max(1, degree.get(nodeId) || 1),
                 this.config.hubPenaltyPower
@@ -1059,35 +1192,71 @@ export class V8GraphScanner {
             const outEdges = outgoing.get(nodeId) || [];
             for (const entry of outEdges) {
                 const canForward =
-                    entry.direction === "bidirectional" || entry.direction === "up";
+                    entry.forwardDirection === "bidirectional" || entry.forwardDirection === "up";
                 if (!canForward) continue;
-                if (this.isNodeSuppressed(entry.edge.dst, mode)) {
+                if (this.isNodeSuppressed(entry.edge.dst)) {
                     continue;
                 }
+                const forwardWeight =
+                    entry.weight *
+                    dimensionWeight(entry.forwardDimension, this.config.dimensionWeights) *
+                    scopeGate(entry.edge, this.matchesEdgeScope(entry.edge), this.config.scopeGateFloor) *
+                    trajectoryAffinity(entry.forwardDimension, this.recentTrajectory);
+                const semanticPenalty =
+                    lastTrajectoryIsRepeatedSemantic(this.recentTrajectory, entry.forwardDimension)
+                        ? this.config.repeatedSemanticStepPenalty
+                        : 1;
                 const transfer =
-                    (energy * entry.weight * this.config.forwardGain) / nodePenalty;
+                    (sourceEnergy *
+                        this.supersededPenalty(entry.edge.dst) *
+                        forwardWeight *
+                        semanticPenalty *
+                        this.config.forwardGain) /
+                    nodePenalty;
                 if (transfer <= 0) continue;
                 nextEnergy.set(
                     entry.edge.dst,
                     (nextEnergy.get(entry.edge.dst) || 0) + transfer
                 );
+                this.recentTrajectory.push(entry.forwardDimension);
+                if (this.recentTrajectory.length > 3) {
+                    this.recentTrajectory = this.recentTrajectory.slice(-3);
+                }
             }
 
             const inEdges = incoming.get(nodeId) || [];
             for (const entry of inEdges) {
                 const canReverse =
-                    entry.direction === "bidirectional" || entry.direction === "down";
+                    entry.reverseDirection === "bidirectional" || entry.reverseDirection === "down";
                 if (!canReverse) continue;
-                if (this.isNodeSuppressed(entry.edge.src, mode)) {
+                if (this.isNodeSuppressed(entry.edge.src)) {
                     continue;
                 }
+                const reverseWeight =
+                    entry.weight *
+                    dimensionWeight(entry.reverseDimension, this.config.dimensionWeights) *
+                    scopeGate(entry.edge, this.matchesEdgeScope(entry.edge), this.config.scopeGateFloor) *
+                    trajectoryAffinity(entry.reverseDimension, this.recentTrajectory);
+                const semanticPenalty =
+                    lastTrajectoryIsRepeatedSemantic(this.recentTrajectory, entry.reverseDimension)
+                        ? this.config.repeatedSemanticStepPenalty
+                        : 1;
                 const transfer =
-                    (energy * entry.weight * this.config.reverseGain) / nodePenalty;
+                    (sourceEnergy *
+                        this.supersededPenalty(entry.edge.src) *
+                        reverseWeight *
+                        semanticPenalty *
+                        this.config.reverseGain) /
+                    nodePenalty;
                 if (transfer <= 0) continue;
                 nextEnergy.set(
                     entry.edge.src,
                     (nextEnergy.get(entry.edge.src) || 0) + transfer
                 );
+                this.recentTrajectory.push(entry.reverseDimension);
+                if (this.recentTrajectory.length > 3) {
+                    this.recentTrajectory = this.recentTrajectory.slice(-3);
+                }
             }
         }
 
@@ -1095,17 +1264,19 @@ export class V8GraphScanner {
             this.activate(nodeId, energy);
         }
 
-        this.applyReweight(mode);
+        this.applyReweight();
     }
 
-    private isNodeSuppressed(nodeId: string, mode: V8RecallMode): boolean {
+    private matchesEdgeScope(edge: V8GraphEdge): boolean {
+        if (!this.activeScopeIds || this.activeScopeIds.size === 0) {
+            return true;
+        }
+        return this.activeScopeIds.has(edge.src) || this.activeScopeIds.has(edge.dst);
+    }
+
+    private isNodeSuppressed(nodeId: string): boolean {
         const node = this.graph.nodesById.get(nodeId);
         if (!node) return false;
-        if (mode !== "trajectory" && mode !== "audit") {
-            if (node.state?.validity === "superseded") {
-                return true;
-            }
-        }
 
         const scopedTo = this.graph.scopeAnchorsByNode.get(nodeId);
         if (scopedTo && scopedTo.length > 0) {
@@ -1128,7 +1299,7 @@ export class V8GraphScanner {
             return false;
         }
         if (!this.activeDayKeys || this.activeDayKeys.size === 0) {
-            return true;
+            return false;
         }
         for (const dayKey of dayKeys) {
             if (this.activeDayKeys.has(dayKey)) {
@@ -1136,6 +1307,13 @@ export class V8GraphScanner {
             }
         }
         return true;
+    }
+
+    private supersededPenalty(nodeId: string): number {
+        const node = this.graph.nodesById.get(nodeId);
+        if (!node) return 1;
+        if (node.state?.validity !== "superseded") return 1;
+        return this.recallBias === "historical_trace" ? 1 : this.config.supersededNodePenalty;
     }
 
     private isStateNode(nodeId: string): boolean {
@@ -1197,3 +1375,4 @@ export class V8GraphScanner {
         return false;
     }
 }
+

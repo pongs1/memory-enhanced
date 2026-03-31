@@ -12,7 +12,46 @@ export type V8NarrativeSourceCategory = "conversation" | "operation" | "unknown"
 
 export type V8GraphLayer = "micro" | "meso" | "macro";
 
+export interface V8CompletedIrItem {
+    subject: string;
+    predicate: string;
+    object: string;
+    tensionRole: "open" | "advance" | "close" | "state" | "none";
+    turnRefs: number[];
+    charStart: number;
+    charEnd: number;
+}
+
+export interface V8PendingIr {
+    id: string;
+    narrativeRecordId?: string;
+    tensionRole: "open" | "advance" | "state" | "none";
+    subject?: string;
+    predicate?: string;
+    relationFamily?: string;
+    object?: string;
+    startTurn?: number;
+    endTurn?: number;
+    startAnchor?: string;
+    endAnchor?: string;
+    hasExplicitEndEvidence?: boolean;
+    turnRefs: number[];
+    charStart: number;
+    charEnd: number;
+    status: "pending";
+}
+
 export type V8EdgeLayer = V8GraphLayer | "cross";
+export type V8PropagationDimension =
+    | "H"
+    | "V_up"
+    | "V_down"
+    | "T_forward"
+    | "T_backward"
+    | "O_up"
+    | "O_down"
+    | "gate"
+    | "none";
 
 export type V8MemoryOriginType = "asserted" | "aggregated" | "inferred";
 
@@ -313,6 +352,8 @@ export interface V8EdgeCatalogEntry {
 }
 
 export type V8RecallMode = "profile" | "trajectory" | "oblique" | "audit";
+export type V8RecallBias = "current_state" | "historical_trace";
+export type V8RelationGeometryHint = "profile" | "trajectory";
 
 export type V8EdgeRuntimeRole = "spread" | "gate" | "reweight" | "backtrace";
 
@@ -330,7 +371,7 @@ export interface V8NarrativeRecord {
     sourceClass: V8SourceClass;
     sourceType: V8SourceType;
     sourceRef: string;
-    speaker: "user" | "assistant" | "system" | "unknown" | null;
+    role: string | null;
     timestamp: string | null;
     rawText: string;
     cleanText?: string;
@@ -356,7 +397,7 @@ export interface V8Unit {
     text: string;
     parentUnitId: string | null;
     language: "zh" | "en" | "mixed" | "unknown";
-    speaker: "user" | "assistant" | "system" | "unknown" | null;
+    role: string | null;
     timestamp: string | null;
     sourceCategory: V8NarrativeSourceCategory;
 }
@@ -369,7 +410,7 @@ export interface V8EvidenceSpan {
     charStart: number;
     charEnd: number;
     text: string;
-    speaker: "user" | "assistant" | "system" | "unknown" | null;
+    role: string | null;
     timestamp: string | null;
     sourceClass: V8SourceClass;
     sourceType: V8SourceType;
@@ -434,6 +475,8 @@ export interface V8GraphEdge {
     originType: V8MemoryOriginType;
     sourceItemIds: string[];
     evidenceSpanIds: string[];
+    forwardDimension?: V8PropagationDimension;
+    reverseDimension?: V8PropagationDimension;
     qualifiers: V8EdgeQualifiers;
     confidence: number;
     state: {
@@ -590,7 +633,7 @@ export interface V8RelationSearchPlan {
     anchorLabels: string[];
     anchorKinds: string[];
     edgeFamilyHints: V8ScoredHint[];
-    recallMode: V8RecallMode;
+    recallHint: V8RelationGeometryHint;
     searchScope: V8RelationSearchScope;
     searchMode: V8RelationSearchMode;
     lane: V8SearchLane;
@@ -615,7 +658,7 @@ export interface V8VerticalTriggerCard {
     anchorLabels: string[];
     signalTerms: string[];
     edgeFamilyHints: V8ScoredHint[];
-    preferredSlices: V8RecallMode[];
+    preferredGeometries: V8RelationGeometryHint[];
     hintBundleIds: string[];
     hintSpanIds: string[];
     scopeCardIds: string[];
@@ -653,7 +696,7 @@ export interface V8RelationReviewJob {
     evidenceSpanIds: string[];
     bundleIds: string[];
     reviewQuestion: string;
-    modeHint: V8RecallMode;
+    modeHint: V8RelationGeometryHint;
     status: "pending" | "completed" | "failed";
     createdAt: string;
 }
@@ -741,9 +784,22 @@ export interface V8ScannerConfig {
     sceneDecayLambda: number;
     sceneTopKNodes: number;
     sceneOverlapThreshold: number;
+    supersededNodePenalty: number;
+    repeatedSemanticStepPenalty: number;
+    enableGroupBundles: boolean;
     groupTriggerScoreThreshold: number;
     groupAllowSemanticFallback: boolean;
     groupEnergyGain: number;
+    dimensionWeights: {
+        H: number;
+        V_up: number;
+        V_down: number;
+        T_forward: number;
+        T_backward: number;
+        O_up: number;
+        O_down: number;
+    };
+    scopeGateFloor: number;
 }
 
 export interface V8FeedbackConfig {
@@ -756,6 +812,7 @@ export interface V8FeedbackConfig {
 export interface V8ActivatedBundle {
     bundleId: string;
     nodeIds: string[];
+    sourceUnitIds?: string[];
     tier: "critical" | "decision" | "background";
     energy: number;
     evidenceSpanIds: string[];
@@ -829,3 +886,8 @@ export interface V8GraphManifest {
     updatedAt: string;
     lastFullRebuildAt: string | null;
 }
+export interface V8AnnotationValidityResult {
+    ok: boolean;
+    reason?: "unresolved_reference" | "invalid_anchor" | "out_of_scope_target" | "invalid_relation_family";
+}
+

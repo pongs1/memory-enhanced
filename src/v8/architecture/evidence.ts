@@ -27,7 +27,7 @@ export function extractEvidenceSpans(
             charStart: unit.charStart,
             charEnd: unit.charEnd,
             text: unit.text,
-            speaker: unit.speaker ?? null,
+            role: unit.role ?? null,
             timestamp: unit.timestamp ?? null,
             sourceClass: source?.sourceClass ?? "raw",
             sourceType: source?.sourceType ?? "session_narrative",

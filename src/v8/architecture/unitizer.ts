@@ -1,5 +1,10 @@
 import { Worker } from "node:worker_threads";
 import type { V8NarrativeRecord, V8NarrativeSourceCategory, V8Unit } from "../types_v8.js";
+import {
+    type NarrativeLine,
+    parseNarrativeTurnSpans,
+    splitNarrativeLinesWithOffsets,
+} from "./narrative-turns.js";
 
 export interface UnitizerConfig {
     microMaxChars?: number;
@@ -23,19 +28,13 @@ const DEFAULT_CONFIG: Required<UnitizerConfig> = {
     macroMaxChars: 28000,
 };
 
-interface NarrativeLine {
-    start: number;
-    end: number;
-    text: string;
-}
-
 interface TurnSpan {
     ordinal: number;
     headerStart: number;
     headerEnd: number;
     bodyStart: number;
     bodyEnd: number;
-    speaker: V8Unit["speaker"];
+    role: V8Unit["role"];
     timestamp: string | null;
     sourceCategory: V8NarrativeSourceCategory;
 }
@@ -57,7 +56,7 @@ interface MicroDescriptor {
     start: number;
     end: number;
     turnOrdinal: number;
-    speaker: V8Unit["speaker"];
+    role: V8Unit["role"];
     timestamp: string | null;
     sourceCategory: V8NarrativeSourceCategory;
 }
@@ -72,7 +71,7 @@ interface MesoDescriptor {
     end: number;
     turnStartOrdinal: number;
     turnEndOrdinal: number;
-    speaker: V8Unit["speaker"];
+    role: V8Unit["role"];
     timestamp: string | null;
     sourceCategory: V8NarrativeSourceCategory;
 }
@@ -80,7 +79,7 @@ interface MesoDescriptor {
 interface MacroDescriptor {
     start: number;
     end: number;
-    speaker: V8Unit["speaker"];
+    role: V8Unit["role"];
     timestamp: string | null;
     sourceCategory: V8NarrativeSourceCategory;
 }
@@ -103,7 +102,7 @@ export function unitizeNarrativeRecords(
         const text = record.cleanText ?? record.rawText;
         if (!text.trim()) continue;
 
-        const lines = splitLinesWithOffsets(text);
+        const lines = splitNarrativeLinesWithOffsets(text);
         const turns = buildTurnSpans(lines, text.length);
         const micro = buildMicroDescriptors(text, lines, turns, cfg);
         const meso = buildMesoDescriptors(text, turns, micro, cfg);
@@ -188,80 +187,17 @@ function runUnitizerWorker(
     });
 }
 
-function splitLinesWithOffsets(text: string): NarrativeLine[] {
-    const lines: NarrativeLine[] = [];
-    let start = 0;
-    for (let idx = 0; idx < text.length; idx += 1) {
-        if (text[idx] !== "\n") continue;
-        lines.push({
-            start,
-            end: idx + 1,
-            text: text.slice(start, idx + 1),
-        });
-        start = idx + 1;
-    }
-    if (start < text.length) {
-        lines.push({
-            start,
-            end: text.length,
-            text: text.slice(start),
-        });
-    }
-    return lines;
-}
-
 function buildTurnSpans(lines: NarrativeLine[], textLength: number): TurnSpan[] {
-    const turns: TurnSpan[] = [];
-    for (const line of lines) {
-        const trimmed = line.text.trim();
-        if (!isTurnHeaderLine(trimmed)) continue;
-        const parsed = parseHeader(trimmed.slice(4));
-        turns.push({
-            ordinal: turns.length + 1,
-            headerStart: line.start,
-            headerEnd: line.end,
-            bodyStart: line.end,
-            bodyEnd: textLength,
-            speaker: normalizeSpeaker(parsed.speaker),
-            timestamp: parsed.timestamp ? normalizeTimestamp(parsed.timestamp) : null,
-            sourceCategory: detectSourceCategory(parsed, normalizeSpeaker(parsed.speaker)),
-        });
-    }
-
-    if (turns.length === 0) {
-        return [
-            {
-                ordinal: 1,
-                headerStart: 0,
-                headerEnd: 0,
-                bodyStart: 0,
-                bodyEnd: textLength,
-                speaker: null,
-                timestamp: null,
-                sourceCategory: "unknown",
-            },
-        ];
-    }
-
-    for (let idx = 0; idx < turns.length; idx += 1) {
-        const next = turns[idx + 1];
-        turns[idx]!.bodyEnd = next ? next.headerStart : textLength;
-    }
-    return turns;
-}
-
-function isTurnHeaderLine(trimmed: string): boolean {
-    // Timeline style:
-    // ### [#12 | 2026-03-11 04:30] user
-    // ### [op-3 | 2026-03-11 04:34] assistant (tool)
-    if (/^### \[(#\d+|op-\d+)\s*\|\s*[^\]]+\]\s+.+$/.test(trimmed)) {
-        return true;
-    }
-    // Narrative speaker style:
-    // ### user (2026-03-11 04:30)
-    // ### assistant (tool) (2026-03-11 04:30)
-    // ### system
-    return /^###\s+(user|assistant|system|tool|toolresult|model|unknown)\b/i.test(trimmed);
+    return parseNarrativeTurnSpans(lines.map((line) => line.text).join("")).map((turn) => ({
+        ordinal: turn.ordinal,
+        headerStart: turn.headerStart,
+        headerEnd: turn.headerEnd,
+        bodyStart: turn.bodyStart,
+        bodyEnd: turn.bodyEnd,
+        role: turn.role || null,
+        timestamp: turn.timestamp,
+        sourceCategory: detectSourceCategory({ role: turn.role || "" }, turn.role || null),
+    }));
 }
 
 function buildMicroDescriptors(
@@ -784,7 +720,7 @@ function describeMicro(start: number, end: number, turn: TurnSpan): MicroDescrip
         start,
         end,
         turnOrdinal: turn.ordinal,
-        speaker: turn.speaker,
+        role: turn.role,
         timestamp: turn.timestamp,
         sourceCategory: turn.sourceCategory,
     };
@@ -819,7 +755,7 @@ function buildMesoDescriptors(
             end: last.bodyEnd,
             turnStartOrdinal: first.ordinal,
             turnEndOrdinal: last.ordinal,
-            speaker: first.speaker,
+            role: first.role,
             timestamp: first.timestamp,
             sourceCategory: resolveAggregateCategory(currentTurns.map((turn) => turn.sourceCategory)),
         });
@@ -834,7 +770,7 @@ function buildMesoDescriptors(
         if (turnMicros.length === 0) continue;
         const turnChars = turn.bodyEnd - turn.headerStart;
         const shouldStartNewUserEpisode =
-            turn.speaker === "user" &&
+            isUserLikeRole(turn.role) &&
             currentTurns.length > 0 &&
             hasUser &&
             hasResponseAfterUser &&
@@ -852,29 +788,18 @@ function buildMesoDescriptors(
             currentTurns.length > 0 &&
             currentTurns.length >= turnCountLimit &&
             currentChars >= Math.floor(minStableMesoChars * 0.55);
-        const timeBoundary =
-            currentTurns.length > 0 &&
-            currentTurns.length >= 3 &&
-            currentChars >= minStableMesoChars &&
-            isLargeTimeGap(
-                currentTurns[currentTurns.length - 1]!.timestamp,
-                turn.timestamp,
-                45 * 60 * 1000
-            );
-
         if (
             shouldStartNewUserEpisode ||
             hardOverflow ||
             exceedsMesoLimit ||
-            hitsTurnCountLimit ||
-            timeBoundary
+            hitsTurnCountLimit
         ) {
             flush();
         }
 
         currentTurns.push(turn);
         currentChars = currentTurns[currentTurns.length - 1]!.bodyEnd - currentTurns[0]!.headerStart;
-        if (turn.speaker === "user") {
+        if (isUserLikeRole(turn.role)) {
             hasUser = true;
         } else if (hasUser) {
             hasResponseAfterUser = true;
@@ -900,7 +825,7 @@ function buildMacroDescriptors(
         macro.push({
             start: first.start,
             end: last.end,
-            speaker: first.speaker,
+            role: first.role,
             timestamp: first.timestamp,
             sourceCategory: resolveAggregateCategory(current.map((item) => item.sourceCategory)),
         });
@@ -920,16 +845,11 @@ function buildMacroDescriptors(
         const hitsTargetWithCue =
             currentChars >= cfg.macroTargetChars &&
             beginsWithMacroShiftCue(text.slice(item.start, Math.min(item.end, item.start + 120)));
-        const timeBoundary = isLargeTimeGap(
-            current[current.length - 1]!.timestamp,
-            item.timestamp,
-            90 * 60 * 1000
-        );
         const hasEnoughMeso = current.length >= Math.max(3, cfg.macroTargetMesoUnits);
 
         if (
             hitsHardLimit ||
-            (hasEnoughMeso && (reachesTargetChars || hitsTargetWithCue || timeBoundary))
+            (hasEnoughMeso && (reachesTargetChars || hitsTargetWithCue))
         ) {
             flush();
         }
@@ -973,7 +893,7 @@ function smoothMesoDescriptors(
         if (canMergeNext) {
             next!.start = current.start;
             next!.turnStartOrdinal = current.turnStartOrdinal;
-            next!.speaker = next!.speaker ?? current.speaker;
+            next!.role = next!.role ?? current.role;
             next!.timestamp = next!.timestamp ?? current.timestamp;
             next!.sourceCategory = resolveAggregateCategory([
                 next!.sourceCategory,
@@ -1017,7 +937,7 @@ function smoothMacroDescriptors(
         }
         if (canMergeNext) {
             next!.start = current.start;
-            next!.speaker = next!.speaker ?? current.speaker;
+            next!.role = next!.role ?? current.role;
             next!.timestamp = next!.timestamp ?? current.timestamp;
             next!.sourceCategory = resolveAggregateCategory([
                 next!.sourceCategory,
@@ -1047,7 +967,7 @@ function materializeMacroUnits(
         text: text.slice(item.start, item.end),
         parentUnitId: null,
         language: record.language,
-        speaker: item.speaker,
+        role: item.role,
         timestamp: item.timestamp,
         sourceCategory: item.sourceCategory,
     }));
@@ -1070,7 +990,7 @@ function materializeMesoUnits(
         text: text.slice(item.start, item.end),
         parentUnitId: findParentUnitId(item.start, item.end, macroUnits),
         language: record.language,
-        speaker: item.speaker,
+        role: item.role,
         timestamp: item.timestamp,
         sourceCategory: item.sourceCategory,
     }));
@@ -1093,7 +1013,7 @@ function materializeMicroUnits(
         text: text.slice(item.start, item.end),
         parentUnitId: findParentUnitId(item.start, item.end, mesoUnits),
         language: record.language,
-        speaker: item.speaker,
+        role: item.role,
         timestamp: item.timestamp,
         sourceCategory: item.sourceCategory,
     }));
@@ -1123,18 +1043,6 @@ function beginsWithMacroShiftCue(value: string): boolean {
     return /^(现在|接下来|另外|然后|回到|重新|改成|改为|换个|转到)/.test(trimmed);
 }
 
-function isLargeTimeGap(
-    previous: string | null,
-    next: string | null,
-    thresholdMs: number
-): boolean {
-    if (!previous || !next) return false;
-    const prevMs = Date.parse(previous);
-    const nextMs = Date.parse(next);
-    if (Number.isNaN(prevMs) || Number.isNaN(nextMs)) return false;
-    return Math.abs(nextMs - prevMs) >= thresholdMs;
-}
-
 function trimRange(text: string, start: number, end: number): { start: number; end: number } {
     let nextStart = start;
     let nextEnd = end;
@@ -1147,62 +1055,19 @@ function trimRange(text: string, start: number, end: number): { start: number; e
     return { start: nextStart, end: nextEnd };
 }
 
-function parseHeader(value: string): {
-    marker?: string | null;
-    speaker: string;
-    timestamp?: string | null;
-} {
-    const trimmed = value.trim();
-    const timeline = trimmed.match(/^\[(#\d+|op-\d+)\s*\|\s*([^\]]+)\]\s*(.+)$/);
-    if (timeline) {
-        return {
-            marker: timeline[1] || null,
-            timestamp: timeline[2]?.trim() || null,
-            speaker: (timeline[3] || "unknown").trim(),
-        };
-    }
-    const parenIndex = trimmed.indexOf("(");
-    if (parenIndex > 0 && trimmed.endsWith(")")) {
-        const speaker = trimmed.slice(0, parenIndex).trim();
-        const meta = trimmed.slice(parenIndex + 1, -1).trim();
-        return {
-            marker: null,
-            speaker: speaker || "unknown",
-            timestamp: extractTimestamp(meta),
-        };
-    }
-    return { marker: null, speaker: trimmed || "unknown" };
-}
-
-function extractTimestamp(label: string): string | null {
-    const match = label.match(/(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})/);
-    return match ? match[1] : null;
-}
-
-function normalizeSpeaker(raw?: string): V8Unit["speaker"] {
-    if (!raw) return null;
-    const lower = raw.toLowerCase();
-    if (lower.includes("user")) return "user";
-    if (lower.includes("assistant") || lower.includes("model")) return "assistant";
-    if (lower.includes("system")) return "system";
-    return "unknown";
+function isUserLikeRole(raw?: string | null): boolean {
+    const lower = String(raw || "").toLowerCase();
+    return lower.includes("user");
 }
 
 function detectSourceCategory(
-    header: { marker?: string | null; speaker: string },
-    speaker: V8Unit["speaker"]
+    header: { role: string },
+    role: V8Unit["role"]
 ): V8NarrativeSourceCategory {
-    const marker = (header.marker || "").toLowerCase();
-    const rawSpeaker = (header.speaker || "").toLowerCase();
-    if (marker.startsWith("op-") || rawSpeaker.includes("(tool)")) {
+    const rawRole = (header.role || "").toLowerCase();
+    if (rawRole.includes("tool")) {
         return "operation";
     }
-    if (speaker) return "conversation";
+    if (role) return "conversation";
     return "unknown";
-}
-
-function normalizeTimestamp(value: string): string | null {
-    if (!value) return null;
-    const parsed = new Date(value.replace(" ", "T"));
-    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }

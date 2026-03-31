@@ -293,30 +293,6 @@ function combineRecallPrompts(prompts: Array<{ prompt: string }>): string {
         .join("\n\n");
 }
 
-function selectRecallMode(promptText: string): "profile" | "trajectory" | "oblique" | "audit" {
-    const normalized = (promptText || "").trim();
-    if (!normalized) return "profile";
-
-    const auditPattern =
-        /审计|溯源|追溯|回溯|证据链|证据|核对|核查|验证|对照|原文|原话|出处|引用|来源|哪句|哪一段|谁说|fact\s*check|compliance|audit|provenance|evidence|backtrace|trace|verify|validate/i;
-    const trajectoryPattern =
-        /之前|前面|前几章|前几步|一开始|最初|起初|起先|当时|早期|前期|后期|曾经|后来|随后|之后|再后来|目前|现在|改了|变成|演变|变化|转变|变迁|演进|回顾|回看|复盘|全程|全过程|完整脉络|全生命周期|时间线|timeline|history|earlier|before|previously|former|back\s*then|later|after|changed|became|evolved|evolution|lifecycle|chronolog/i;
-    const obliquePattern =
-        /相关|联系|联想|侧面|旁支|隐含|类似|相似|类比|对比|顺便|横向|oblique|related|analog|analogy|adjacent|side/i;
-    const memoryMentionPattern =
-        /记得|记住|回忆|回想|想起|记起|remember|recall/i;
-    const timeMarkerPattern =
-        /之前|上次|曾经|当时|以前|此前|一开始|最初|后来|之后|再后来|过往|历史|早期|前期|后期/i;
-
-    if (auditPattern.test(normalized)) return "audit";
-    if (trajectoryPattern.test(normalized)) return "trajectory";
-    if (memoryMentionPattern.test(normalized) && timeMarkerPattern.test(normalized)) {
-        return "trajectory";
-    }
-    if (obliquePattern.test(normalized)) return "oblique";
-    if (memoryMentionPattern.test(normalized)) return "profile";
-    return "profile";
-}
 
 function getCheckpointConfig(pluginConfig: any): StreamCheckpointConfig {
     return {
@@ -1134,7 +1110,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                                     goal: anchors.goal,
                                     activeTask: anchors.activeTask,
                                     latestUserRequest: anchors.latestUserRequest,
-                                    mode: v8Scanner.getMode(),
+                                    mode: "profile",
                                     packCacheTtlDays:
                                         typeof pluginConfig?.v8PackCacheTtlDays === "number"
                                             ? pluginConfig.v8PackCacheTtlDays
@@ -1158,7 +1134,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
                                         tier: bundle.tier,
                                     }));
                                     recordRecallTrace(scopedSessionKey(workspace, sid), {
-                                        mode: v8Scanner.getMode(),
+                                        mode: "profile",
                                         bundles: recallBundles,
                                     });
                                     return;
@@ -1242,8 +1218,7 @@ export function registerStreamWrapper(api: any, pluginConfig: any) {
             if (useV8GraphRecall) {
                 const workingState = maybeRefreshWorkingState(workspace);
                 const scanner = getV8Scanner(sid, workspace, v8ScannerConfig);
-                const mode = selectRecallMode(promptText);
-                scanner.setMode(mode);
+
                 scanner.refreshScene(
                     buildSceneSignals(workingState, [
                         {

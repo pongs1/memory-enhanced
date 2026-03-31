@@ -10,7 +10,9 @@ export interface BuildNarrativeRecordInput {
 }
 
 export function loadNarrativeRecords(rawDir: string): V8NarrativeRecord[] {
-    const assembledDir = path.join(rawDir, "observations", "assembled");
+    const preferredDir = path.join(rawDir, "assembled");
+    const legacyDir = path.join(rawDir, "observations", "assembled");
+    const assembledDir = fs.existsSync(preferredDir) ? preferredDir : legacyDir;
     if (!fs.existsSync(assembledDir)) return [];
     const files = fs
         .readdirSync(assembledDir)
@@ -43,7 +45,7 @@ export function buildNarrativeRecordFromMarkdown(
         sourceClass: "raw",
         sourceType: "session_narrative",
         sourceRef: input.sourceRef,
-        speaker: null,
+        role: null,
         timestamp: null,
         rawText: input.content,
         cleanText: input.content,

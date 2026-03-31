@@ -58,7 +58,7 @@ export function extractMemoryItems(
         const unit = unitsById.get(span.unitId);
         if (!unit) continue;
         const text = span.text || unit.text;
-        const speaker = unit.speaker ?? "unknown";
+        const speaker = unit.role ?? "unknown";
         const anchors = extractSurfaceAnchors(text);
         const semanticItems = buildSemanticItems({
             text,

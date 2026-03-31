@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJson } from "../../utils.js";
 import { readJsonl, writeJsonl } from "./io.js";
+import { buildExtractPrompt, formatPromptUnitBody, validateAnnotatedItem } from "./ir-llm-workflow.js";
+import { buildSerialIrWindows, parseNarrativeTurns } from "./ir-windowed-extraction.js";
 import type {
     V8EvidenceSpan,
     V8GraphLayer,
@@ -10,21 +12,31 @@ import type {
     V8MemoryItemType,
     V8Unit,
 } from "../types_v8.js";
+import type { V8IrPromptUnit } from "./ir-llm-workflow.js";
 
 export interface V8IrLlmJob {
+    kind: "extract";
     jobId: string;
     unitId: string;
     unitIds: string[];
+    targetUnitIds: string[];
+    promptUnits: V8IrPromptUnit[];
     layer: V8GraphLayer;
     narrativeRecordId: string;
     narrativeRecordIds: string[];
     sourceRef: string;
     sourceRefs: string[];
-    speaker: string | null;
+    role: string | null;
     language: string;
     text: string;
     evidenceSpanIds: string[];
     prompt: string;
+}
+
+export interface V8LoadedLlmArtifacts {
+    items: V8MemoryItem[];
+    units: V8Unit[];
+    evidenceSpans: V8EvidenceSpan[];
 }
 
 export interface BuildLlmIrJobOptions {
@@ -101,16 +113,80 @@ const ITEM_TYPES_BY_LAYER: Record<V8GraphLayer, string[]> = {
     ],
 };
 
+const DEFAULT_ITEM_TYPE_BY_LAYER: Record<V8GraphLayer, V8MemoryItemType> = {
+    micro: "claim",
+    meso: "scene_block",
+    macro: "thread",
+};
+
 interface LlmBatchConfig {
     maxUnits: number;
     maxChars: number;
     maxEvidenceSpans: number;
 }
 
+interface NarrativeWindowConfig {
+    windowTurns: number;
+    overlapTurns: number;
+}
+
+interface JobPromptRef {
+    layer: V8GraphLayer;
+    unitIds: string[];
+    narrativeRecordId: string;
+    narrativeRef: string;
+    ordinal: number;
+    charStart: number;
+    charEnd: number;
+    text: string;
+    role: string | null;
+    timestamp: string | null;
+}
+
+interface IrAnchor {
+    layer: V8GraphLayer;
+    narrativeRecordId: string;
+    narrativeRef: string;
+    turnStart: number;
+    turnEnd: number;
+    charStart: number;
+    charEnd: number;
+    role: string | null;
+    timestamp: string | null;
+    text: string;
+}
+
+interface LlmItemDraft {
+    rawId: string;
+    narrativeRecordId: string;
+    sourceRef: string;
+    itemType: V8MemoryItemType;
+    originType: V8MemoryItem["originType"];
+    layer: V8GraphLayer;
+    subject: string;
+    predicate: string;
+    object: string;
+    label: string;
+    qualifiers: Record<string, string>;
+    scope: V8MemoryItem["scope"];
+    validity: V8MemoryItem["validity"];
+    createdAt: string;
+    updatedAt: string;
+    anchor: IrAnchor | null;
+    legacyUnitIds: string[];
+    legacyEvidenceSpanIds: string[];
+}
+
 const BATCH_CONFIG_BY_LAYER: Record<V8GraphLayer, LlmBatchConfig> = {
     micro: { maxUnits: 8, maxChars: 2600, maxEvidenceSpans: 24 },
     meso: { maxUnits: 4, maxChars: 4200, maxEvidenceSpans: 18 },
     macro: { maxUnits: 2, maxChars: 6000, maxEvidenceSpans: 12 },
+};
+
+const NARRATIVE_WINDOW_CONFIG_BY_LAYER: Record<V8GraphLayer, NarrativeWindowConfig> = {
+    micro: { windowTurns: 8, overlapTurns: 2 },
+    meso: { windowTurns: 24, overlapTurns: 6 },
+    macro: { windowTurns: 40, overlapTurns: 10 },
 };
 
 const MAX_ITEMS_PER_UNIT: Record<V8GraphLayer, number> = {
@@ -124,61 +200,6 @@ const MAX_ITEMS_PER_NARRATIVE_LAYER: Record<V8GraphLayer, number> = {
     meso: 48,
     macro: 10,
 };
-
-const LAYER_OBJECTIVE_LINES: Record<V8GraphLayer, string[]> = {
-    micro: [
-        "Extract only local, directly stated memory facts.",
-        "Prefer concrete entity-action-object, attribute, comparison, condition, support, contradiction, or explicit user control signals.",
-        "Do not abstract across multiple turns here.",
-    ],
-    meso: [
-        "Extract mid-range structure from a coherent local block.",
-        "Prefer decisions, goals, constraints, strategy shifts, problem/solution framing, evidence-backed state changes, and interaction structure.",
-        "Do not repeat every micro fact; compress to the block-level relation that matters for later recall.",
-    ],
-    macro: [
-        "Extract only long-range, high-value lines that survive compression.",
-        "Prefer phase shifts, enduring regimes, relationship arcs, method lines, objective lines, conflict lines, and global state transitions.",
-        "Do not emit local details unless they clearly define the arc or regime.",
-    ],
-};
-
-const LAYER_AVOID_LINES: Record<V8GraphLayer, string[]> = {
-    micro: [
-        "Avoid greetings, retries, filler, acknowledgements, and tool noise unless they explicitly change memory state.",
-        "Avoid splitting one short fact into multiple near-duplicate items.",
-    ],
-    meso: [
-        "Avoid restating micro-level entity facts one by one.",
-        "Avoid weak topic labels with no actionable relation or state change.",
-    ],
-    macro: [
-        "Avoid local episodic details, one-off facts, and shallow restatements of meso items.",
-        "Avoid emitting more than a few strongest lines for the batch.",
-    ],
-};
-
-const LAYER_EXAMPLE_LINES: Record<V8GraphLayer, string[]> = {
-    micro: [
-        "Good micro example: a direct instruction changes a constraint, a sentence states A supports B, a line explicitly says X was replaced by Y.",
-        "Bad micro example: \"hi\", \"继续\", or generic chatter with no durable fact.",
-    ],
-    meso: [
-        "Good meso example: a block establishes a design decision, reframes a problem, or records that a previous approach was replaced.",
-        "Bad meso example: listing every noun or every repeated sentence from the block.",
-    ],
-    macro: [
-        "Good macro example: a thread evolves from early preference to later rejection, or a project phase shifts from exploration to implementation.",
-        "Bad macro example: replaying one local turn or emitting a vague theme with no evidence-backed transition.",
-    ],
-};
-
-const QUALIFIER_GUIDANCE_LINES: string[] = [
-    "When useful, use qualifiers to mark epistemic and operational role instead of inventing extra relations.",
-    "Preferred qualifiers: epistemic_status=observed|hypothesized|verified|applied; operation_role=observation|diagnosis|verification|fix|outcome; durability=transient|durable.",
-    "Use `diagnosis` for explanatory interpretation, `verification` for a test that confirms or rejects it, `fix` for an applied change, and `outcome` for the post-change result.",
-    "Do not mark a diagnosis as verified or durable unless the evidence directly shows confirmation or successful application.",
-];
 
 function edgeCatalogPath(): string {
     const here = path.dirname(fileURLToPath(import.meta.url));
@@ -215,131 +236,96 @@ function loadAllowedPredicates(): {
     return { allowed, grouped };
 }
 
-const { allowed: ALLOWED_PREDICATES, grouped: ALLOWED_GROUPS } = loadAllowedPredicates();
+const { allowed: ALLOWED_PREDICATES } = loadAllowedPredicates();
 
 export function buildLlmIrJobs(
     units: V8Unit[],
-    evidenceSpans: V8EvidenceSpan[],
+    _evidenceSpans: V8EvidenceSpan[],
     options?: BuildLlmIrJobOptions
 ): V8IrLlmJob[] {
-    const evidenceIndex = buildEvidenceIndex(units, evidenceSpans);
+    const unitIndex = buildLayerUnitIndex(units);
     const requestedLayers =
         options?.layers && options.layers.length > 0
             ? options.layers
-            : evidenceIndex.layerOrder;
+            : unitIndex.layerOrder;
     const enabledLayers = requestedLayers.filter((layer) =>
-        evidenceIndex.layerOrder.includes(layer)
+        unitIndex.layerOrder.includes(layer)
     );
 
     const jobs: V8IrLlmJob[] = [];
     for (const layer of enabledLayers) {
-        const layerUnits = (evidenceIndex.unitsByLayer.get(layer) || []).filter((unit) =>
+        const batchConfig = BATCH_CONFIG_BY_LAYER[layer];
+        const layerUnits = (unitIndex.unitsByLayer.get(layer) || []).filter((unit) =>
             unit.text.trim().length > 0
         );
-        const batchConfig = BATCH_CONFIG_BY_LAYER[layer];
-        const batches = buildLayerBatches(layer, layerUnits, batchConfig);
-        for (const batch of batches) {
-            const spansByUnit = new Map<string, V8EvidenceSpan[]>();
-            for (const unit of batch) {
-                spansByUnit.set(unit.id, evidenceIndex.spansByUnit.get(unit.id) || []);
-            }
-            const perUnitLimit = Math.max(
-                1,
-                Math.floor(batchConfig.maxEvidenceSpans / Math.max(1, batch.length))
-            );
-            const supportSpans = batch
-                .flatMap((unit) =>
-                    (spansByUnit.get(unit.id) || []).slice(0, perUnitLimit)
-                )
-                .sort((a, b) => b.score - a.score);
-            const dedupedSpans = dedupeSpans(supportSpans).slice(0, batchConfig.maxEvidenceSpans);
-            const prompt = buildPrompt({
-                layer,
-                units: batch,
-                spansByUnit: new Map(
-                    batch.map((unit) => [unit.id, (spansByUnit.get(unit.id) || []).slice(0, 8)])
-                ),
-            });
-            jobs.push({
-                jobId: `job_${layer}_${batch[0].id}_${batch[batch.length - 1].id}`,
-                unitId: batch[0].id,
-                unitIds: batch.map((unit) => unit.id),
-                layer,
-                narrativeRecordId: batch[0].narrativeRecordId,
-                narrativeRecordIds: Array.from(new Set(batch.map((unit) => unit.narrativeRecordId))),
-                sourceRef: batch[0].narrativeRef,
-                sourceRefs: Array.from(new Set(batch.map((unit) => unit.narrativeRef))),
-                speaker: batch[0].speaker ?? null,
-                language: batch[0].language,
-                text: batch.map((unit) => unit.text.trim()).filter(Boolean).join("\n\n"),
-                evidenceSpanIds: dedupedSpans.map((span) => span.id),
-                prompt,
-            });
-        }
+        jobs.push(...buildNarrativeExtractJobs(layer, layerUnits, batchConfig));
     }
 
     return jobs;
 }
 
-function buildLayerBatches(
+function buildNarrativeExtractJobs(
     layer: V8GraphLayer,
     units: V8Unit[],
     config: LlmBatchConfig
-): V8Unit[][] {
-    if (units.length === 0) return [];
-    if (layer === "micro") {
-        return buildSequentialBatches(units, config);
-    }
-    return buildOverlappingBatches(units, config, layer === "macro" ? 2 : 1);
-}
-
-function buildSequentialBatches(units: V8Unit[], config: LlmBatchConfig): V8Unit[][] {
-    const batches: V8Unit[][] = [];
-    let batch: V8Unit[] = [];
-    let batchChars = 0;
-    const flush = () => {
-        if (batch.length === 0) return;
-        batches.push(batch);
-        batch = [];
-        batchChars = 0;
-    };
-    for (const unit of units) {
-        const unitChars = unit.text.trim().length;
-        const wouldOverflow =
-            batch.length > 0 &&
-            (batch.length >= config.maxUnits || batchChars + unitChars > config.maxChars);
-        if (wouldOverflow) flush();
-        batch.push(unit);
-        batchChars += unitChars;
-    }
-    flush();
-    return batches;
-}
-
-function buildOverlappingBatches(
-    units: V8Unit[],
-    config: LlmBatchConfig,
-    overlapUnits: number
-): V8Unit[][] {
-    const batches: V8Unit[][] = [];
+): V8IrLlmJob[] {
+    const jobs: V8IrLlmJob[] = [];
     const groups = groupUnitsByNarrative(units);
-    const stride = Math.max(1, config.maxUnits - overlapUnits);
+    const windowConfig = NARRATIVE_WINDOW_CONFIG_BY_LAYER[layer];
     for (const group of groups) {
-        if (group.length <= config.maxUnits) {
-            batches.push(trimBatchByChars(group, config.maxChars));
-            continue;
-        }
-        for (let start = 0; start < group.length; start += stride) {
-            const window = trimBatchByChars(
-                group.slice(start, start + config.maxUnits),
-                config.maxChars
-            );
-            if (window.length === 0) break;
-            batches.push(window);
-            if (start + config.maxUnits >= group.length) break;
+        if (group.length === 0) continue;
+        const narrativePath = group[0]!.narrativeRef;
+        const rawNarrative = readRawFile(narrativePath);
+        if (!rawNarrative.trim()) continue;
+        const turns = parseNarrativeTurns(rawNarrative);
+        if (turns.length === 0) continue;
+        const windows = buildSerialIrWindows(turns, {
+            windowSize: windowConfig.windowTurns,
+            overlapTurns: windowConfig.overlapTurns,
+        });
+        const unitsByTurn = mapUnitsToTurns(group, turns);
+        for (const window of windows) {
+            const promptUnits = window.turns.map((turn) => ({
+                id: `${layer}_turn_${turn.idx}`,
+                narrativeRecordId: group[0]!.narrativeRecordId,
+                narrativeRef: narrativePath,
+                ordinal: turn.idx,
+                charStart: turn.charStart,
+                charEnd: turn.charEnd,
+                text: turn.text,
+                role: turn.role || null,
+                timestamp: turn.timestamp,
+            }) satisfies V8IrPromptUnit);
+            const targetUnitIds = promptUnits.map((unit) => unit.id);
+            const sourceUnits = window.turns.flatMap((turn) => unitsByTurn.get(turn.idx) || []);
+            const dedupedUnits = Array.from(new Map(sourceUnits.map((unit) => [unit.id, unit])).values());
+            if (dedupedUnits.length === 0) continue;
+            jobs.push({
+                kind: "extract",
+                jobId: `job_${layer}_turns_${group[0]!.narrativeRecordId}_${window.turnIdxStart}_${window.turnIdxEnd}`,
+                unitId: targetUnitIds[0] || dedupedUnits[0]?.id || `${layer}_turn_${window.turnIdxStart}`,
+                unitIds: dedupedUnits.map((unit) => unit.id),
+                targetUnitIds,
+                promptUnits,
+                layer,
+                narrativeRecordId: group[0]!.narrativeRecordId,
+                narrativeRecordIds: [group[0]!.narrativeRecordId],
+                sourceRef: narrativePath,
+                sourceRefs: [narrativePath],
+                role: promptUnits[0]?.role || null,
+                language: group[0]!.language,
+                text: window.turns.map((turn) => turn.text.trim()).filter(Boolean).join("\n\n"),
+                evidenceSpanIds: [],
+                prompt: buildExtractPrompt({
+                    layer,
+                    workingUnits: promptUnits,
+                    pendingItems: [],
+                    targetUnitIds,
+                }),
+            });
         }
     }
-    return dedupeBatchWindows(batches);
+    return jobs;
 }
 
 function groupUnitsByNarrative(units: V8Unit[]): V8Unit[][] {
@@ -360,105 +346,41 @@ function groupUnitsByNarrative(units: V8Unit[]): V8Unit[][] {
     );
 }
 
-function trimBatchByChars(units: V8Unit[], maxChars: number): V8Unit[] {
-    if (units.length === 0) return [];
-    const output: V8Unit[] = [];
-    let chars = 0;
-    for (const unit of units) {
-        const len = unit.text.trim().length;
-        if (output.length > 0 && chars + len > maxChars) break;
-        output.push(unit);
-        chars += len;
+function mapUnitsToTurns(units: V8Unit[], turns: ReturnType<typeof parseNarrativeTurns>): Map<number, V8Unit[]> {
+    const map = new Map<number, V8Unit[]>();
+    for (const turn of turns) {
+        const related = units.filter(
+            (unit) => unit.charStart < turn.charEnd && unit.charEnd > turn.charStart
+        );
+        map.set(turn.idx, related);
     }
-    return output;
+    return map;
 }
 
-function dedupeBatchWindows(batches: V8Unit[][]): V8Unit[][] {
-    const seen = new Set<string>();
-    const output: V8Unit[][] = [];
-    for (const batch of batches) {
-        if (batch.length === 0) continue;
-        const key = batch.map((unit) => unit.id).join("|");
-        if (seen.has(key)) continue;
-        seen.add(key);
-        output.push(batch);
+function readRawFile(filePath: string): string {
+    try {
+        return fs.readFileSync(filePath, "utf-8");
+    } catch {
+        return "";
     }
-    return output;
 }
 
-interface EvidenceIndex {
-    spansByUnit: Map<string, V8EvidenceSpan[]>;
+interface LayerUnitIndex {
     unitsByLayer: Map<V8GraphLayer, V8Unit[]>;
     layerOrder: V8GraphLayer[];
 }
 
-function buildEvidenceIndex(
-    units: V8Unit[],
-    evidenceSpans: V8EvidenceSpan[]
-): EvidenceIndex {
-    const spansByNarrative = new Map<string, V8EvidenceSpan[]>();
-    for (const span of evidenceSpans) {
-        const list = spansByNarrative.get(span.narrativeRecordId) || [];
-        list.push(span);
-        spansByNarrative.set(span.narrativeRecordId, list);
-    }
-    for (const list of spansByNarrative.values()) {
-        list.sort((a, b) => a.charStart - b.charStart);
-    }
-
-    const spansByUnit = new Map<string, V8EvidenceSpan[]>();
+function buildLayerUnitIndex(units: V8Unit[]): LayerUnitIndex {
     const unitsByLayer = new Map<V8GraphLayer, V8Unit[]>();
     for (const unit of units) {
         const layerBucket = unitsByLayer.get(unit.layer) || [];
         layerBucket.push(unit);
         unitsByLayer.set(unit.layer, layerBucket);
-        spansByUnit.set(unit.id, collectSupportingSpans(unit, spansByNarrative));
     }
-
     return {
-        spansByUnit,
         unitsByLayer,
         layerOrder: ["macro", "meso", "micro"],
     };
-}
-
-function collectSupportingSpans(
-    unit: V8Unit,
-    spansByNarrative: Map<string, V8EvidenceSpan[]>
-): V8EvidenceSpan[] {
-    const spans = spansByNarrative.get(unit.narrativeRecordId) || [];
-    if (spans.length === 0) return [];
-    let lo = 0;
-    let hi = spans.length;
-    while (lo < hi) {
-        const mid = Math.floor((lo + hi) / 2);
-        if (spans[mid].charStart < unit.charStart) {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-
-    const collected: V8EvidenceSpan[] = [];
-    for (let idx = lo; idx < spans.length; idx += 1) {
-        const span = spans[idx];
-        if (span.charStart >= unit.charEnd) break;
-        if (span.charStart >= unit.charStart && span.charEnd <= unit.charEnd) {
-            collected.push(span);
-        }
-    }
-    return collected;
-}
-
-function dedupeSpans(spans: V8EvidenceSpan[]): V8EvidenceSpan[] {
-    const seen = new Set<string>();
-    const output: V8EvidenceSpan[] = [];
-    for (const span of spans) {
-        if (seen.has(span.id)) continue;
-        seen.add(span.id);
-        output.push(span);
-    }
-    return output;
 }
 
 export function writeIrLlmJobs(filePath: string, jobs: V8IrLlmJob[]): void {
@@ -466,26 +388,43 @@ export function writeIrLlmJobs(filePath: string, jobs: V8IrLlmJob[]): void {
 }
 
 export function loadLlmIrItems(
-    input: { mdPath?: string; jsonlPath?: string },
+    input: { mdPath?: string; jsonlPath?: string; jobsPath?: string },
     units: V8Unit[],
     evidenceSpans: V8EvidenceSpan[]
 ): V8MemoryItem[] {
+    return loadLlmIrArtifacts(input, units, evidenceSpans).items;
+}
+
+export function loadLlmIrArtifacts(
+    input: { mdPath?: string; jsonlPath?: string; jobsPath?: string },
+    units: V8Unit[],
+    evidenceSpans: V8EvidenceSpan[]
+): V8LoadedLlmArtifacts {
     const mdPath = input.mdPath;
     const jsonlPath = input.jsonlPath;
-    const fromMd =
+    const jobsById = loadJobUnitOrderMap(input.jobsPath);
+    const fromMd: V8LoadedLlmArtifacts =
         mdPath && mdPath.trim().length > 0
-            ? parseMarkdownFile(mdPath, units, evidenceSpans)
-            : [];
-    if (fromMd.length > 0) {
-        const pruned = pruneLlmItems(fromMd);
+            ? parseMarkdownFile(mdPath, units, evidenceSpans, jobsById)
+            : { items: [], units: [], evidenceSpans: [] };
+    if (fromMd.items.length > 0) {
+        const pruned = pruneLlmItems(fromMd.items);
         if (jsonlPath) {
             writeJsonl(jsonlPath, pruned);
         }
-        return pruned;
+        return {
+            items: pruned,
+            units: fromMd.units,
+            evidenceSpans: fromMd.evidenceSpans,
+        };
     }
-    if (!jsonlPath) return [];
+    if (!jsonlPath) {
+        return { items: [], units: [], evidenceSpans: [] };
+    }
     const raw = readJsonl<any>(jsonlPath);
-    if (raw.length === 0) return [];
+    if (raw.length === 0) {
+        return { items: [], units: [], evidenceSpans: [] };
+    }
     const unitsById = new Map(units.map((u) => [u.id, u]));
     const spansByUnit = new Map<string, V8EvidenceSpan[]>();
     for (const span of evidenceSpans) {
@@ -493,26 +432,25 @@ export function loadLlmIrItems(
         list.push(span);
         spansByUnit.set(span.unitId, list);
     }
-    const items: V8MemoryItem[] = [];
+    const drafts: LlmItemDraft[] = [];
     for (const entry of raw) {
-        const item = normalizeLlmItem(entry, unitsById, spansByUnit);
-        if (item) {
-            items.push(item);
-        }
+        const item = normalizeLlmItemDraft(entry, unitsById, spansByUnit, jobsById);
+        if (item) drafts.push(item);
     }
-    return pruneLlmItems(items);
+    return materializeDerivedArtifacts(drafts, units, evidenceSpans);
 }
 
 function parseMarkdownFile(
     filePath: string,
     units: V8Unit[],
-    evidenceSpans: V8EvidenceSpan[]
-): V8MemoryItem[] {
+    evidenceSpans: V8EvidenceSpan[],
+    jobsById?: Map<string, JobPromptRef[]>
+): V8LoadedLlmArtifacts {
     try {
         const raw = readFileTrimmed(filePath);
-        if (!raw) return [];
+        if (!raw) return { items: [], units: [], evidenceSpans: [] };
         const blocks = splitMarkdownItems(raw);
-        if (blocks.length === 0) return [];
+        if (blocks.length === 0) return { items: [], units: [], evidenceSpans: [] };
         const unitsById = new Map(units.map((u) => [u.id, u]));
         const spansByUnit = new Map<string, V8EvidenceSpan[]>();
         for (const span of evidenceSpans) {
@@ -520,43 +458,52 @@ function parseMarkdownFile(
             list.push(span);
             spansByUnit.set(span.unitId, list);
         }
-        const items: V8MemoryItem[] = [];
+        const drafts: LlmItemDraft[] = [];
         for (const block of blocks) {
             const rawItem = parseMarkdownItemBlock(block);
             if (!rawItem) continue;
-            const item = normalizeLlmItem(rawItem, unitsById, spansByUnit);
-            if (item) items.push(item);
+            const item = normalizeLlmItemDraft(rawItem, unitsById, spansByUnit, jobsById);
+            if (item) drafts.push(item);
         }
-        return items;
+        return materializeDerivedArtifacts(drafts, units, evidenceSpans);
     } catch {
-        return [];
+        return { items: [], units: [], evidenceSpans: [] };
     }
 }
 
-function normalizeLlmItem(
+function normalizeLlmItemDraft(
     raw: any,
     unitsById: Map<string, V8Unit>,
-    spansByUnit: Map<string, V8EvidenceSpan[]>
-): V8MemoryItem | null {
+    spansByUnit: Map<string, V8EvidenceSpan[]>,
+    jobsById?: Map<string, JobPromptRef[]>
+): LlmItemDraft | null {
     if (!raw || typeof raw !== "object") return null;
-    const unitId =
+    const mappedPromptRefs = resolvePromptRefsFromRaw(raw, jobsById);
+    const anchor = materializeIrAnchorFromPromptRefs(mappedPromptRefs, unitsById, raw);
+    const explicitUnitId =
         typeof raw.unitId === "string"
             ? raw.unitId
             : typeof raw.unit_id === "string"
               ? raw.unit_id
-              : Array.isArray(raw.unit_ids) && typeof raw.unit_ids[0] === "string"
-                ? raw.unit_ids[0]
               : "";
-    if (!unitId) return null;
-    const unit = unitsById.get(unitId);
-    if (!unit) return null;
+    const legacyUnitIds: string[] =
+        explicitUnitId
+            ? [explicitUnitId]
+            : Array.isArray(raw.unit_ids)
+              ? raw.unit_ids.filter((id: unknown): id is string => typeof id === "string" && id.length > 0)
+              : resolveUnitIdsFromPromptRefs(mappedPromptRefs, unitsById);
+    const resolvedUnitIds: string[] = Array.from(new Set<string>(legacyUnitIds)).filter((id) => unitsById.has(id));
+    const legacyUnit = resolvedUnitIds.length > 0 ? unitsById.get(resolvedUnitIds[0]!) || null : null;
+    const inferredLayer = anchor?.layer || legacyUnit?.layer || inferLayerFromRaw(raw);
+    if (!inferredLayer) return null;
     const itemType =
         (typeof raw.itemType === "string" && raw.itemType) ||
         (typeof raw.item_type === "string" && raw.item_type) ||
         "";
-    if (!itemType) return null;
-    const normalizedItemType = itemType.trim().toLowerCase() as V8MemoryItemType;
-    const allowedItemTypes = new Set(ITEM_TYPES_BY_LAYER[unit.layer] || []);
+    const normalizedItemType = itemType
+        ? (itemType.trim().toLowerCase() as V8MemoryItemType)
+        : DEFAULT_ITEM_TYPE_BY_LAYER[inferredLayer];
+    const allowedItemTypes = new Set(ITEM_TYPES_BY_LAYER[inferredLayer] || []);
     if (
         !CONTROL_ITEM_TYPES.has(normalizedItemType) &&
         !allowedItemTypes.has(normalizedItemType)
@@ -569,64 +516,62 @@ function normalizeLlmItem(
         (typeof raw.relation === "string" && raw.relation) ||
         "";
     if (!predicate) return null;
-    const normalizedPredicate = predicate.trim().toLowerCase();
+    const normalizedPredicate = predicate.trim();
     if (!normalizedPredicate) return null;
 
-    if (!CONTROL_ITEM_TYPES.has(normalizedItemType)) {
-        const allowed = ALLOWED_PREDICATES[unit.layer] || new Set();
-        if (!allowed.has(normalizedPredicate)) return null;
-    }
-
     const subject =
+        (typeof raw.point_a === "string" && raw.point_a) ||
         (typeof raw.subject === "string" && raw.subject) ||
         (typeof raw.actor === "string" && raw.actor) ||
         "";
     const object =
+        (typeof raw.point_b === "string" && raw.point_b) ||
         (typeof raw.object === "string" && raw.object) ||
         (typeof raw.target === "string" && raw.target) ||
         "";
-    if (!subject || !object) return null;
+    if (inferredLayer === "micro") {
+        if (!subject || !object) return null;
+    } else if (!subject && !object) {
+        return null;
+    }
 
     const rawEvidence =
         raw.evidenceSpanIds ||
         raw.evidence_span_ids ||
         raw.evidence_refs ||
         raw.evidenceRefs;
-    const unitSpanIds = new Set((spansByUnit.get(unitId) || []).map((span) => span.id));
+    const candidateSpans = resolvedUnitIds.flatMap((id) => spansByUnit.get(id) || []);
+    const unitSpanIds = new Set(candidateSpans.map((span) => span.id));
     const explicitEvidence = Array.isArray(rawEvidence);
-    const evidenceSpanIds = explicitEvidence
+    const legacyEvidenceSpanIds: string[] = explicitEvidence
         ? rawEvidence.filter(
-              (id: any) => typeof id === "string" && id && unitSpanIds.has(id)
+              (id: unknown): id is string => typeof id === "string" && id.length > 0 && unitSpanIds.has(id)
           )
         : [];
-    if (explicitEvidence && evidenceSpanIds.length === 0) {
-        return null;
-    }
-    if (!explicitEvidence && evidenceSpanIds.length === 0) {
-        const spans = (spansByUnit.get(unitId) || []).slice(0, 3);
-        if (spans.length === 0) return null;
-        for (const span of spans) {
-            evidenceSpanIds.push(span.id);
-        }
-    }
 
     const now = new Date().toISOString();
     const qualifiers = normalizeQualifiers(
         typeof raw.qualifiers === "object" && raw.qualifiers ? raw.qualifiers : {}
     );
-    return {
-        id:
+    const relationFamily =
+        (typeof raw.relation_family === "string" && raw.relation_family.trim()) ||
+        "";
+    if (relationFamily) {
+        qualifiers.relation_family = relationFamily.trim().toLowerCase();
+    }
+    const candidate: LlmItemDraft = {
+        rawId:
             (typeof raw.id === "string" && raw.id) ||
             (typeof raw.memory_item_id === "string" && raw.memory_item_id) ||
             `mi_llm_${now}_${Math.random().toString(36).slice(2, 8)}`,
-        narrativeRecordId: unit.narrativeRecordId,
-        sourceRef: unit.narrativeRef,
+        narrativeRecordId: anchor?.narrativeRecordId || legacyUnit?.narrativeRecordId || "",
+        sourceRef: anchor?.narrativeRef || legacyUnit?.narrativeRef || "",
         itemType: normalizedItemType,
         originType:
             (typeof raw.originType === "string" && raw.originType) ||
             (typeof raw.origin_type === "string" && raw.origin_type) ||
             "asserted",
-        layer: unit.layer,
+        layer: inferredLayer,
         subject,
         predicate: normalizedPredicate,
         object,
@@ -634,152 +579,22 @@ function normalizeLlmItem(
             (typeof raw.label === "string" && raw.label) ||
             truncateLabel(`${subject} ${normalizedPredicate} ${object}`),
         qualifiers,
-        evidenceSpanIds,
-        unitIds: [unitId],
-        confidence: typeof raw.confidence === "number" ? raw.confidence : 0.7,
         scope: raw.scope || "session",
         validity: raw.validity || "active",
         createdAt: raw.createdAt || now,
         updatedAt: raw.updatedAt || now,
+        anchor,
+        legacyUnitIds: resolvedUnitIds,
+        legacyEvidenceSpanIds,
     };
-}
-
-function buildPrompt(input: {
-    layer: V8GraphLayer;
-    units: V8Unit[];
-    spansByUnit: Map<string, V8EvidenceSpan[]>;
-}): string {
-    const { layer, units, spansByUnit } = input;
-    const allowed = Array.from(ALLOWED_PREDICATES[layer] || []).sort();
-    const groupMap = ALLOWED_GROUPS[layer];
-    const groupedLines =
-        groupMap && groupMap.size > 0
-            ? Array.from(groupMap.entries())
-                  .sort((a, b) => a[0].localeCompare(b[0]))
-                  .map(([group, relations]) => {
-                      const list = relations.slice().sort().join(", ");
-                      return `- ${group}: ${list}`;
-                  })
-            : [];
-    const allowedLine = allowed.length
-        ? `Allowed relations (${layer}): ${allowed.join(", ")}`
-        : "";
-    const itemTypeLine = ITEM_TYPES_BY_LAYER[layer]?.length
-        ? `Allowed item_type (${layer}): ${ITEM_TYPES_BY_LAYER[layer].join(", ")}`
-        : "";
-    const layerBudgetHint =
-        layer === "macro"
-            ? "Extraction budget: usually 1-3 high-value relations per unit. Skip weak ones."
-            : layer === "meso"
-              ? "Extraction budget: usually 1-6 relations per unit. Do not force coverage."
-              : "Extraction budget: keep local object/fact relations only.";
-    const suggestedBatchBudget =
-        layer === "macro"
-            ? `Suggested total items for this batch: 2-${Math.min(10, units.length * 3)}`
-            : layer === "meso"
-              ? `Suggested total items for this batch: 4-${Math.min(24, units.length * 6)}`
-              : `Suggested total items for this batch: ${Math.min(80, units.length * 18)} max`;
-    const hardBatchCap =
-        layer === "macro"
-            ? Math.min(8, units.length * 3)
-            : layer === "meso"
-              ? Math.min(16, units.length * 5)
-              : Math.min(48, units.length * 12);
-    const layerObjectives = LAYER_OBJECTIVE_LINES[layer] || [];
-    const layerAvoid = LAYER_AVOID_LINES[layer] || [];
-    const layerExamples = LAYER_EXAMPLE_LINES[layer] || [];
-    const unitBlocks = units.flatMap((unit) => {
-        const evidenceLines = (spansByUnit.get(unit.id) || []).map(
-            (span) => `- (${span.id}) ${sanitizeLine(span.text)}`
-        );
-        return [
-            `#### Unit ${unit.id}`,
-            `speaker: ${unit.speaker ?? "unknown"}`,
-            `timestamp: ${unit.timestamp ?? "unknown"}`,
-            `source_category: ${unit.sourceCategory || "conversation"}`,
-            unit.text.trim(),
-            evidenceLines.length ? "evidence_spans:" : null,
-            ...evidenceLines,
-            "",
-        ].filter(Boolean);
-    });
-    return [
-        "Please extract only evidence-backed relations from the batched units below.",
-        "If nothing can be extracted, output `[]` only.",
-        "",
-        "Primary objective:",
-        "- Capture high-value memory facts for future recall: decisions, constraints, goals, preference shifts, state changes, and stable entity relations.",
-        "- Avoid noisy restatements and avoid splitting one fact into many near-duplicate items.",
-        ...layerObjectives.map((line) => `- ${line}`),
-        "",
-        "Avoid:",
-        ...layerAvoid.map((line) => `- ${line}`),
-        "",
-        "Examples:",
-        ...layerExamples.map((line) => `- ${line}`),
-        "",
-        "Rules:",
-        "- Use only the relations listed under Allowed relations (by group).",
-        "- Do not infer beyond the text; skip vague or speculative claims.",
-        "- Precision over coverage: if uncertain, skip.",
-        "- If the unit is mostly greeting/retry/noise and has no durable fact, output no item for it.",
-        "- In noisy tool output, prefer the stable chain: observation -> diagnosis -> verification -> applied fix -> outcome.",
-        "- When the text explicitly states a current, earlier, former, changed, broken, compatible, invalid, risky, or relational status, prefer a state item over a generic entity item.",
-        "- Use relationship_state / workflow_validity_state / compatibility_state / preference_state / belief_state / risk_state for durable state descriptions when the text directly supports them.",
-        "- If the batch directly contains both an earlier state and a later/current state for the same subject or relation, emit both ends instead of collapsing them into one generic fact.",
-        "- For lifecycle or conflict traces, preserve the timeline in qualifiers such as time=..., status=earlier|current, or phase=....",
-        "- Preserve the source language for subject/object labels unless translation is explicitly required by the text.",
-        `- Hard cap: output at most ${hardBatchCap} items for this batch.`,
-        "- `evidence_span_ids` must come from the provided evidence spans.",
-        "- `unit_id` must be one of the listed Unit IDs.",
-        "- Output Markdown only. No JSON. No extra commentary.",
-        "",
-        "Qualifier guidance:",
-        ...QUALIFIER_GUIDANCE_LINES.map((line) => `- ${line}`),
-        "",
-        "Output format:",
-        "### Item",
-        "item_type: <type>",
-        "subject: <text>",
-        "predicate: <relation>",
-        "object: <text>",
-        "qualifiers: key=value; key=value (leave blank if none)",
-        "origin_type: asserted|aggregated|inferred",
-        "evidence_span_ids: es_xxx, es_yyy",
-        "unit_id: <unit_id>",
-        "confidence: 0.0-1.0",
-        "",
-        "One relation per `### Item` block.",
-        "If none, output: `[]`",
-        "",
-        "Optional control types (only if explicitly stated):",
-        "- item_type: preference, goal, constraint, decision, open_question, conversation_act, session_state, topic_state, relationship_state, workflow_validity_state, compatibility_state, preference_state, belief_state, risk_state",
-        "- predicate: prefers, requires, targets, decides, acts, state_supersedes_state, state_refines_state, valid_during, conflicts_with",
-        "",
-        allowedLine,
-        itemTypeLine,
-        layerBudgetHint,
-        suggestedBatchBudget,
-        ...groupedLines,
-        "",
-        "### Batch",
-        `Layer: ${layer}`,
-        `Unit IDs: ${units.map((unit) => unit.id).join(", ")}`,
-        "",
-        ...unitBlocks,
-    ]
-        .filter(Boolean)
-        .join("\n");
+    if (!candidate.narrativeRecordId || !candidate.sourceRef) return null;
+    return candidate;
 }
 
 function truncateLabel(text: string, maxLen = 120): string {
     const trimmed = (text || "").trim().replace(/\s+/g, " ");
     if (trimmed.length <= maxLen) return trimmed;
     return trimmed.slice(0, maxLen) + "…";
-}
-
-function sanitizeLine(text: string, maxLen = 200): string {
-    return truncateLabel(text, maxLen);
 }
 
 function readFileTrimmed(filePath: string): string {
@@ -808,18 +623,31 @@ function parseMarkdownItemBlock(block: string): Record<string, unknown> | null {
     if (lines.length === 0) return null;
     const item: Record<string, unknown> = {};
     for (const line of lines) {
-        const match = line.match(/^([a-zA-Z_]+)\s*:\s*(.*)$/);
+        const match = line.match(/^(?:-\s*)?([a-zA-Z_]+)\s*:\s*(.*)$/);
         if (!match) continue;
         const key = match[1];
         const value = match[2] || "";
         switch (key) {
             case "item_type":
+            case "point_a":
             case "subject":
+            case "relation":
             case "predicate":
+            case "relation_family":
+            case "point_b":
             case "object":
             case "origin_type":
             case "unit_id":
+            case "unit_number":
+            case "unit_ref":
             case "label":
+            case "evidence":
+            case "anchor_start":
+            case "anchor_end":
+            case "evidence_start_turn":
+            case "evidence_end_turn":
+            case "evidence_start_anchor":
+            case "evidence_end_anchor":
                 item[key] = value;
                 break;
             case "unit_ids": {
@@ -827,13 +655,6 @@ function parseMarkdownItemBlock(block: string): Record<string, unknown> | null {
                     .split(/[,，\s]+/)
                     .map((id) => id.trim())
                     .filter(Boolean);
-                break;
-            }
-            case "confidence": {
-                const parsed = Number.parseFloat(value);
-                if (!Number.isNaN(parsed)) {
-                    item[key] = parsed;
-                }
                 break;
             }
             case "evidence_span_ids": {
@@ -851,9 +672,19 @@ function parseMarkdownItemBlock(block: string): Record<string, unknown> | null {
                 item[key] = value;
         }
     }
-    if (!item.item_type || !item.subject || !item.predicate || !item.object) {
+    const left = item.point_a || item.subject;
+    const rel = item.relation || item.predicate;
+    const right = item.point_b || item.object;
+    const allowOpenSides = item.layer === "meso" || item.layer === "macro";
+    if (!rel) {
         return null;
     }
+    if (allowOpenSides ? (!left && !right) : (!left || !right)) {
+        return null;
+    }
+    item.subject = left;
+    item.predicate = rel;
+    item.object = right;
     return item;
 }
 
@@ -871,6 +702,507 @@ function parseQualifiers(value: string): Record<string, string> {
         qualifiers[key] = rest.join("=");
     }
     return normalizeQualifiers(qualifiers);
+}
+
+function loadJobUnitOrderMap(jobsPath?: string): Map<string, JobPromptRef[]> {
+    if (!jobsPath) return new Map();
+    try {
+        const raw = readJsonl<any>(jobsPath);
+        const map = new Map<string, JobPromptRef[]>();
+        for (const entry of raw) {
+            const jobId = typeof entry?.jobId === "string" ? entry.jobId : "";
+            const layer =
+                entry?.layer === "micro" || entry?.layer === "meso" || entry?.layer === "macro"
+                    ? entry.layer
+                    : null;
+            const promptUnits = Array.isArray(entry?.promptUnits) ? entry.promptUnits : [];
+            if (!jobId || !layer || promptUnits.length === 0) continue;
+            const orderedRefs = promptUnits
+                .map((unit: any, index: number) => {
+                    const unitIds = Array.isArray(unit?.sourceUnitIds)
+                        ? unit.sourceUnitIds
+                              .map((id: any) => (typeof id === "string" ? id : ""))
+                              .filter(Boolean)
+                        : typeof unit?.id === "string" && unit.id
+                          ? [unit.id]
+                          : [];
+                    const narrativeRecordId =
+                        typeof unit?.narrativeRecordId === "string" ? unit.narrativeRecordId : "";
+                    const narrativeRef =
+                        typeof unit?.narrativeRef === "string" ? unit.narrativeRef : "";
+                    const charStart =
+                        typeof unit?.charStart === "number" ? unit.charStart : Number.NaN;
+                    const charEnd =
+                        typeof unit?.charEnd === "number" ? unit.charEnd : Number.NaN;
+                    if (unitIds.length === 0 && !Number.isFinite(charStart)) {
+                        return null;
+                    }
+                    return {
+                        layer,
+                        unitIds,
+                        narrativeRecordId,
+                        narrativeRef,
+                        ordinal: typeof unit?.ordinal === "number" ? unit.ordinal : index + 1,
+                        charStart: Number.isFinite(charStart) ? charStart : 0,
+                        charEnd: Number.isFinite(charEnd) ? charEnd : 0,
+                        text: typeof unit?.text === "string" ? unit.text : "",
+                        role: typeof unit?.role === "string" ? unit.role : null,
+                        timestamp: typeof unit?.timestamp === "string" ? unit.timestamp : null,
+                    } satisfies JobPromptRef;
+                })
+                .filter((ref: JobPromptRef | null): ref is JobPromptRef => ref !== null);
+            if (orderedRefs.length > 0) {
+                map.set(jobId, orderedRefs);
+            }
+        }
+        return map;
+    } catch {
+        return new Map();
+    }
+}
+
+function resolvePromptRefsFromRaw(raw: any, jobsById?: Map<string, JobPromptRef[]>): JobPromptRef[] {
+    if (!jobsById || jobsById.size === 0) return [];
+    const jobId = typeof raw?._job_id === "string" ? raw._job_id : "";
+    if (!jobId) return [];
+    const ordered = jobsById.get(jobId);
+    if (!ordered || ordered.length === 0) return [];
+    const explicitEvidence = parseEvidenceAnchorFromRaw(raw);
+    if (explicitEvidence) {
+        return ordered.filter(
+            (ref) =>
+                (!explicitEvidence.narrativeRecordId || ref.narrativeRecordId === explicitEvidence.narrativeRecordId) &&
+                ref.ordinal >= explicitEvidence.turnStart &&
+                ref.ordinal <= explicitEvidence.turnEnd
+        );
+    }
+    const rawNumber =
+        typeof raw?.unit_number === "number"
+            ? raw.unit_number
+            : typeof raw?.unit_number === "string"
+              ? Number.parseInt(raw.unit_number, 10)
+              : typeof raw?.unit_ref === "string"
+                ? Number.parseInt(String(raw.unit_ref).replace(/^unit\s*/i, ""), 10)
+                : NaN;
+    const rawNumbers =
+        typeof raw?.unit_numbers === "string"
+            ? String(raw.unit_numbers)
+                  .split(/[,，\s]+/)
+                  .map((value) => Number.parseInt(value, 10))
+                  .filter((value) => Number.isFinite(value))
+            : [];
+    const resolvedNumbers = rawNumbers.length > 0 ? rawNumbers : Number.isFinite(rawNumber) ? [rawNumber] : [];
+    if (resolvedNumbers.length === 0) return [];
+    const output: JobPromptRef[] = [];
+    for (const number of resolvedNumbers) {
+        const index = Math.trunc(number) - 1;
+        if (index < 0) continue;
+        const ref = ordered[index];
+        if (ref) {
+            output.push(ref);
+        }
+    }
+    return output;
+}
+
+function parseEvidenceAnchorFromRaw(raw: any): { narrativeRecordId?: string; turnStart: number; turnEnd: number; startAnchor?: string; endAnchor?: string } | null {
+    const start = typeof raw?.evidence_start_turn === 'string' || typeof raw?.evidence_start_turn === 'number'
+        ? Number.parseInt(String(raw.evidence_start_turn), 10)
+        : NaN;
+    const end = typeof raw?.evidence_end_turn === 'string' || typeof raw?.evidence_end_turn === 'number'
+        ? Number.parseInt(String(raw.evidence_end_turn), 10)
+        : NaN;
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+        return {
+            turnStart: Math.min(start, end),
+            turnEnd: Math.max(start, end),
+            startAnchor: typeof raw?.evidence_start_anchor === 'string' ? raw.evidence_start_anchor.trim() || undefined : undefined,
+            endAnchor: typeof raw?.evidence_end_anchor === 'string' ? raw.evidence_end_anchor.trim() || undefined : undefined,
+        };
+    }
+    const legacy = parseEvidenceDescriptor(typeof raw?.evidence === 'string' ? raw.evidence : '');
+    if (!legacy) return null;
+    return {
+        ...legacy,
+        startAnchor: typeof raw?.anchor_start === 'string' ? raw.anchor_start.trim() || undefined : undefined,
+        endAnchor: typeof raw?.anchor_end === 'string' ? raw.anchor_end.trim() || undefined : undefined,
+    };
+}
+
+function parseEvidenceDescriptor(value: string): { narrativeRecordId?: string; turnStart: number; turnEnd: number } | null {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return null;
+    const match = trimmed.match(/^(?:(.*?)\s+)?turns?\s+(\d+)(?:\s*-\s*(\d+))?$/i);
+    if (!match) return null;
+    const turnStart = Number.parseInt(match[2] || "", 10);
+    const turnEnd = Number.parseInt(match[3] || match[2] || "", 10);
+    if (!Number.isFinite(turnStart) || !Number.isFinite(turnEnd)) return null;
+    return {
+        narrativeRecordId: String(match[1] || "").trim() || undefined,
+        turnStart: Math.min(turnStart, turnEnd),
+        turnEnd: Math.max(turnStart, turnEnd),
+    };
+}
+
+function inferLayerFromRaw(raw: any): V8GraphLayer | null {
+    const itemType =
+        (typeof raw?.itemType === "string" && raw.itemType) ||
+        (typeof raw?.item_type === "string" && raw.item_type) ||
+        "";
+    const normalized = String(itemType || "").trim().toLowerCase();
+    if (!normalized) return null;
+    for (const layer of ["micro", "meso", "macro"] as V8GraphLayer[]) {
+        if ((ITEM_TYPES_BY_LAYER[layer] || []).includes(normalized)) {
+            return layer;
+        }
+    }
+    return null;
+}
+
+function materializeIrAnchorFromPromptRefs(
+    refs: JobPromptRef[],
+    unitsById: Map<string, V8Unit>,
+    raw?: any
+): IrAnchor | null {
+    if (refs.length === 0) return null;
+    const ordered = refs
+        .slice()
+        .sort((a, b) => a.ordinal - b.ordinal || a.charStart - b.charStart);
+    const first = ordered[0]!;
+    const last = ordered[ordered.length - 1]!;
+    const layer = first.layer || resolveLayerFromLegacyUnitRefs(ordered, unitsById);
+    if (!layer) return null;
+    const narrativeText = readRawFile(first.narrativeRef);
+    const resolved = resolveCharRangeFromAnchors(ordered, raw);
+    const charStart = resolved?.charStart ?? Math.max(0, first.charStart);
+    const charEnd = resolved?.charEnd ?? Math.max(charStart, last.charEnd);
+    const text =
+        narrativeText && charEnd > charStart
+            ? narrativeText.slice(charStart, charEnd).trim()
+            : "";
+    return {
+        layer,
+        narrativeRecordId: first.narrativeRecordId,
+        narrativeRef: first.narrativeRef,
+        turnStart: first.ordinal,
+        turnEnd: last.ordinal,
+        charStart,
+        charEnd,
+        role: first.role || null,
+        timestamp: first.timestamp || null,
+        text,
+    };
+}
+
+
+function resolveCharRangeFromAnchors(refs: JobPromptRef[], raw: any): { charStart: number; charEnd: number } | null {
+    const startAnchor = pickAnchorValue(raw?.evidence_start_anchor, raw?.anchor_start);
+    const endAnchor = pickAnchorValue(raw?.evidence_end_anchor, raw?.anchor_end);
+    if (!startAnchor && !endAnchor) return null;
+    let charStart: number | null = null;
+    let charEnd: number | null = null;
+    if (startAnchor) {
+        for (const ref of refs) {
+            const range = locateAnchorRange(String(ref.text || ""), startAnchor, "start");
+            if (range) {
+                charStart = ref.charStart + range.start;
+                break;
+            }
+        }
+    }
+    if (endAnchor) {
+        for (const ref of refs.slice().reverse()) {
+            const range = locateAnchorRange(String(ref.text || ""), endAnchor, "end");
+            if (range) {
+                charEnd = ref.charStart + range.end;
+                break;
+            }
+        }
+    }
+    if (charStart === null && charEnd === null) return null;
+    return {
+        charStart: charStart ?? refs[0]!.charStart,
+        charEnd: charEnd ?? refs[refs.length - 1]!.charEnd,
+    };
+}
+
+function pickAnchorValue(primary: unknown, fallback: unknown): string {
+    if (typeof primary === "string" && primary.trim()) return primary.trim();
+    if (typeof fallback === "string" && fallback.trim()) return fallback.trim();
+    return "";
+}
+
+function locateAnchorRange(
+    text: string,
+    anchor: string,
+    mode: "start" | "end"
+): { start: number; end: number } | null {
+    if (!text || !anchor) return null;
+
+    const directIndex =
+        mode === "start" ? text.indexOf(anchor) : text.lastIndexOf(anchor);
+    if (directIndex >= 0) {
+        return { start: directIndex, end: directIndex + anchor.length };
+    }
+
+    const textMap = buildNormalizedIndexMap(text);
+    const anchorMap = buildNormalizedIndexMap(anchor);
+    if (!textMap.normalized || !anchorMap.normalized) return null;
+    const normalizedIndex =
+        mode === "start"
+            ? textMap.normalized.indexOf(anchorMap.normalized)
+            : textMap.normalized.lastIndexOf(anchorMap.normalized);
+    if (normalizedIndex < 0) return null;
+
+    const start = textMap.indexMap[normalizedIndex];
+    const normalizedEndIndex = normalizedIndex + anchorMap.normalized.length - 1;
+    const endRawIndex = textMap.indexMap[normalizedEndIndex];
+    if (!Number.isFinite(start) || !Number.isFinite(endRawIndex)) return null;
+    return { start, end: endRawIndex + 1 };
+}
+
+function buildNormalizedIndexMap(value: string): { normalized: string; indexMap: number[] } {
+    let normalized = "";
+    const indexMap: number[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+        const rawChar = value[index]!;
+        const normalizedChar = rawChar.normalize("NFKC");
+        for (const ch of normalizedChar) {
+            if (/\s/u.test(ch)) continue;
+            normalized += ch;
+            indexMap.push(index);
+        }
+    }
+    return { normalized, indexMap };
+}
+function resolveLayerFromLegacyUnitRefs(
+    refs: JobPromptRef[],
+    unitsById: Map<string, V8Unit>
+): V8GraphLayer | null {
+    for (const ref of refs) {
+        for (const unitId of ref.unitIds) {
+            const unit = unitsById.get(unitId);
+            if (unit) return unit.layer;
+        }
+    }
+    return null;
+}
+
+function materializeDerivedArtifacts(
+    drafts: LlmItemDraft[],
+    legacyUnits: V8Unit[],
+    legacyEvidenceSpans: V8EvidenceSpan[]
+): V8LoadedLlmArtifacts {
+    const unitByKey = new Map<string, V8Unit>();
+    const spanByKey = new Map<string, V8EvidenceSpan>();
+    const items: V8MemoryItem[] = [];
+    const legacyUnitsById = new Map(legacyUnits.map((unit) => [unit.id, unit]));
+    const legacySpansById = new Map(legacyEvidenceSpans.map((span) => [span.id, span]));
+
+    for (const draft of drafts) {
+        let unitIds = draft.legacyUnitIds.slice();
+        let evidenceSpanIds = draft.legacyEvidenceSpanIds.slice();
+
+        if (draft.anchor) {
+            const unit = ensureDerivedUnit(draft, draft.anchor, unitByKey, legacyUnitsById);
+            const span = ensureDerivedEvidenceSpan(draft, unit, spanByKey);
+            unitIds = [unit.id];
+            evidenceSpanIds = [span.id];
+        }
+
+        if (unitIds.length === 0 || evidenceSpanIds.length === 0) continue;
+        const candidate: V8MemoryItem = {
+            id: draft.rawId,
+            narrativeRecordId: draft.narrativeRecordId,
+            sourceRef: draft.sourceRef,
+            itemType: draft.itemType,
+            originType: draft.originType,
+            layer: draft.layer,
+            subject: draft.subject,
+            predicate: draft.predicate,
+            object: draft.object,
+            label: draft.label,
+            qualifiers: draft.qualifiers,
+            evidenceSpanIds,
+            unitIds,
+            confidence: 0.7,
+            scope: draft.scope,
+            validity: draft.validity,
+            createdAt: draft.createdAt,
+            updatedAt: draft.updatedAt,
+        };
+        const allowedUnits = new Set(unitIds);
+        const allowedSpans = new Set(evidenceSpanIds);
+        const validity = validateAnnotatedItem(candidate, allowedUnits, allowedSpans);
+        if (!validity.ok) continue;
+        items.push(candidate);
+    }
+
+    const units = Array.from(unitByKey.values());
+    assignDerivedParents(units);
+    const evidenceSpans = Array.from(spanByKey.values()).filter((span) => {
+        if (unitByKey.size === 0) return true;
+        return units.some((unit) => unit.id === span.unitId) || legacySpansById.has(span.id);
+    });
+
+    return {
+        items: pruneLlmItems(items),
+        units,
+        evidenceSpans,
+    };
+}
+
+function ensureDerivedUnit(
+    draft: LlmItemDraft,
+    anchor: IrAnchor,
+    unitByKey: Map<string, V8Unit>,
+    legacyUnitsById: Map<string, V8Unit>
+): V8Unit {
+    const key = `${anchor.layer}|${anchor.narrativeRecordId}|${anchor.turnStart}|${anchor.turnEnd}`;
+    const existing = unitByKey.get(key);
+    if (existing) return existing;
+    const fallbackUnit =
+        draft.legacyUnitIds.length > 0 ? legacyUnitsById.get(draft.legacyUnitIds[0]!) || null : null;
+    const unit: V8Unit = {
+        id: `unit_ir_${anchor.layer}_${sanitizeIdPart(anchor.narrativeRecordId)}_${anchor.turnStart}_${anchor.turnEnd}`,
+        narrativeRecordId: anchor.narrativeRecordId,
+        narrativeRef: anchor.narrativeRef,
+        layer: anchor.layer,
+        ordinal: anchor.turnStart,
+        charStart: anchor.charStart,
+        charEnd: anchor.charEnd,
+        text: anchor.text,
+        parentUnitId: null,
+        language: fallbackUnit?.language || inferLanguage(anchor.text),
+        role: anchor.role ?? fallbackUnit?.role ?? null,
+        timestamp: anchor.timestamp ?? fallbackUnit?.timestamp ?? null,
+        sourceCategory: fallbackUnit?.sourceCategory || inferSourceCategory(anchor.role),
+    };
+    unitByKey.set(key, unit);
+    return unit;
+}
+
+function ensureDerivedEvidenceSpan(
+    draft: LlmItemDraft,
+    unit: V8Unit,
+    spanByKey: Map<string, V8EvidenceSpan>
+): V8EvidenceSpan {
+    const key = `${unit.id}|${unit.charStart}|${unit.charEnd}`;
+    const existing = spanByKey.get(key);
+    if (existing) return existing;
+    const span: V8EvidenceSpan = {
+        id: `es_${unit.id}`,
+        narrativeRecordId: unit.narrativeRecordId,
+        narrativeRef: unit.narrativeRef,
+        unitId: unit.id,
+        charStart: unit.charStart,
+        charEnd: unit.charEnd,
+        text: unit.text,
+        role: unit.role,
+        timestamp: unit.timestamp,
+        sourceClass: "raw",
+        sourceType: "session_narrative",
+        score: 1,
+    };
+    spanByKey.set(key, span);
+    return span;
+}
+
+function assignDerivedParents(units: V8Unit[]): void {
+    const byNarrative = new Map<string, V8Unit[]>();
+    for (const unit of units) {
+        const list = byNarrative.get(unit.narrativeRecordId) || [];
+        list.push(unit);
+        byNarrative.set(unit.narrativeRecordId, list);
+    }
+    for (const group of byNarrative.values()) {
+        const mesos = group.filter((unit) => unit.layer === "meso");
+        const macros = group.filter((unit) => unit.layer === "macro");
+        for (const unit of group) {
+            if (unit.layer === "micro") {
+                unit.parentUnitId = findSmallestContainingUnit(unit, mesos)?.id || null;
+            } else if (unit.layer === "meso") {
+                unit.parentUnitId = findSmallestContainingUnit(unit, macros)?.id || null;
+            } else {
+                unit.parentUnitId = null;
+            }
+        }
+    }
+}
+
+function findSmallestContainingUnit(unit: V8Unit, candidates: V8Unit[]): V8Unit | null {
+    const containing = candidates
+        .filter(
+            (candidate) =>
+                candidate.charStart <= unit.charStart && candidate.charEnd >= unit.charEnd
+        )
+        .sort(
+            (a, b) =>
+                a.charEnd - a.charStart - (b.charEnd - b.charStart) ||
+                a.charStart - b.charStart
+        );
+    return containing[0] || null;
+}
+
+function inferLanguage(text: string): V8Unit["language"] {
+    if (!text) return "unknown";
+    const zhCount = (text.match(/[\u4e00-\u9fff]/g) || []).length;
+    const enCount = (text.match(/[A-Za-z]/g) || []).length;
+    if (zhCount === 0 && enCount === 0) return "unknown";
+    if (zhCount > enCount * 2) return "zh";
+    if (enCount > zhCount * 2) return "en";
+    return "mixed";
+}
+
+function inferSourceCategory(role: string | null): V8Unit["sourceCategory"] {
+    const normalized = String(role || "").toLowerCase();
+    if (normalized.includes("tool")) return "operation";
+    if (normalized) return "conversation";
+    return "unknown";
+}
+
+function sanitizeIdPart(value: string): string {
+    return String(value || "")
+        .replace(/[^a-zA-Z0-9_-]+/g, "_")
+        .replace(/^_+|_+$/g, "") || "narr";
+}
+
+function resolveUnitIdsFromPromptRefs(
+    refs: JobPromptRef[],
+    unitsById: Map<string, V8Unit>
+): string[] {
+    if (refs.length === 0) return [];
+    const units = Array.from(unitsById.values());
+    const output = new Set<string>();
+    for (const ref of refs) {
+        for (const unitId of ref.unitIds) {
+            if (unitsById.has(unitId)) {
+                output.add(unitId);
+            }
+        }
+        if (!ref.narrativeRecordId || !ref.narrativeRef) continue;
+        if (ref.charEnd <= ref.charStart) continue;
+        for (const unit of units) {
+            if (unit.narrativeRecordId !== ref.narrativeRecordId) continue;
+            if (unit.narrativeRef !== ref.narrativeRef) continue;
+            if (unit.charStart < ref.charEnd && unit.charEnd > ref.charStart) {
+                output.add(unit.id);
+            }
+        }
+    }
+    return Array.from(output);
+}
+
+function spanOverlapsPromptRefs(span: V8EvidenceSpan, refs: JobPromptRef[]): boolean {
+    if (refs.length === 0) return true;
+    return refs.some((ref) => {
+        if (ref.unitIds.includes(span.unitId)) return true;
+        if (!ref.narrativeRecordId || !ref.narrativeRef) return false;
+        if (span.narrativeRecordId !== ref.narrativeRecordId) return false;
+        if (span.narrativeRef !== ref.narrativeRef) return false;
+        if (ref.charEnd <= ref.charStart) return false;
+        return span.charStart < ref.charEnd && span.charEnd > ref.charStart;
+    });
 }
 
 function normalizeQualifiers(raw: Record<string, unknown>): Record<string, string> {

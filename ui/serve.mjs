@@ -12,11 +12,17 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || process.argv[2] || 7842;
 
-// Resolve graph data: prefer real workspace data, fall back to fixtures
+// Resolve graph data: prefer demo fixtures for UI prototyping, unless explicitly overridden.
 function resolveDataDir(workspace) {
+  if (process.env.USE_REAL_GRAPH === "1") {
+    const real = path.join(workspace, ".memory", "graph");
+    if (fs.existsSync(real)) return real;
+  }
+  const fixture = path.join(__dirname, "fixtures");
+  if (fs.existsSync(fixture)) return fixture;
   const real = path.join(workspace, ".memory", "graph");
   if (fs.existsSync(real)) return real;
-  return path.join(__dirname, "fixtures");
+  return fixture;
 }
 
 function resolveSnapshotsDir(workspace) {
@@ -115,10 +121,10 @@ const server = http.createServer((req, res) => {
 
     // Normalise edges: real schema uses `src`/`dst` instead of `source`/`target`
     const normalizeEdge = (e, type) => ({
-      source: e.source || e.src,
-      target: e.target || e.dst,
+      source: e.source || e.src || e.old_id,
+      target: e.target || e.dst || e.new_id,
       weight: e.assocStrength ?? e.weight ?? 0.5,
-      label:  e.type || type,
+      label:  e.type || e.label || e.reason || type,
       type,
     });
 

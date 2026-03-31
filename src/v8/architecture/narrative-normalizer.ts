@@ -8,6 +8,7 @@ import {
 } from "./tool-cleaning-profiles.js";
 
 export interface RawSessionMessage {
+    type?: string;
     id?: string | number;
     parentId?: string | number;
     role?: string;
@@ -128,7 +129,7 @@ export function normalizeSessionMessages(
         const rawText = extractText(msg);
         if (!rawText) return;
         const { cleanText, cleanMap } = cleanTextWithMap(rawText, cleaner);
-        const speaker = normalizeSpeaker(rawRole);
+        const role = resolveNarrativeRole(msg, rawRole);
         const timestamp = normalizeTimestamp(
             msg.timestamp ?? msg.createdAt ?? msg.created_at
         );
@@ -140,7 +141,7 @@ export function normalizeSessionMessages(
             sourceClass: "raw",
             sourceType: "session_trace",
             sourceRef,
-            speaker,
+            role,
             timestamp,
             rawText,
             cleanText,
@@ -192,13 +193,33 @@ function extractText(msg: RawSessionMessage): string {
     return "";
 }
 
-function normalizeSpeaker(value?: string): V8NarrativeRecord["speaker"] {
+function normalizeRoleLabel(value?: string): string | null {
     if (!value) return null;
     const lower = value.toLowerCase();
+    if (lower.includes("tool")) return "tool";
     if (lower.includes("user")) return "user";
     if (lower.includes("assistant") || lower.includes("model")) return "assistant";
     if (lower.includes("system")) return "system";
     return "unknown";
+}
+
+function resolveNarrativeRole(
+    msg: RawSessionMessage,
+    rawRole?: string
+): V8NarrativeRecord["role"] {
+    const explicitRole = String(rawRole || "").trim();
+    if (explicitRole) return explicitRole;
+    const candidates = [
+        msg.speaker,
+        (msg.message as { speaker?: string } | undefined)?.speaker,
+    ];
+    for (const candidate of candidates) {
+        const normalized = String(candidate || "").trim();
+        if (!normalized) continue;
+        return normalized;
+    }
+    const normalizedRole = normalizeRoleLabel(rawRole);
+    return normalizedRole;
 }
 
 function resolveMessageRole(msg: RawSessionMessage): string {
@@ -217,7 +238,10 @@ function normalizeTimestamp(value?: string | number): string | null {
         return new Date(ts).toISOString();
     }
     const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+    if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString();
+    }
+    return null;
 }
 
 function buildNarrativeRecordId(sessionId: string, index: number): string {
@@ -672,7 +696,7 @@ function buildOperationRecord(
         sourceClass: "curated",
         sourceType: "session_trace",
         sourceRef,
-        speaker: "assistant",
+        role: "assistant",
         timestamp,
         rawText,
         cleanText,

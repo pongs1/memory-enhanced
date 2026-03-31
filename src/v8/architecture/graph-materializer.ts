@@ -4,6 +4,7 @@ import type {
     V8MemoryItem,
     V8MemoryOriginType,
     V8EvidenceSpan,
+    V8PropagationDimension,
     V8Unit,
 } from "../types_v8.js";
 
@@ -22,6 +23,78 @@ interface DerivedStateCandidate {
     timestampMs: number | null;
     statusRank: number;
     validity: V8GraphNode["state"]["validity"];
+}
+
+function derivePropagationDimensions(
+    type: V8GraphEdge["type"]
+): {
+    forwardDimension: V8PropagationDimension;
+    reverseDimension: V8PropagationDimension;
+} {
+    if (
+        type === "state_valid_in_phase" ||
+        type === "state_valid_in_timewindow" ||
+        type === "block_scoped_to_regime" ||
+        type === "block_scoped_to_topicstate" ||
+        type === "thread_spans_timewindow" ||
+        type === "block_updates_global_state"
+    ) {
+        return { forwardDimension: "gate", reverseDimension: "gate" };
+    }
+
+    if (
+        type === "span_in_micro_unit" ||
+        type === "mention_maps_to_micro_node" ||
+        type === "micro_edge_evidenced_by_span" ||
+        type === "meso_block_evidenced_by_span_set" ||
+        type === "macro_node_evidenced_by_span_set" ||
+        type === "state_evidenced_by_block"
+    ) {
+        return { forwardDimension: "none", reverseDimension: "none" };
+    }
+
+    if (
+        type === "micro_unit_in_meso_unit" ||
+        type === "micro_node_in_meso_block" ||
+        type === "micro_edge_in_meso_block" ||
+        type === "meso_unit_in_macro_unit" ||
+        type === "meso_block_in_phase" ||
+        type === "phase_in_arc" ||
+        type === "micro_fact_abstracted_as_block" ||
+        type === "micro_claim_summarized_by_block" ||
+        type === "block_instantiates_global_type" ||
+        type === "block_summarized_by_topic" ||
+        type === "block_contributes_to_pattern" ||
+        type === "line_summarized_by_theme"
+    ) {
+        return { forwardDimension: "V_up", reverseDimension: "V_down" };
+    }
+
+    if (
+        type === "local_goal_in_objective_line" ||
+        type === "local_conflict_in_conflict_line" ||
+        type === "local_method_in_method_line" ||
+        type === "local_relationship_in_relationship_arc" ||
+        type === "local_event_in_thread" ||
+        type === "local_shift_to_turning_point"
+    ) {
+        return { forwardDimension: "O_up", reverseDimension: "O_down" };
+    }
+
+    if (
+        type === "state_supersedes_state" ||
+        type === "state_refines_state" ||
+        type === "state_changed_by_event" ||
+        type === "state_opened_by_block" ||
+        type === "state_closed_by_block" ||
+        type === "state_invalidated_under_regime" ||
+        type === "state_reactivated_under_regime" ||
+        type === "correction_propagates_to_line"
+    ) {
+        return { forwardDimension: "T_forward", reverseDimension: "T_backward" };
+    }
+
+    return { forwardDimension: "H", reverseDimension: "H" };
 }
 
 export function materializeGraph(
@@ -179,7 +252,11 @@ export function materializeGraph(
     let edgeIndex = 0;
     const pushEdge = (edge: Omit<V8GraphEdge, "id">) => {
         edgeIndex += 1;
-        edges.push({ id: `edge_${edgeIndex}`, ...edge });
+        edges.push({
+            id: `edge_${edgeIndex}`,
+            ...derivePropagationDimensions(edge.type),
+            ...edge,
+        });
     };
 
     const upsertSemanticNode = (
@@ -285,14 +362,17 @@ export function materializeGraph(
         const semanticLinks = itemSemanticLinks.get(item.id);
         const stateMemoryType = deriveStateMemoryType(item, semanticLinks);
         if (!isNativeState && !stateMemoryType) continue;
+        const resolvedStateMemoryType: V8MemoryItem["itemType"] = isNativeState
+            ? item.itemType
+            : (stateMemoryType as V8MemoryItem["itemType"]);
         const stateNodeId = isNativeState ? edgeNodeId : `node_state_${item.id}`;
         const validity = resolveStateValidity(item.validity, cue?.status);
 
         if (!isNativeState) {
             nodes.push({
                 id: stateNodeId,
-                memoryType: stateMemoryType,
-                canonicalLabel: buildStateLabel(item, stateMemoryType, cue?.status),
+                memoryType: resolvedStateMemoryType,
+                canonicalLabel: buildStateLabel(item, resolvedStateMemoryType, cue?.status),
                 aliases: [],
                 primaryLayer: item.layer,
                 layerMemberships: [item.layer],
@@ -330,7 +410,7 @@ export function materializeGraph(
                 },
             });
         }
-        const scopeTargetIds = deriveStateScopeTargets(semanticLinks, stateMemoryType);
+        const scopeTargetIds = deriveStateScopeTargets(semanticLinks, resolvedStateMemoryType);
         for (const scopeTargetId of scopeTargetIds) {
             pushUniqueEdge({
                 type: "scoped_to",
@@ -759,7 +839,21 @@ export function materializeGraph(
         }
     }
 
-    return { nodes, edges };
+    return {
+        nodes: nodes.map((node) => {
+            const { evidenceSpanIds: _ignoredEvidence, bestEvidenceSpanIds: _ignoredBest, ...rest } =
+                node as V8GraphNode & {
+                    evidenceSpanIds?: string[];
+                    bestEvidenceSpanIds?: string[];
+                };
+            return rest as V8GraphNode;
+        }),
+        edges: edges.map((edge) => {
+            const { evidenceSpanIds: _ignoredEvidence, ...rest } =
+                edge as V8GraphEdge & { evidenceSpanIds?: string[] };
+            return rest as V8GraphEdge;
+        }),
+    };
 }
 
 function truncateLabel(text: string, maxLen = 120): string {

@@ -1,20 +1,15 @@
 # V8 Architecture
 
-Status: rewrite target  
+Status: active architecture target  
 Audience: maintainers, future contributors, agent-memory researchers
 
-This document defines the new V8 direction for `memory-enhanced`.
-It intentionally replaces the earlier event-centric V8 draft.
+This document defines the V8 architecture for `memory-enhanced`.
 
-V8 is no longer defined as:
+V8 has two coupled loops:
 
-- `event -> bundle -> node bundle -> graph`
-- graph as the primary memory surface
-- sleep-time annotation as the place where meaning first appears
+`raw message/observation -> narrative -> units/spans -> memory IR -> memory graph/packs`
 
-V8 is now defined as:
-
-`raw session/log evidence -> units/spans -> memory IR -> memory graph + summary/state -> context assembly`
+`active text signals -> ignition on prebuilt runtime projections -> activated bundles/state lines -> narrative span retrieval -> context assembly -> optional nearby search -> raw fallback`
 
 The companion documents are:
 
@@ -38,66 +33,158 @@ The user-facing target is:
 - long-term preferences, project facts, decisions, and workflows can evolve instead of collapsing into stale summaries
 - another model can inspect the same substrate and recover the same memory state without trusting hidden prompts
 
-## 2. What V8 Is Not
+### 1.1 Key Concepts
 
-The new V8 makes three explicit rejections.
+- `Raw Archive`
+  - append-only raw messages and runtime observations
+  - fallback truth surface used when narrative or packs are insufficient
+- `Narrative`
+  - time-ordered, structurally cleaned text assembled from raw archive
+  - default evidence surface for unitization, IR extraction, and most recalls
+- `Unit`
+  - a bounded semantic segment cut from narrative
+  - V8 uses `micro`, `meso`, and `macro` units for different semantic ranges
+- `Evidence Span`
+  - a narrower offset range inside a unit that can directly justify a memory item, graph edge, or pack claim
+- `Memory IR`
+  - bounded, evidence-backed structured items extracted from units
+  - intermediate contract between text and durable graph memory
+- `Normalization and Consolidation`
+  - merge, alias resolution, deduplication, state-family formation, and graph upsert preparation over IR
+- `Graph`
+  - canonical long-lived relation substrate built from consolidated IR
+  - stores entities, states, lines, and typed edges
+- `Bundle`
+  - a runtime delivery grouping over related graph objects
+  - local semantic neighborhood used as the base unit of recall selection
+- `ActivatedBundle`
+  - a bundle whose energy has crossed the runtime delivery threshold in the current recall cycle
+- `Pack`
+  - the concrete payload form delivered toward the model
+  - may be a summary pack, state pack, raw evidence pack, or a composed hybrid
+- `Summary Pack`
+  - compact reusable memory product derived from a graph neighborhood plus evidence
+- `State Pack`
+  - compact representation of active/current/previous state plus supporting evidence
+- `State Family`
+  - the grouping key that says which state items belong to the same evolving line
+- `State Line`
+  - the ordered chain formed by a state family through supersession, refinement, or event-driven change
+- `Runtime Projection`
+  - prebuilt ignition-facing view derived from the graph and packs
+  - includes ignition nodes, trigger terms, bundle views, and search hints
+- `Ignition`
+  - runtime process that injects energy into prebuilt projections from live text signals
+- `Active Text Signal`
+  - one cleaned runtime input fragment from user, assistant, tool, subagent, feedback, or working-state channels
+- `Active Background`
+  - compact carry-over from prior turns, already activated packs, and current control state
+- `Control Anchor`
+  - explicit control-side signal such as current goal, active task, handoff state, or latest user request
+- `Scene`
+  - the rolling local semantic field built from recent live signals; used for overlap scoring, not a stored memory unit
+- `Context Assembly`
+  - runtime step that combines detail, summary, and state into the model context
+- `Search Escalation`
+  - fallback path used when active packs are insufficient:
+    bundle/state hint -> narrative span -> nearby narrative slice -> raw archive slice
 
-### 2.1 Raw memory is not `event`
+### 1.2 Key Runtime Formulas
 
-`event` is not the raw substrate.
-It is a derived artifact from the old system.
-It may remain useful during migration, but it is not authoritative raw memory.
+Direct node injection uses an explicit score:
 
-Authoritative raw memory should come from:
+`u_i = baseGain * (a * g_lex + b * max(g_scene, g_ctrl, g_bg) + c * g_time)`
 
-- session traces
-- daily logs
-- raw user turns
-- raw assistant turns
+Where:
 
-### 2.2 Graph is not the only memory surface
+- `u_i`
+  - direct injection score for candidate node `i`
+- `g_lex`
+  - lexical or trigger-term hit strength
+- `g_scene`
+  - overlap with the rolling scene window
+- `g_ctrl`
+  - overlap with explicit control anchors such as goal, active task, or latest user request
+- `g_bg`
+  - overlap with carried active background from earlier turns
+- `g_time`
+  - temporal availability or episodic locality score
+- `baseGain`
+  - stronger gain for initial prompt or pre-excitation, lower gain for ordinary streaming chunks
+- `a, b, c`
+  - tunable weights over lexical, live-signal, and temporal factors
 
-The graph is not a replacement for raw text or memory summaries.
-It is the organization layer.
+Bundle ranking is then computed over activated graph products:
 
-Raw text is needed for:
+`bundle_energy = activated_node_energy + scene_bias + state_bias - cooldown_penalty`
 
-- evidence
-- exact wording
-- boundary conditions
-- later correction
+Meaning:
 
-Summaries and state are needed for:
+- `activated_node_energy`
+  - aggregate contribution from hot nodes that belong to the bundle
+- `scene_bias`
+  - extra lift from current scene overlap
+- `state_bias`
+  - extra lift from active state lines or state packs
+- `cooldown_penalty`
+  - suppression applied when the bundle was delivered recently
 
-- compression
-- conflict resolution
-- long-term reuse
-- task-state injection
+## 2. Core Memory Surfaces
 
-### 2.3 `knowledge` and `skill` are not raw sources
+V8 works across four memory surfaces:
 
-`memory/knowledge/*.md` and `memory/skills/*.md` are curated sources.
-They are closer to normalized memory than raw logs are, but they are still not the final IR and not the graph itself.
+### 2.1 Narrative evidence surface
+
+The default evidence surface is normalized narrative.
+It keeps:
+
+- session traces assembled into readable dialogue
+- tool observations and outcomes placed back into time order
+- assistant reasoning traces that matter for later recall
+- subagent outputs and feedback traces
+
+In normal operation, this narrative surface is the authoritative evidence source for recall.
+
+### 2.2 Raw archive fallback
+
+Raw records still exist behind the narrative surface.
+They are used when:
+
+- a narrative slice is not enough
+- the system needs exact raw payloads
+- debugging or trust recovery requires lower-level evidence
+
+Most recalls should never need to drop this far.
+
+### 2.3 Graph and packs
+
+The graph is the organization and ignition substrate.
+Summary packs and state packs are compact products derived from graph neighborhoods plus evidence.
+They exist to help the runtime recover the right branch quickly, not to replace evidence.
+
+### 2.4 `knowledge` and `skill`
+
+`memory/knowledge/*.md` and `memory/skills/*.md` are graph products.
+They are evidence-backed summaries produced after related nodes ignite together, stabilize, and are summarized into reusable packs.
+They are not raw sources and they are not independent parallel memory systems.
 
 ## 3. Layer Model
 
-V8 keeps `L0 Control` and rewrites the rest around a shared ingestion model.
+V8 is organized around a write loop and a recall loop that share the same compiled memory products.
 
 | Layer | Role | Canonical store | Notes |
 |---|---|---|---|
-| `L0 Control` | active task, priority, handoff, resume | `.memory/active/focus_stack.json` | preserved as-is |
-| `L1 Raw Store` | raw evidence substrate | session traces, `memory/YYYY-MM-DD.md` | authoritative evidence |
-| `L2 Narrative Normalization` | classify and clean raw/curated/legacy inputs | normalized narrative records | strips old prompt noise and legacy tags |
-| `L3 Unit and Evidence` | segment text into `micro/meso/macro` units and evidence spans | unit/span stores | offsets are first-class |
+| `L0 Control` | active task, priority, handoff, resume | `.memory/active/focus_stack.json` | execution control surface |
+| `L1 Raw Archive` | append-only raw messages and observations | session traces, tool observations, subagent traces | fallback truth surface |
+| `L2 Narrative Evidence` | normalized narrative assembled from `L1` | narrative records | default authoritative evidence surface |
+| `L3 Unit and Evidence` | segment narrative into `micro/meso/macro` units and evidence spans | unit/span stores | offsets are first-class |
 | `L4 Extraction IR` | unit-aligned bounded IR | item store | direct, evidence-backed structured output from units |
 | `L5 Normalization and Consolidation` | canonicalize and merge IR into durable memory objects | offline pipeline | alias merge, evidence merge, graph upsert prep |
-| `L6 Memory Graph and Packs` | three-layer recall graph, summaries, state packs, trigger indexes | `.memory/graph/*`, summary/state outputs | optimized for recall, not full candidate storage |
-| `L7 Context Assembly` | inject raw evidence, summaries, and state into the model | runtime only | query-dependent blend |
+| `L6 Memory Graph and Packs` | recall graph, summaries, state packs, trigger indexes | `.memory/graph/*`, summary/state outputs | optimized for recall and search guidance |
+| `L7 Recall and Context Assembly` | ignite memory, retrieve evidence, assemble detail/summary/state for the model | runtime only | query-dependent blend with search escalation |
 
-`L0` is intentionally separate.
-Focus stack is execution control, not long-term memory.
-
-The full-feature relation/taxonomy variant is preserved as a separate reference so V8 can stay lean without losing richer design options.
+Most successful recalls should resolve at `L2 Narrative Evidence` and above.
+`L1 Raw Archive` exists for fallback, validation, and trust recovery.
 
 ## 4. The Soul of V8: Online Ignition
 
@@ -116,16 +203,19 @@ Without this layer, V8 collapses into a delayed indexing system.
 
 ### 4.1 Ignition inputs
 
-The online ignition path should consume:
+The online ignition path should consume text signals plus prebuilt runtime projections:
 
 - current control anchors from `focus_stack.json`
-- recent live stream text
-- latest user request
+- recent user text
+- recent assistant text
 - recent tool observations and errors
-- runtime graph products derived from normalized IR materialization, not raw logs directly
+- subagent outputs
+- feedback traces
+- active background carried from prior turns
+- prebuilt graph/bundle/state projections produced by the background write loop
 - compact indexes such as trigger lexicon, day index, source index, and hard-core index
 
-The runtime graph products are:
+The runtime projections are:
 
 - canonical graph nodes and edges derived from normalized IR
 - ignition node projections with names, aliases, trigger terms, and bundle membership
@@ -232,47 +322,37 @@ The unit of injection is a recall bundle or pack that can carry:
 
 This is how V8 preserves grounding while still benefiting from graph propagation.
 
-## 5. Source Policy (Clean-Slate Mode)
+## 5. Source Policy
 
-V8 runs in **clean-slate mode** by default:
+V8 stores raw records, but operates primarily on normalized narrative evidence.
 
-- only raw session/log evidence is ingested
-- legacy artifacts are ignored
-- old event/bundle outputs are not consumed
+### 5.1 Raw archive
 
-### 5.1 Raw evidence sources (authoritative)
-
-These are the only authoritative text sources:
+Raw archive includes:
 
 - session traces (raw message records)
 - raw user messages
 - raw assistant messages
+- tool observations
+- subagent outputs
 - daily logs (optional, off by default)
-- raw user messages
-- raw assistant messages
 
 Properties:
 
 - append-only
 - offset-preserving
-- not pre-distilled
 - always recoverable
+- fallback-only during normal recall
 
-### 5.2 Curated sources (disabled)
+### 5.2 Narrative evidence
 
-Curated `knowledge`/`skill` documents are **not** ingested in clean-slate mode.
-They are treated as **post-hoc outputs** (packs) rather than sources.
-If needed, they can be regenerated from raw evidence.
+Narrative evidence is the default operational surface.
+It is assembled from the raw archive, cleaned only at the structural level, and used as the normal evidence source for units, spans, and recall.
 
-### 5.3 Legacy derived sources (disabled)
+### 5.3 Product surfaces
 
-Legacy artifacts are not ingested:
-
-- `.memory/events/*.jsonl`
-- old bundle-like records
-- old graph-derived summaries
-
-These should be deleted or archived outside the runtime path.
+`knowledge` and `skill` remain downstream products generated from graph neighborhoods plus evidence.
+They do not replace either the narrative surface or the raw archive.
 
 ## 6. Core Principle: Evidence-Backed Memory
 
@@ -604,7 +684,6 @@ This keeps online ignition lean without distorting the extracted relation space.
 ## 10. Online Trigger Windows and Propagation
 
 The ignition layer should remain boundary-aware and cheap.
-The old V8 instinct was correct here, even if the surrounding architecture was wrong.
 
 ### 10.1 Window model
 
@@ -908,57 +987,30 @@ This is the missing piece over plain Mem0/LanceDB-style retrieval:
 - span-first grounding prevents large irrelevant payload injection
 - vertical/oblique relations can be searched deliberately, not by chance
 
-## 11. Where `knowledge` and `skill` Fit
+## 11. `knowledge` And `skill` Products
 
-`knowledge` and `skill` remain first-class inputs, but their role changes.
+`knowledge` and `skill` are durable graph products.
 
 ### 11.1 `knowledge`
 
-`knowledge` is curated long-term semantic memory.
-It usually produces items such as:
-
-- concept
-- claim
-- evidence
-- context
-- method
+`knowledge` is what remains after a graph neighborhood is repeatedly activated, evidence-backed, and summarized into a reusable semantic pack.
+It is the summarized result of related nodes stabilizing together, not a separate source pipeline.
 
 ### 11.2 `skill`
 
-`skill` remains important.
-It should not be reduced to "knowledge with kind = procedural".
+`skill` is the procedural branch of the same mechanism.
+When a stable cluster describes a reusable workflow, constraints, checkpoints, or recovery path, that cluster can be summarized into a skill product.
 
-It usually produces items such as:
+Both `knowledge` and `skill` stay tied to:
 
-- method
-- workflow step
-- precondition
-- constraint
-- checkpoint
-- failure mode
-- recovery path
+- the node cluster that produced them
+- the evidence spans that justify them
+- the graph neighborhood that can reactivate them
 
-`skill` therefore becomes a procedural branch inside the same memory graph, not a separate graph system.
+## 12. Summary And State Production
 
-## 12. What Replaces Old V8 Distillation
-
-The old design often treated distillation as:
-
-- event filtering
-- md rewrite
-- optional graph rebundling
-
-The new design replaces that with:
-
-1. raw evidence preserved
-2. source normalization
-3. unitization and span extraction
-4. IR extraction
-5. graph materialization
-6. summary and state materialization
-
-Distillation is therefore no longer "write a smaller event".
-It is "derive stable memory products from evidence-backed IR".
+Summary packs and state packs are derived from evidence-backed IR and graph neighborhoods.
+Their purpose is to keep reusable compressed memory available without losing the path back to narrative evidence.
 
 ### 12.1 Decay scope (what ages, what never ages)
 
@@ -1017,15 +1069,9 @@ The offline pipeline (`L1 -> L6`) can be slow. When the user asserts a strong co
 4. **Hot-Patch Assembly**: The Context Assembler injects the Shadow Node directly into the active Context.
 5. **Offline Consolidation**: During the next offline cycle, the L5 Consolidator promotes the temporary Shadow Node into a permanent `state_supersedes_state` edge in L6, formally overwriting the historic weights in the long-term graph.
 
-## 14. Consequences for the Existing Codebase
+## 14. Implementation Consequences
 
-The old V8 compiler path is effectively deprecated:
-
-- direct `event -> bundle/node/edge`
-- direct `knowledge -> bundle/node/edge`
-- direct `skill -> bundle/node/edge`
-
-The new target path is:
+The target path is:
 
 - source adapters produce normalized narrative records
 - unitizers produce units and evidence spans
@@ -1060,15 +1106,11 @@ Temporary marker is kept in code to avoid forgetting cleanup:
 
 - `TODO_REMOVE_BEFORE_RELEASE__V8_FAST_BUILD_DEFAULTS`
 
-## 15. Migration Rule
+## 15. Implementation Rule
 
-During migration:
+The implementation should follow this direction:
 
-- keep `L0 Control` untouched
-- preserve raw daily logs and session traces as the new authority
-- treat old `event` records as legacy hints
-- continue to read old curated `knowledge` and `skill` documents
-- rebuild graph and summary/state from the new IR path instead of patching old node bundles
-
-This means the rewrite is not a cosmetic rename.
-It is a shift from event-centric compilation to evidence-backed memory compilation.
+- narrative is the default authority for evidence-backed recall
+- raw archive remains available as fallback
+- graph, summary packs, and state packs are rebuilt from IR-backed consolidation
+- `knowledge` and `skill` stay downstream of the graph, not upstream of it

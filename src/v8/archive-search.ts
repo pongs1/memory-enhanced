@@ -37,7 +37,7 @@ export interface SearchArchiveSpanResult {
     score: number;
     bm25Score: number;
     vectorScore: number;
-    speaker: V8EvidenceSpan["speaker"];
+    role: V8EvidenceSpan["role"];
     timestamp: string | null;
     narrativeRef: string;
     unitId: string;
@@ -115,7 +115,7 @@ export function searchArchiveSpans(
             score: item.score,
             bm25Score: item.bm25Score,
             vectorScore: item.vectorScore,
-            speaker: span.speaker,
+            role: span.role,
             timestamp: span.timestamp,
             narrativeRef: span.narrativeRef,
             unitId: span.unitId,

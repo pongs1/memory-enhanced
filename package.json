@@ -6,6 +6,8 @@
     "author": "OpenClaw Community",
     "license": "MIT",
     "scripts": {
+        "test:v8": "node ./node_modules/typescript/bin/tsc -p tsconfig.test.json && node .tmp-test/tests/v8/run-tests.js",
+        "bench:locomo:smoke": "node ./scripts/locomo-benchmark-smoke.mjs",
         "openclaw:overlay:check": "node ./scripts/openclaw-overlay.mjs check",
         "openclaw:overlay:adopt": "node ./scripts/openclaw-overlay.mjs adopt",
         "openclaw:overlay:apply": "node ./scripts/openclaw-overlay.mjs apply",

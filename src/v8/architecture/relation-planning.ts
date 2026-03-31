@@ -1,16 +1,18 @@
 import * as crypto from "node:crypto";
+import { collectNodeSpanIdsFromItems } from "../node-evidence.js";
 import type {
     V8EvidenceSpan,
     V8EntityPosting,
     V8EntityScopeCard,
     V8GraphEdge,
     V8GraphNode,
+    V8MemoryItem,
     V8GroupSummary,
     V8HintSource,
     V8LearningEvent,
     V8NarrativeShardSelection,
     V8RecallBundleProjection,
-    V8RecallMode,
+    V8RelationGeometryHint,
     V8RelationCandidateHit,
     V8RelationReviewJob,
     V8RelationSearchPlan,
@@ -24,6 +26,7 @@ export interface BuildRelationPlanningArtifactsInput {
     nodes: V8GraphNode[];
     edges: V8GraphEdge[];
     evidenceSpans: V8EvidenceSpan[];
+    memoryItems?: V8MemoryItem[];
     recallBundles?: V8RecallBundleProjection[];
     anchorNarrativeRecordIds?: string[];
     searchFeedbackSignals?: V8SearchFeedbackSignal[];
@@ -47,23 +50,6 @@ interface SearchHintPriors {
     laneDeltaByHint: Map<V8SearchLane, Map<string, number>>;
 }
 
-const ANCHOR_MEMORY_TYPES = new Set<string>([
-    "entity",
-    "concept",
-    "method",
-    "goal",
-    "decision",
-    "constraint",
-    "session_state",
-    "topic_state",
-    "relationship_state",
-    "workflow_validity_state",
-    "compatibility_state",
-    "preference_state",
-    "belief_state",
-    "risk_state",
-]);
-
 const STATE_MEMORY_TYPES = new Set<string>([
     "session_state",
     "topic_state",
@@ -75,55 +61,29 @@ const STATE_MEMORY_TYPES = new Set<string>([
     "risk_state",
 ]);
 
-const EDGE_PRIOR_BY_TYPE: Record<string, string[]> = {
-    entity: ["supports", "contradicts", "before", "after", "evolves_to"],
-    concept: ["is_a", "part_of", "uses", "supports", "contradicts"],
-    method: ["uses", "produces", "conditioned_on", "better_than", "worse_than"],
-    goal: ["targets", "requires", "enables", "prevents", "supersedes"],
-    decision: ["decides", "requires", "conflicts_with", "supersedes", "conditioned_on"],
-    constraint: ["requires", "prevents", "conditioned_on", "conflicts_with", "refines"],
-    session_state: ["state_supersedes_state", "state_refines_state", "valid_during"],
-    topic_state: ["state_supersedes_state", "state_refines_state", "valid_during"],
-    relationship_state: ["state_supersedes_state", "state_refines_state", "valid_during", "conflicts_with"],
-    workflow_validity_state: ["state_supersedes_state", "state_refines_state", "valid_during", "conditioned_on"],
-    compatibility_state: ["state_supersedes_state", "conflicts_with", "supports", "valid_during"],
-    preference_state: ["state_supersedes_state", "state_refines_state", "valid_during", "supports"],
-    belief_state: ["state_supersedes_state", "state_refines_state", "supports", "contradicts"],
-    risk_state: ["state_supersedes_state", "state_refines_state", "causes", "prevents", "valid_during"],
-};
-
-const CONTROL_MEMORY_TYPES = new Set([
-    "preference",
-    "goal",
-    "constraint",
-    "decision",
-    "open_question",
-    "conversation_act",
-    "session_state",
-    "topic_state",
-]);
-
-function buildSeedRecallBundles(nodes: V8GraphNode[]): V8RecallBundleProjection[] {
+function buildSeedRecallBundles(
+    nodes: V8GraphNode[],
+    itemsById: Map<string, V8MemoryItem>
+): V8RecallBundleProjection[] {
     return nodes
         .filter((node) => node.primaryLayer === "micro")
         .map((node) => {
             const title = (node.canonicalLabel || node.id).trim();
             const packType = node.memoryType.endsWith("_state")
                 ? "state"
-                : CONTROL_MEMORY_TYPES.has(node.memoryType)
-                  ? "summary"
-                  : "raw_evidence";
+                : "raw_evidence";
+            const evidenceSpanIds = collectNodeSpanIdsFromItems(node, itemsById);
             return {
                 bundleId: `seed_${node.id}`,
                 title: title || node.id,
                 kind: "semantic",
                 nodeIds: [node.id],
                 sourceRefs: [],
-                evidenceSpanIds: [...(node.evidenceSpanIds || [])],
+                evidenceSpanIds: [...evidenceSpanIds],
                 bestEvidenceSpanIds:
                     node.bestEvidenceSpanIds && node.bestEvidenceSpanIds.length > 0
                         ? [...node.bestEvidenceSpanIds]
-                        : (node.evidenceSpanIds || []).slice(0, 8),
+                        : evidenceSpanIds.slice(0, 8),
                 summaryText: title || node.id,
                 packType,
             };
@@ -133,10 +93,11 @@ function buildSeedRecallBundles(nodes: V8GraphNode[]): V8RecallBundleProjection[
 export function buildRelationPlanningArtifacts(
     input: BuildRelationPlanningArtifactsInput
 ): RelationPlanningArtifacts {
+    const itemsById = new Map((input.memoryItems || []).map((item) => [item.id, item]));
     const recallBundles =
         input.recallBundles && input.recallBundles.length > 0
             ? input.recallBundles
-            : buildSeedRecallBundles(input.nodes);
+            : buildSeedRecallBundles(input.nodes, itemsById);
     const nodeById = new Map(input.nodes.map((node) => [node.id, node]));
     const spanById = new Map(input.evidenceSpans.map((span) => [span.id, span]));
     const bundlesByNodeId = indexBundlesByNode(recallBundles);
@@ -155,6 +116,7 @@ export function buildRelationPlanningArtifacts(
                   spanById,
                   allowedNarrativeIds: allowedAnchorNarratives,
                   fallback: anchorNodesAll,
+                  itemsById,
               })
             : anchorNodesAll;
     const entityPostings: V8EntityPosting[] = [];
@@ -162,7 +124,7 @@ export function buildRelationPlanningArtifacts(
 
     for (const node of anchorNodes) {
         const bundleRefs = bundlesByNodeId.get(node.id) || [];
-        const postings = buildEntityPostingsForNode(node, spanById, bundleRefs);
+        const postings = buildEntityPostingsForNode(node, spanById, bundleRefs, itemsById);
         entityPostings.push(...postings);
         entityScopeCards.push(
             buildScopeCardForNode({
@@ -183,6 +145,7 @@ export function buildRelationPlanningArtifacts(
         bundlesByNodeId,
         allShardHints,
         hintPriors,
+        itemsById,
         compilePhase: input.compilePhase,
     });
     const verticalTriggerCards = buildVerticalTriggerCards({
@@ -195,6 +158,7 @@ export function buildRelationPlanningArtifacts(
         narrativeShardSelections,
         evidenceSpans: input.evidenceSpans,
         nodes: input.nodes,
+        itemsById,
         compilePhase: input.compilePhase,
     });
 
@@ -213,7 +177,7 @@ export function buildRelationPlanningArtifacts(
 function isAnchorNode(node: V8GraphNode): boolean {
     if (node.primaryLayer !== "micro") return false;
     if (node.memoryType === "evidence" || node.memoryType === "discourse_unit") return false;
-    if (ANCHOR_MEMORY_TYPES.has(node.memoryType)) return true;
+    if (STATE_MEMORY_TYPES.has(node.memoryType)) return true;
     return node.id.startsWith("node_sem_");
 }
 
@@ -222,9 +186,10 @@ function filterAnchorNodesByNarratives(input: {
     spanById: Map<string, V8EvidenceSpan>;
     allowedNarrativeIds: Set<string>;
     fallback: V8GraphNode[];
+    itemsById: Map<string, V8MemoryItem>;
 }): V8GraphNode[] {
     const output = input.nodes.filter((node) =>
-        node.evidenceSpanIds.some((spanId) => {
+        collectNodeSpanIdsFromItems(node, input.itemsById).some((spanId) => {
             const span = input.spanById.get(spanId);
             return !!span && input.allowedNarrativeIds.has(span.narrativeRecordId);
         })
@@ -236,7 +201,8 @@ function filterAnchorNodesByNarratives(input: {
 function buildEntityPostingsForNode(
     node: V8GraphNode,
     spanById: Map<string, V8EvidenceSpan>,
-    bundleRefs: V8RecallBundleProjection[]
+    bundleRefs: V8RecallBundleProjection[],
+    itemsById: Map<string, V8MemoryItem>
 ): V8EntityPosting[] {
     const postingsByShard = new Map<
         string,
@@ -250,7 +216,7 @@ function buildEntityPostingsForNode(
     >();
     const bundleIds = bundleRefs.map((bundle) => bundle.bundleId);
 
-    for (const spanId of node.evidenceSpanIds || []) {
+    for (const spanId of collectNodeSpanIdsFromItems(node, itemsById)) {
         const span = spanById.get(spanId);
         if (!span) continue;
         const shardId = normalizeShardId(span.narrativeRecordId);
@@ -401,22 +367,6 @@ function buildEdgeFamilyHints(input: {
         counter.set(edge.type, { score, source: "history" });
     }
 
-    const priors = EDGE_PRIOR_BY_TYPE[input.node.memoryType] || [
-        "supports",
-        "contradicts",
-        "before",
-        "after",
-    ];
-    for (const edgeType of priors) {
-        const existing = counter.get(edgeType);
-        if (existing) {
-            existing.score += 0.75;
-            counter.set(edgeType, existing);
-        } else {
-            counter.set(edgeType, { score: 0.75, source: "type_prior" });
-        }
-    }
-
     return toHints(
         Array.from(counter.entries()).map(([id, value]) => ({
             id,
@@ -444,6 +394,7 @@ function buildRelationSearchPlans(input: {
     bundlesByNodeId: Map<string, V8RecallBundleProjection[]>;
     allShardHints: V8ScoredHint[];
     hintPriors: SearchHintPriors;
+    itemsById: Map<string, V8MemoryItem>;
     compilePhase: "stream" | "final";
 }): {
     relationSearchPlans: V8RelationSearchPlan[];
@@ -474,7 +425,6 @@ function buildRelationSearchPlans(input: {
                 8,
                 input.hintPriors
             );
-            if (edgeFamilyHints.length === 0) continue;
             const shardHints = selectShardHintsByLane(
                 card.shardHints,
                 input.allShardHints,
@@ -492,13 +442,13 @@ function buildRelationSearchPlans(input: {
                     .slice(0, 4),
                 anchorKinds: [card.entityKind],
                 edgeFamilyHints,
-                recallMode: input.compilePhase === "stream" ? "profile" : "trajectory",
+                recallHint: input.compilePhase === "stream" ? "profile" : "trajectory",
                 searchScope: scope,
                 searchMode: "hybrid",
                 lane,
                 queryTerms: buildQueryTerms(card, node),
                 hintBundleIds: bundles.map((bundle) => bundle.bundleId).slice(0, 12),
-                hintSpanIds: (node.bestEvidenceSpanIds || node.evidenceSpanIds || []).slice(0, 24),
+                hintSpanIds: (node.bestEvidenceSpanIds || collectNodeSpanIdsFromItems(node, input.itemsById)).slice(0, 24),
                 scopeCardIds: [card.id],
                 createdAt: new Date().toISOString(),
             });
@@ -583,7 +533,7 @@ function buildVerticalTriggerCards(input: {
             ...stateHints.map((hint) => hint.label || hint.id),
             ...plans.flatMap((plan) => (plan.anchorLabels || []).slice(0, 2)),
         ]).slice(0, 48);
-        const preferredSlices: V8RecallMode[] = isStateLike
+        const preferredGeometries: V8RelationGeometryHint[] = isStateLike
             ? ["profile", "trajectory"]
             : ["trajectory"];
         cards.push({
@@ -596,7 +546,7 @@ function buildVerticalTriggerCards(input: {
                 .slice(0, 6),
             signalTerms,
             edgeFamilyHints: verticalHints.slice(0, 8),
-            preferredSlices,
+            preferredGeometries,
             hintBundleIds,
             hintSpanIds,
             scopeCardIds: [card.id],
@@ -637,6 +587,7 @@ function buildRelationCandidateHitsAndJobs(input: {
     narrativeShardSelections: V8NarrativeShardSelection[];
     evidenceSpans: V8EvidenceSpan[];
     nodes: V8GraphNode[];
+    itemsById: Map<string, V8MemoryItem>;
     compilePhase: "stream" | "final";
 }): {
     relationCandidateHits: V8RelationCandidateHit[];
@@ -652,7 +603,7 @@ function buildRelationCandidateHitsAndJobs(input: {
         list.push(span);
         spansByShard.set(shardId, list);
     }
-    const reviewNodesBySpan = buildReviewNodesBySpan(input.nodes);
+    const reviewNodesBySpan = buildReviewNodesBySpan(input.nodes, input.itemsById);
 
     const maxPlans = input.compilePhase === "stream" ? 18 : 72;
     const planRanked = input.relationSearchPlans
@@ -745,7 +696,7 @@ function buildRelationCandidateHitsAndJobs(input: {
             evidenceSpanIds: uniqueList(evidenceSpanIds).slice(0, 40),
             bundleIds: [...(plan.hintBundleIds || [])].slice(0, 10),
             reviewQuestion: buildReviewQuestion(plan),
-            modeHint: plan.recallMode,
+            modeHint: plan.recallHint,
             status: "pending",
             createdAt: new Date().toISOString(),
         });
@@ -757,11 +708,11 @@ function buildRelationCandidateHitsAndJobs(input: {
     };
 }
 
-function buildReviewNodesBySpan(nodes: V8GraphNode[]): Map<string, V8GraphNode[]> {
+function buildReviewNodesBySpan(nodes: V8GraphNode[], itemsById: Map<string, V8MemoryItem>): Map<string, V8GraphNode[]> {
     const out = new Map<string, V8GraphNode[]>();
     for (const node of nodes) {
         if (!isReviewCandidateNode(node)) continue;
-        for (const spanId of node.evidenceSpanIds || []) {
+        for (const spanId of collectNodeSpanIdsFromItems(node, itemsById)) {
             const list = out.get(spanId) || [];
             list.push(node);
             out.set(spanId, list);
@@ -937,7 +888,6 @@ function buildQueryTerms(card: V8EntityScopeCard, node: V8GraphNode): string[] {
     }
     for (const hint of card.stateHints.slice(0, 3)) addTerm(terms, hint.label || hint.id);
     for (const hint of card.topicHints.slice(0, 3)) addTerm(terms, hint.label || hint.id);
-    addTerm(terms, node.memoryType);
     return Array.from(terms).slice(0, 36);
 }
 

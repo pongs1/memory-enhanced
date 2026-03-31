@@ -2,6 +2,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import {
+    renderLoCoMoNarrative,
+    buildLoCoMoSessionTrace,
+    selectLoCoMoQuestionSubset,
+} from "../dist/v8/review/locomo-benchmark-prep.js";
+import { selectLoCoMoSmokeSamples } from "../dist/v8/review/locomo-smoke-selection.js";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const DEFAULT_OUT = path.join(ROOT, ".tmp", "benchmark-eval");
@@ -16,11 +22,12 @@ function main() {
     const benchmark = String(args.benchmark).toLowerCase();
     const input = args.input ? path.resolve(String(args.input)) : "";
     const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined;
+    const smoke = args.smoke === true || String(args.smoke || "").toLowerCase() === "true";
     const outDir = path.resolve(String(args.out || DEFAULT_OUT));
 
     if (benchmark === "locomo") {
         if (!input) throw new Error("--input is required for benchmark=locomo");
-        prepareLoCoMo({ input, limit, outDir });
+        prepareLoCoMo({ input, limit, outDir, smoke });
         return;
     }
 
@@ -51,22 +58,30 @@ function main() {
     throw new Error(`Unsupported benchmark: ${benchmark}`);
 }
 
-function prepareLoCoMo({ input, limit, outDir }) {
+function prepareLoCoMo({ input, limit, outDir, smoke }) {
     const raw = JSON.parse(fs.readFileSync(input, "utf-8"));
     const samples = Array.isArray(raw) ? raw : [];
     if (!Array.isArray(samples) || samples.length === 0) {
         throw new Error("LoCoMo input must be a non-empty JSON array.");
     }
 
-    const selected = typeof limit === "number" ? samples.slice(0, limit) : samples;
-    for (let idx = 0; idx < selected.length; idx += 1) {
-        const sample = selected[idx];
+    const finalSamples = smoke
+        ? selectLoCoMoSmokeSamples(samples, { size: typeof limit === "number" ? limit : 10 })
+        : typeof limit === "number"
+          ? samples.slice(0, limit)
+          : samples;
+    for (let idx = 0; idx < finalSamples.length; idx += 1) {
+        const sample = finalSamples[idx];
         const sampleId = String(sample.sample_id || `locomo_${idx + 1}`);
         const sampleDir = path.join(outDir, "locomo", sampleId);
         mkdirp(sampleDir);
 
         const { markdown, turnMap } = renderLoCoMoNarrative(sample);
-        const questions = (sample.qa || []).map((qa, qIndex) => ({
+        const sessionTrace = buildLoCoMoSessionTrace(sample, sampleId);
+        const selectedQa = smoke
+            ? selectLoCoMoQuestionSubset(sample.qa || [], { maxQuestions: 16 })
+            : (sample.qa || []);
+        const questions = selectedQa.map((qa, qIndex) => ({
             question_id: `${sampleId}_q${qIndex + 1}`,
             question: qa.question || "",
             answer: normalizeTextish(qa.answer),
@@ -77,6 +92,7 @@ function prepareLoCoMo({ input, limit, outDir }) {
         }));
 
         fs.writeFileSync(path.join(sampleDir, "session_narrative.md"), markdown, "utf-8");
+        writeJsonl(path.join(sampleDir, "session_trace.jsonl"), sessionTrace);
         writeJsonl(path.join(sampleDir, "turn_map.jsonl"), turnMap);
         writeJsonl(path.join(sampleDir, "questions.jsonl"), questions);
         fs.writeFileSync(
@@ -87,8 +103,10 @@ function prepareLoCoMo({ input, limit, outDir }) {
                     sample_id: sampleId,
                     speakers: [sample.conversation?.speaker_a, sample.conversation?.speaker_b].filter(Boolean),
                     question_count: questions.length,
+                    original_question_count: Array.isArray(sample.qa) ? sample.qa.length : 0,
                     session_count: countSessionKeys(sample.conversation || {}),
                     source_input: input,
+                    smoke_question_limit: smoke ? 16 : null,
                 },
                 null,
                 2
@@ -96,77 +114,6 @@ function prepareLoCoMo({ input, limit, outDir }) {
             "utf-8"
         );
     }
-}
-
-function renderLoCoMoNarrative(sample) {
-    const conv = sample.conversation || {};
-    const lines = [];
-    const turnMap = [];
-    let charCursor = 0;
-    const sessionCount = countSessionKeys(conv);
-
-    for (let sessionIndex = 1; sessionIndex <= sessionCount; sessionIndex += 1) {
-        const dateKey = `session_${sessionIndex}_date_time`;
-        const sessionKey = `session_${sessionIndex}`;
-        const dateText = String(conv[dateKey] || `session_${sessionIndex}`);
-        const turns = parseSessionTurns(conv[sessionKey]);
-        lines.push(`## Session ${sessionIndex}`);
-        lines.push(`Time: ${dateText}`);
-        lines.push("");
-
-        for (let turnIndex = 0; turnIndex < turns.length; turnIndex += 1) {
-            const turn = turns[turnIndex];
-            const header = `### ${turn.speaker}`;
-            const body = renderLoCoMoTurn(turn);
-            const chunk = `${header}\n${body}\n`;
-            lines.push(header);
-            lines.push(body);
-            lines.push("");
-
-            const start = charCursor + header.length + 1;
-            const end = start + body.length;
-            turnMap.push({
-                dialogue_id: turn.dia_id || null,
-                session_index: sessionIndex,
-                turn_index: turnIndex + 1,
-                speaker: turn.speaker || "unknown",
-                char_start: start,
-                char_end: end,
-                text: body,
-            });
-            charCursor += chunk.length + 1;
-        }
-    }
-
-    const markdown = `${lines.join("\n").trim()}\n`;
-    return { markdown, turnMap };
-}
-
-function renderLoCoMoTurn(turn) {
-    const parts = [String(turn.text || "").trim()];
-    if (turn.query) {
-        parts.push(`Referenced search query: ${String(turn.query).trim()}.`);
-    }
-    if (turn.blip_caption) {
-        parts.push(`Image context: ${String(turn.blip_caption).trim()}.`);
-    }
-    if (Array.isArray(turn.img_url) && turn.img_url.length > 0) {
-        parts.push(`Attached ${turn.img_url.length} image reference(s).`);
-    }
-    return parts.filter(Boolean).join(" ");
-}
-
-function parseSessionTurns(value) {
-    if (Array.isArray(value)) return value;
-    if (typeof value === "string") {
-        try {
-            const parsed = JSON.parse(value);
-            return Array.isArray(parsed) ? parsed : [];
-        } catch {
-            return [];
-        }
-    }
-    return [];
 }
 
 function countSessionKeys(conv) {
@@ -393,7 +340,7 @@ function printHelp() {
     console.log(
         [
             "Usage:",
-            "  node scripts/benchmark-eval-prep.mjs --benchmark locomo --input <locomo10.json> [--limit 2] [--out <dir>]",
+            "  node scripts/benchmark-eval-prep.mjs --benchmark locomo --input <locomo.json> [--limit 2] [--smoke true] [--out <dir>]",
             "  node scripts/benchmark-eval-prep.mjs --benchmark longmemeval --input <subset.json> [--limit 8]",
             "  node scripts/benchmark-eval-prep.mjs --benchmark memoryagentbench --input <subset.json> [--limit 8]",
             "",

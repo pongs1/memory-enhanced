@@ -1,19 +1,17 @@
 # V8 Types and Migration
 
-Status: rewrite target  
+Status: active contract target  
 Depends on:
 
 - [V8_ARCHITECTURE.md](./V8_ARCHITECTURE.md)
 - [V8_SCHEMA_AND_PIPELINE.md](./V8_SCHEMA_AND_PIPELINE.md)
 
-This document defines the TypeScript-facing contracts and migration plan for the rewritten V8.
-
-It intentionally replaces the older event-centric type plan.
+This document defines the TypeScript-facing contracts for V8.
 
 Implementation note:
 
-- new V8 contracts are staged in `src/v8/types_v8.ts`
-- legacy contracts remain in `src/v8/types.ts` during migration
+- canonical V8 contracts live in `src/v8/types_v8.ts`
+- runtime code should align to these contracts
 
 ## 1. Scope
 
@@ -26,7 +24,23 @@ This document covers:
 - scanner and ignition contracts
 - summary and state contracts
 - module boundaries
-- migration strategy from the current prototype
+
+### 1.1 Contract vocabulary
+
+- `source contract`
+  - raw archive or narrative-evidence record before semantic extraction
+- `segmentation contract`
+  - unit/span structures that preserve offsets and evidence boundaries
+- `semantic extraction contract`
+  - bounded IR item emitted from units
+- `product contract`
+  - runtime-consumable graph, pack, or scanner-facing structure
+- `bundle contract`
+  - runtime grouping used for recall ranking and delivery
+- `pack contract`
+  - concrete memory payload delivered to the model context
+- `state-line contract`
+  - runtime or graph-side representation of ordered states within one state family
 
 ## 2. New Contract Hierarchy
 
@@ -34,7 +48,7 @@ The new V8 contracts are layered.
 
 ### 2.1 Source contracts
 
-These represent normalized inputs before any semantic extraction:
+These represent raw archive records and the assembled narrative evidence surface before semantic extraction:
 
 - `V8NarrativeRecord`
 - `V8SourceClass`
@@ -69,7 +83,7 @@ These represent what the runtime consumes:
 - `V8StatePack`
 - `V8RecallAssembly`
 
-The old `bundle/node/edge` layer can remain during migration, but it is no longer the primary design center.
+These contracts describe the memory products consumed by the runtime.
 
 ## 3. Recommended Module Layout
 
@@ -80,29 +94,26 @@ src/v8/
     unitizer.ts
     evidence.ts
     ir-extractor.ts
+    ir-llm.ts
     graph-materializer.ts
-    summary-materializer.ts
-    state-materializer.ts
-    assembler.ts
+    runtime-projection.ts
+    relation-planning.ts
+    relation-review-llm.ts
   adapters/
     session-source.ts
     daily-log-source.ts
-    knowledge-source.ts
-    skill-source.ts
-    legacy-event-source.ts
   types.ts
   paths.ts
   ids.ts
   manifest.ts
-  migration.ts
   offline-annotator.ts
   scanner.ts
   recall.ts
   feedback.ts
 ```
 
-This layout makes the layering explicit.
-The adapters produce normalized narrative records.
+This layout makes the write loop, recall loop, and runtime projections explicit.
+The adapters produce narrative records.
 The architecture modules operate on shared contracts.
 
 ## 4. Core Literal Types
@@ -115,9 +126,8 @@ export type V8SourceClass = "raw" | "curated" | "legacy";
 export type V8SourceType =
   | "session_trace"
   | "daily_log"
-  | "knowledge_md"
-  | "skill_md"
-  | "event_jsonl";
+  | "runtime_observation"
+  | "assembled_narrative";
 
 export type V8GraphLayer = "micro" | "meso" | "macro";
 
@@ -132,7 +142,9 @@ export type V8SceneSignalSource =
   | "control"
   | "prompt"
   | "tool"
-  | "event"
+  | "assistant"
+  | "user"
+  | "subagent"
   | "observation";
 
 export type V8MicroNodeType =
@@ -876,8 +888,8 @@ These are first-class runtime products, not ad hoc strings assembled later from 
 
 ## 10. Scanner and Ignition Contracts
 
-The V8 rewrite keeps a dedicated scanner layer.
-This is not optional. It is the runtime mechanism that lets the graph participate during generation.
+V8 uses a dedicated scanner layer.
+This is the runtime mechanism that lets the graph participate during generation.
 
 ```ts
 export interface V8ControlAnchors {
@@ -968,15 +980,9 @@ Rules:
 - `evidence_anchor` is `backtrace` role rather than propagation role
 - runtime policies should be loaded from `memory-enhanced/schema/v8-edge-runtime-policy.json` and mapped into `V8RuntimeEdgeKindPolicy`
 
-## 11. Compiler Boundary Changes
+## 11. Compiler Boundary
 
-The old compiler contracts are no longer the target design:
-
-- `compileEventToBundle`
-- `compileKnowledgeMdToBundles`
-- direct `skill_md -> knowledge-style bundle`
-
-The new boundary is:
+The compiler boundary is:
 
 1. source adapters produce `V8NarrativeRecord[]`
 2. unitizer produces `V8Unit[]`
@@ -985,68 +991,20 @@ The new boundary is:
 5. graph materializer produces graph nodes and edges
 6. summary/state materializers produce runtime packs
 
-Old bundle contracts can remain in a compatibility layer during migration because scanner and recall still depend on them today.
+## 12. Contract Direction
 
-## 12. Migration Strategy
+The active contract direction is:
 
-Clean-slate mode (default):
-
-- do not ingest legacy artifacts
-- do not emit new `event` or bundle summaries
-- skip compatibility layers unless explicitly needed
-
-Migration is optional. Use it only when you need to preserve old data.
-Otherwise, start from raw session/log evidence and rebuild forward.
-
-If migration is required, the rewrite should happen in phases.
-
-### Phase 0: freeze control plane
-
-- keep `focus_stack.json` untouched
-- do not redesign L0 while rewriting the memory substrate
-
-### Phase 1: establish raw authority
-
-- introduce raw source adapters for session traces and daily logs
-- preserve existing logs as the authoritative text base
-- stop treating `event` as the raw substrate
-
-### Phase 2: normalize curated memory
-
-- adapt `knowledge_md` and `skill_md` into narrative records
-- strip legacy tags and scaffolding
-- preserve source anchors
-
-### Phase 3: introduce units, evidence, and IR
-
-- build `V8Unit`
-- build `V8EvidenceSpan`
-- build `V8MemoryItem`
-- keep old graph outputs alive only if needed for compatibility
-
-### Phase 4: re-materialize graph
-
-- graph is rebuilt from IR, not from direct event/md compilers
-- direct compiler-side bundle creation becomes deprecated
-- runtime bundle-first delivery remains required through recall bundle projections
-
-### Phase 5: move recall and feedback
-
+- source adapters produce narrative records
+- unitizers produce units and evidence spans
+- IR extractors produce bounded memory items
+- graph materializers produce graph objects plus runtime packs
 - recall consumes graph plus summary/state packs
-- recall still depends on ignition scanner outputs instead of direct item dumping
-- feedback updates item-level and graph-level state
-- raw evidence backtrace becomes standard
+- scanner ignition remains the runtime entrance instead of direct item dumping
 
-### Phase 6: legacy retirement
+## 13. Concepts To Avoid
 
-- old event-centric node roles become compatibility-only
-- old bundle-first compilers can be removed after downstream consumers migrate
-
-## 13. Deprecated Concepts
-
-These old ideas are now deprecated as architecture primitives:
-
-- `event` as the primary memory unit
+Avoid these as architecture primitives:
 - `bundle` as the first semantic structure
 - narrow six-role node splitting as the main abstraction
 - graph nodes without evidence backtrace

@@ -90,7 +90,7 @@ export async function executeMemorySearchArchive(
         );
         lines.push(`span_id=${hit.spanId} unit_id=${hit.unitId}`);
         lines.push(
-            `speaker=${hit.speaker || "unknown"} time=${hit.timestamp || "unknown"}`
+            `role=${hit.role || "unknown"} time=${hit.timestamp || "unknown"}`
         );
         lines.push(`span_text=${singleLine(hit.spanText, 220)}`);
         lines.push(`raw_text=${singleLine(hit.rawText, 280)}`);

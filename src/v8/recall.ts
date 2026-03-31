@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readJson } from "../utils.js";
 import { loadEdgeRuntimePolicy } from "./edge-runtime-policy.js";
 import { loadHypothesisEdges } from "./hypothesis-store.js";
+import { collectNodeSpanIdsFromItems } from "./node-evidence.js";
 import { appendPackCacheRecord, isPackCacheExpired, loadPackCache } from "./pack-cache.js";
 import { v8StorePaths } from "./paths_v8.js";
 import type {
@@ -16,6 +17,7 @@ import type {
     V8GraphEdge,
     V8GraphNode,
     V8HypothesisEdge,
+    V8MemoryItem,
     V8PackCacheRecord,
     V8RecallBundleProjection,
     V8RecallMode,
@@ -30,6 +32,7 @@ interface RecallAssemblyContext {
     policyByKindMode: Map<string, V8EdgeRuntimePolicyEntry>;
     recallBundlesById: Map<string, V8RecallBundleProjection>;
     hypothesisByNode: Map<string, V8HypothesisEdge[]>;
+    itemsById: Map<string, V8MemoryItem>;
     packCacheById: Map<string, V8PackCacheRecord>;
 }
 
@@ -135,15 +138,17 @@ function readNarrativeSlice(span: V8EvidenceSpan): string {
 }
 
 function formatEvidence(span: V8EvidenceSpan): string {
-    const speaker = span.speaker || "unknown";
+    const speaker = span.role || "unknown";
     const ts = span.timestamp ? ` @ ${span.timestamp}` : "";
     const text = sanitizeText(readNarrativeSlice(span), 420);
     return `[${speaker}${ts}] ${text}`;
 }
 
+
 function resolveEvidenceSpanIds(
     bundle: V8ActivatedBundle,
     node: V8GraphNode,
+    context: RecallAssemblyContext,
     recallBundle?: V8RecallBundleProjection
 ): string[] {
     if (bundle.evidenceSpanIds && bundle.evidenceSpanIds.length > 0) {
@@ -158,7 +163,39 @@ function resolveEvidenceSpanIds(
     if (node.bestEvidenceSpanIds && node.bestEvidenceSpanIds.length > 0) {
         return node.bestEvidenceSpanIds;
     }
-    return node.evidenceSpanIds || [];
+    return collectNodeSpanIdsFromItems(node, context.itemsById);
+}
+
+function seedNodeIdsForBundle(
+    bundle: V8ActivatedBundle,
+    recallBundle?: V8RecallBundleProjection
+): string[] {
+    if (recallBundle?.nodeIds && recallBundle.nodeIds.length > 0) {
+        return recallBundle.nodeIds;
+    }
+    if (bundle.nodeIds.length > 0) {
+        return bundle.nodeIds;
+    }
+    return [bundle.bundleId];
+}
+
+function hasGeometryBacktracePath(seedNodeIds: string[], context: RecallAssemblyContext): boolean {
+    for (const seedNodeId of seedNodeIds) {
+        for (const edge of context.edgesByNode.get(seedNodeId) || []) {
+            const outgoingDimension =
+                edge.src === seedNodeId
+                    ? (edge.forwardDimension || "none")
+                    : (edge.reverseDimension || "none");
+            if (
+                outgoingDimension !== "none" &&
+                outgoingDimension !== "gate" &&
+                outgoingDimension !== "H"
+            ) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 export function loadRecallAssemblyContext(workspace: string): RecallAssemblyContext {
@@ -179,6 +216,7 @@ export function loadRecallAssemblyContext(workspace: string): RecallAssemblyCont
 
     const nodes = loadJsonl<V8GraphNode>(store.graphNodes);
     const evidence = loadJsonl<V8EvidenceSpan>(store.evidenceSpans);
+    const items = loadJsonl<V8MemoryItem>(store.memoryItems);
     const edges = loadJsonl<V8GraphEdge>(store.graphEdges);
     const recallBundles = loadJsonl<V8RecallBundleProjection>(store.recallBundles);
     const hypotheses = loadHypothesisEdges(workspace);
@@ -213,6 +251,7 @@ export function loadRecallAssemblyContext(workspace: string): RecallAssemblyCont
         policyByKindMode,
         recallBundlesById: new Map(recallBundles.map((bundle) => [bundle.bundleId, bundle])),
         hypothesisByNode,
+        itemsById: new Map(items.map((item) => [item.id, item])),
         packCacheById,
     };
     recallContextCache.set(cacheKey, { mtime, context });
@@ -224,29 +263,27 @@ export function assembleRecallPrompts(
     context: RecallAssemblyContext
 ): AssembleRecallOutput[] {
     const outputs: AssembleRecallOutput[] = [];
-    const mode: V8RecallMode = input.mode || "profile";
-    const isStructuralMode = mode === "trajectory" || mode === "audit";
-    const maxEvidence = mode === "audit" ? 8 : mode === "trajectory" ? 6 : 4;
+    const requestedMode = input.mode;
+    const mode: V8RecallMode = requestedMode || "profile";
     const packTtlDays = input.packCacheTtlDays ?? 7;
 
     for (const bundle of input.bundles) {
         const recallBundle = context.recallBundlesById.get(bundle.bundleId);
-        const node = context.nodesById.get(recallBundle?.nodeIds?.[0] || bundle.bundleId);
+        const seedNodeIds = seedNodeIdsForBundle(bundle, recallBundle);
+        const fallbackNodeId = seedNodeIds.length > 0 ? seedNodeIds[0] : bundle.bundleId;
+        const node = context.nodesById.get(fallbackNodeId);
         if (!node) continue;
 
-        let evidenceSpanIds = resolveEvidenceSpanIds(bundle, node, recallBundle);
-        if (isStructuralMode) {
-            const structural = collectBacktraceEvidence(
-                recallBundle?.nodeIds && recallBundle.nodeIds.length > 0
-                    ? recallBundle.nodeIds
-                    : bundle.nodeIds.length > 0
-                      ? bundle.nodeIds
-                      : [bundle.bundleId],
-                mode,
-                context
-            );
+        let evidenceSpanIds = resolveEvidenceSpanIds(bundle, node, context, recallBundle);
+        const shouldBacktrace =
+            requestedMode === "trajectory" ||
+            requestedMode === "audit" ||
+            (!requestedMode && hasGeometryBacktracePath(seedNodeIds, context));
+        if (shouldBacktrace) {
+            const structural = collectBacktraceEvidence(seedNodeIds, requestedMode, context);
             evidenceSpanIds = mergeUnique(evidenceSpanIds, structural);
         }
+        const maxEvidence = requestedMode === "audit" ? 8 : shouldBacktrace ? 6 : 4;
         const evidenceLines: string[] = [];
         const sourceRefs = new Set<string>(recallBundle?.sourceRefs || []);
 
@@ -322,10 +359,11 @@ export function assembleRecallPrompts(
 
 function collectBacktraceEvidence(
     seedNodeIds: string[],
-    mode: V8RecallMode,
+    mode: V8RecallMode | undefined,
     context: RecallAssemblyContext
 ): string[] {
     if (seedNodeIds.length === 0) return [];
+    const geometryDriven = !mode;
     const maxDepth = mode === "audit" ? 4 : 3;
     const visited = new Set<string>();
     const queue: Array<{ id: string; depth: number }> = [];
@@ -347,7 +385,7 @@ function collectBacktraceEvidence(
 
         const node = context.nodesById.get(current.id);
         if (node) {
-            for (const spanId of node.evidenceSpanIds || []) {
+            for (const spanId of collectNodeSpanIdsFromItems(node, context.itemsById)) {
                 evidence.add(spanId);
             }
         }
@@ -358,11 +396,34 @@ function collectBacktraceEvidence(
                 evidence.add(spanId);
             }
 
+            const nextId = edge.src === current.id ? edge.dst : edge.src;
+            if (nextId === current.id) continue;
+            if (current.depth >= maxDepth) continue;
+            const dimension =
+                edge.src === current.id
+                    ? (edge.forwardDimension || "none")
+                    : (edge.reverseDimension || "none");
+
+            if (geometryDriven) {
+                if (dimension === "none" || dimension === "gate") {
+                    continue;
+                }
+                queue.push({ id: nextId, depth: current.depth + 1 });
+                continue;
+            }
+
             const kind = context.edgeKinds.get(edge.type) || "semantic";
             const policy =
                 context.policyByKindMode.get(policyKey(kind, mode));
+            if (!policy) {
+                if (dimension === "none" || dimension === "gate") {
+                    continue;
+                }
+                queue.push({ id: nextId, depth: current.depth + 1 });
+                continue;
+            }
 
-            if (!policy || policy.role === "spread") {
+            if (policy.role === "spread") {
                 continue;
             }
             if (policy.role === "gate") {
@@ -376,9 +437,6 @@ function collectBacktraceEvidence(
                 continue;
             }
 
-            const nextId = edge.src === current.id ? edge.dst : edge.src;
-            if (nextId === current.id) continue;
-            if (current.depth >= maxDepth) continue;
             queue.push({ id: nextId, depth: current.depth + 1 });
         }
 

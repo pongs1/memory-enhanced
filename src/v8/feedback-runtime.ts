@@ -1,8 +1,11 @@
-import type { V8ActivatedBundle, V8RecallMode } from "./types_v8.js";
+import type { V8ActivatedBundle } from "./types_v8.js";
+
+type V8RecallTraceMode = "profile" | "trajectory" | "oblique" | "audit";
 
 export interface V8RecallTraceBundle {
     bundleId: string;
     nodeIds: string[];
+    sourceUnitIds?: string[];
     evidenceSpanIds: string[];
     tier: V8ActivatedBundle["tier"];
 }
@@ -10,7 +13,7 @@ export interface V8RecallTraceBundle {
 export interface V8RecallTrace {
     traceId: string;
     sessionId: string;
-    mode: V8RecallMode;
+    mode: V8RecallTraceMode;
     bundles: V8RecallTraceBundle[];
     createdAt: number;
 }
@@ -34,7 +37,7 @@ function pruneTraces(traces: V8RecallTrace[], maxAgeMs: number): V8RecallTrace[]
 export function recordRecallTrace(
     sessionId: string,
     payload: {
-        mode: V8RecallMode;
+        mode?: V8RecallTraceMode;
         bundles: V8RecallTraceBundle[];
     }
 ): V8RecallTrace | null {
@@ -44,7 +47,7 @@ export function recordRecallTrace(
     const trace: V8RecallTrace = {
         traceId: buildTraceId(),
         sessionId,
-        mode: payload.mode,
+        mode: payload.mode || "profile",
         bundles: payload.bundles,
         createdAt: nowMs(),
     };
@@ -97,6 +100,22 @@ export function recordSessionRecalls(sessionId: string, nodeIds: string[]): void
     });
 }
 
+export function takeRecentRecallUnits(
+    sessionId: string,
+    maxAgeMs = 10 * 60 * 1000
+): string[] {
+    const traces = takeRecentRecallTraces(sessionId, maxAgeMs);
+    if (traces.length === 0) return [];
+    const aggregated = new Set<string>();
+    for (const trace of traces) {
+        for (const bundle of trace.bundles) {
+            for (const unitId of bundle.sourceUnitIds || []) {
+                aggregated.add(unitId);
+            }
+        }
+    }
+    return Array.from(aggregated);
+}
 export function takeRecentRecalls(
     sessionId: string,
     maxAgeMs = 10 * 60 * 1000

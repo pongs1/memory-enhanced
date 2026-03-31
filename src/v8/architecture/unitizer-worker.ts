@@ -26,7 +26,7 @@ const narrativeRecords: V8NarrativeRecord[] = records.map((record) => {
         sourceClass: "raw",
         sourceType: "session_narrative",
         sourceRef: record.sourceRef,
-        speaker: null,
+        role: null,
         timestamp: null,
         rawText: text,
         cleanText: text,
